@@ -1256,7 +1256,7 @@ export default function App() {
     const MONTH_NAMES   = ["january","february","march","april","may","june","july","august","september","october","november","december"];
     let targetDate   = null;     // day to start searching
     let searchDays   = 1;        // how many consecutive days to check
-    const maxResults   = 3;        // max number of day-results to return
+    let maxResults   = 3;        // max number of day-results to return
     let strict       = false;    // true = start window at 6am not now
     let rangeLabel   = "";       // human label for "no availability" messages
     let wantsFullClearDay = false; // "next free day" gets an extra fully-clear-day option
