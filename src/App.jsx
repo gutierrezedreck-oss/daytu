@@ -1259,7 +1259,7 @@ export default function App() {
     const maxResults   = 3;        // max number of day-results to return
     let strict       = false;    // true = start window at 6am not now
     let rangeLabel   = "";       // human label for "no availability" messages
-    const wantsFullClearDay = false; // "next free day" gets an extra fully-clear-day option
+    let wantsFullClearDay = false; // "next free day" gets an extra fully-clear-day option
 
     // ── Precise date checks first (most specific wins) ─────────────────
     // "month name + day" e.g. "April 25", "apr 25", "May 3rd"
