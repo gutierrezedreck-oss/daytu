@@ -2750,8 +2750,9 @@ export default function App() {
                   <WeekViewColumns weekDays={weekDays} events={visibleEvents} calendars={calendars}
                     shifts={shifts} shiftOverrides={shiftOverrides}
                     majorEvents={visibleMajorEvents} holidays={holidays} holidayCountries={holidayCountries}
-                    onSelect={d => { setSelectedDate(d); setCalView("day"); }}
-                    onQuickAdd={openAddChooser}
+                    selectedDate={selectedDate}
+                    onSelect={d => setSelectedDate(d)}
+                    onOpenDay={d => { setSelectedDate(d); setCalView("day"); }}
                     onEventClick={openEvent}
                     onMajorEventClick={openMajorEventDetail} />
                 ) : (
@@ -4044,7 +4045,22 @@ function DayView({ date, events, calendars, onEventClick, majorEvents=[], holida
 // ── WEEK VIEW ─────────────────────────────────────────────
 // ── WEEK VIEW (Columns) — whole week at a glance ──
 // Compact overview; tap a day to drill into Day view. Good for planning.
-function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverrides, majorEvents=[], holidays=[], holidayCountries=new Set(), onSelect, onQuickAdd, onEventClick, onMajorEventClick }) {
+function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverrides, majorEvents=[], holidays=[], holidayCountries=new Set(), selectedDate, onSelect, onOpenDay, onEventClick, onMajorEventClick }) {
+  // Single tap selects a day (updates selectedDate so the preview below can
+  // react); double tap opens the full day view. Same pattern as MonthGrid.
+  const lastTapRef = React.useRef({ time: 0, key: null });
+  const DOUBLE_TAP_MS = 400;
+  const handleCellTap = (d) => {
+    const key = d.getFullYear()+"-"+d.getMonth()+"-"+d.getDate();
+    const now = Date.now();
+    if (onOpenDay && now - lastTapRef.current.time < DOUBLE_TAP_MS && lastTapRef.current.key === key) {
+      lastTapRef.current = { time: 0, key: null };
+      onOpenDay(d);
+      return;
+    }
+    lastTapRef.current = { time: now, key };
+    onSelect && onSelect(d);
+  };
   // Bucket events & major events per day
   const byDay = weekDays.map(d => {
     const dayStart = new Date(d); dayStart.setHours(0,0,0,0);
@@ -4108,12 +4124,14 @@ function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverride
           const ringShadow = dayColors.length === 0 ? undefined
             : dayColors.slice(0,3).map((c, i) => `inset 0 0 0 ${3+i*2}px ${c}`).join(", ");
 
+          const isSelected = selectedDate && sameDay(d, selectedDate);
           return (
-            <div key={di} onClick={() => onSelect && onSelect(d)}
-              onDoubleClick={() => onQuickAdd && onQuickAdd(d)}
+            <div key={di} onClick={() => handleCellTap(d)}
               style={{
-                background: isToday ? "rgba(124,106,247,0.1)" : "var(--surface)",
-                border: `1px solid ${isToday ? "rgba(124,106,247,0.35)" : "var(--border)"}`,
+                background: isSelected ? "rgba(124,106,247,0.18)"
+                  : isToday ? "rgba(124,106,247,0.1)" : "var(--surface)",
+                border: `1px solid ${isSelected ? "var(--accent2)"
+                  : isToday ? "rgba(124,106,247,0.35)" : "var(--border)"}`,
                 borderRadius: 10, padding: 6, minHeight: 150, cursor: "pointer",
                 display: "flex", flexDirection: "column", gap: 3,
                 boxShadow: ringShadow,
@@ -4197,7 +4215,7 @@ function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverride
         })}
       </div>
       <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:10, textAlign:"center" }}>
-        Tap a day to open it
+        Tap a day to preview · double-tap to open
       </div>
     </div>
   );
