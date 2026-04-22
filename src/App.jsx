@@ -4439,7 +4439,7 @@ function MonthGrid({ year, month, events, calendars, shifts, shiftOverrides, onL
             onMouseUp={() => { if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; } }}
             onMouseLeave={() => { if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; } }}
             onContextMenu={e => { if (!c.curr) return; e.preventDefault(); onLongPress&&onLongPress(date); }}
-            onTouchStart={e => { if (!c.curr) return; e.preventDefault(); lpTimerRef.current = setTimeout(() => { lpTimerRef.current="fired"; onLongPress&&onLongPress(date); }, 500); }}
+            onTouchStart={e => { if (!c.curr) return; lpTimerRef.current = setTimeout(() => { lpTimerRef.current="fired"; onLongPress&&onLongPress(date); }, 500); }}
             onTouchEnd={() => {
               if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; }
               if (!c.curr) return;
@@ -7644,7 +7644,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); -web
 .section-label { font-size: 0.6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 10px; }
 .cal-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 2px; }
 .cal-header-cell { text-align: center; font-size: 0.6875rem; font-weight: 700; color: var(--muted); padding: 6px 0; }
-.cal-cell { aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 6px; border-radius: 8px; cursor: pointer; position: relative; font-size: 0.8125rem; transition: background .12s; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.cal-cell { aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 6px; border-radius: 8px; cursor: pointer; position: relative; font-size: 0.8125rem; transition: background .12s; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; touch-action: manipulation; }
 .cal-cell:hover { background: var(--surface2); }
 .cal-cell.today .cal-day-num { background: var(--accent); color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-weight: 600; }
 .cal-cell.selected { background: var(--surface2); }
