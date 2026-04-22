@@ -124,7 +124,7 @@ const seed = {
     { id: "d4", name: "Drew Santos",  handle: "@drewsantos",  avatar: "DS" },
     { id: "d5", name: "Sam Nakamura", handle: "@samnakamura", avatar: "SN" },
   ],
-  patterns: [
+  shifts: [
     {
       id: "p1", name: "3 On / 2 Off", type: "rotation", color: "#6366f1", priority: 0,
       config: { sequence: [{ type: "work", days: 3 }, { type: "off", days: 2 }], startDate: TODAY.toISOString() },
@@ -191,8 +191,8 @@ function buildCycleMap(sequence) {
   return map;
 }
 
-function getRotationStatus(pattern, date) {
-  const { sequence, startDate } = pattern.config;
+function getRotationStatus(shift, date) {
+  const { sequence, startDate } = shift.config;
   const start = new Date(startDate); start.setHours(0,0,0,0);
   const diff = Math.floor((date - start) / 86400000);
   const cycleMap = buildCycleMap(sequence);
@@ -200,20 +200,66 @@ function getRotationStatus(pattern, date) {
   return cycleMap[pos];
 }
 
+// Date key used for per-occurrence overrides: "YYYY-M-D"
+const occurrenceKey = (d) => d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate();
+
 function expandEvents(events, from, to) {
   const result = [];
+  // Helper: emit a single occurrence at the given start, honoring overrides.
+  const emit = (ev, occStart, endOffset, idSuffix) => {
+    const key = occurrenceKey(occStart);
+    const ovr = ev.overrides?.[key];
+    if (ovr?.skip) return;
+    const baseStart = new Date(occStart);
+    const baseEnd = new Date(occStart.getTime() + endOffset);
+    const instanceStart = ovr?.start ? new Date(ovr.start) : baseStart;
+    const instanceEnd = ovr?.end ? new Date(ovr.end) : baseEnd;
+    const { skip: _s, start: _os, end: _oe, ...ovrFields } = ovr || {};
+    result.push({
+      ...ev,
+      ...ovrFields,
+      start: instanceStart,
+      end: instanceEnd,
+      id: ev.id + "_" + idSuffix,
+      _seriesId: ev.id,
+      _occurrenceKey: key,
+    });
+  };
+
   for (var i = 0; i < events.length; i++) {
     const ev = events[i];
     if (!ev.frequency || ev.frequency === "none") {
       if (ev.start <= to && ev.end >= from) result.push(ev);
       continue;
     }
-    const cursor = new Date(ev.start);
     const endOffset = ev.end - ev.start;
+
+    // Specific days — emit one occurrence per tapped day, using the event's time-of-day
+    if (ev.frequency === "specific") {
+      const monthDays = ev.monthDays || {};
+      const fromY = from.getFullYear(), fromM = from.getMonth();
+      const toY = to.getFullYear(), toM = to.getMonth();
+      const hh = ev.start.getHours(), mm = ev.start.getMinutes();
+      let y = fromY, m = fromM, guard = 0;
+      while ((y < toY || (y === toY && m <= toM)) && guard < 400) {
+        guard++;
+        const key = y + "-" + m;
+        const days = monthDays[key] || [];
+        for (var di = 0; di < days.length; di++) {
+          const occStart = new Date(y, m, days[di], hh, mm, 0, 0);
+          if (occStart > to || occStart < from) continue;
+          emit(ev, occStart, endOffset, y + "-" + m + "-" + days[di]);
+        }
+        m++; if (m > 11) { m = 0; y++; }
+      }
+      continue;
+    }
+
+    const cursor = new Date(ev.start);
     let limit = 0;
     while (cursor <= to && limit < 400) {
       limit++;
-      if (cursor >= from) result.push({ ...ev, start: new Date(cursor), end: new Date(cursor.getTime() + endOffset), id: ev.id + "_" + limit });
+      if (cursor >= from) emit(ev, cursor, endOffset, String(limit));
       if (ev.frequency === "daily") cursor.setDate(cursor.getDate() + 1);
       else if (ev.frequency === "weekly") cursor.setDate(cursor.getDate() + 7);
       else if (ev.frequency === "biweekly") cursor.setDate(cursor.getDate() + 14);
@@ -224,10 +270,10 @@ function expandEvents(events, from, to) {
   return result;
 }
 
-function isMonthlyWorkDay(pattern, date) {
-  if (pattern.type !== "monthly") return false;
+function isMonthlyWorkDay(shift, date) {
+  if (shift.type !== "monthly") return false;
   const key = `${date.getFullYear()}-${date.getMonth()}`;
-  const days = pattern.config?.months?.[key] || [];
+  const days = shift.config?.months?.[key] || [];
   return days.includes(date.getDate());
 }
 
@@ -278,7 +324,7 @@ const Icon = {
   home: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
   calendar: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>,
   groups: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
-  patterns: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>,
+  shifts: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>,
   plus: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
   chevL: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><polyline points="15 18 9 12 15 6"/></svg>,
   check: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}><polyline points="20 6 9 17 4 12"/></svg>,
@@ -308,16 +354,35 @@ const Icon = {
 
 // ── LOCALSTORAGE HELPERS ─────────────────────────────────
 const LS_KEY = "daytu_v1";
+const SCHEMA_VERSION = 2;
+
+// Migrations: each key is the FROM version; the function returns data at FROM+1.
+// Register new migrations here when the stored shape changes, and bump SCHEMA_VERSION.
+const migrations = {
+  // v1 → v2: renamed "patterns" to "shifts"
+  1: (data) => {
+    const { patterns, ...rest } = data;
+    return patterns !== undefined ? { ...rest, shifts: patterns } : rest;
+  },
+};
 
 const lsLoad = () => {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    let data = JSON.parse(raw);
+    // Pre-versioned blobs (written before we added SCHEMA_VERSION) are treated as v1
+    let v = typeof data?.version === "number" ? data.version : 1;
+    while (v < SCHEMA_VERSION && migrations[v]) {
+      data = migrations[v](data);
+      v += 1;
+    }
+    return data;
   } catch { return null; }
 };
 
 const lsSave = (data) => {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch {}
+  try { localStorage.setItem(LS_KEY, JSON.stringify({ version: SCHEMA_VERSION, ...data })); } catch {}
 };
 
 // Revive Date objects after JSON parse
@@ -538,10 +603,10 @@ export default function App() {
   const [calendars, setCalendars] = useState(() => _ls?.calendars ?? seed.calendars);
   const [groups, setGroups] = useState(() => _ls?.groups ?? seed.groups);
   const [groupMembers, setGroupMembers] = useState(() => _ls?.groupMembers ?? seed.groupMembers);
-  const [patterns, setPatterns] = useState(() => _ls?.patterns ?? seed.patterns);
+  const [shifts, setShifts] = useState(() => _ls?.shifts ?? seed.shifts);
   const [sheet, setSheet] = useState(null);
   const [activeEvent, setActiveEvent] = useState(null);
-  const [activePattern, setActivePattern] = useState(null);
+  const [activeShift, setActiveShift] = useState(null);
   const [activeGroup, setActiveGroup] = useState(null);
   const [activeMajorEvent, setActiveMajorEvent] = useState(null);
   const [selectedDate, setSelectedDate] = useState(new Date(TODAY));
@@ -551,8 +616,8 @@ export default function App() {
   // "grid" shows a 24-hour scrollable grid for precise time inspection.
   const [weekLayout, setWeekLayout] = useState(() => _ls?.weekLayout ?? "columns");
   const [weekAnchor, setWeekAnchor] = useState(() => { const d = new Date(TODAY); d.setDate(d.getDate() - d.getDay()); return d; });
-  const [calPatternFilter, setCalPatternFilter] = useState(null);
-  const [patternOverrides, setPatternOverrides] = useState(new Set());
+  const [calShiftFilter, setCalShiftFilter] = useState(null);
+  const [shiftOverrides, setShiftOverrides] = useState(new Set());
   const [majorEvents, setMajorEvents] = useState(() => _ls?.majorEvents ?? seed.majorEvents);
   const [friends, setFriends] = useState(() => _ls?.friends ?? seed.friends);
   const [friendSearch, setFriendSearch] = useState("");
@@ -592,7 +657,7 @@ export default function App() {
   // Live-preview state for real-time calendar reactions in split mode
   // Set by form sheets while in-progress, cleared on close/save
   const [previewEvent, setPreviewEvent] = useState(null);      // { date: Date, color: "#xx", title: string } | null
-  const [previewPattern, setPreviewPattern] = useState(null);  // { type, color, weekDays, sequence, cycleStart } | null
+  const [previewShift, setPreviewShift] = useState(null);  // { type, color, weekDays, sequence, cycleStart } | null
   const [previewMajor, setPreviewMajor] = useState(null);      // { startDate, endDate, color, title } | null
   // Current viewport width (updates on resize). Used to auto-detect desktop.
   const [viewportWidth, setViewportWidth] = useState(() => typeof window !== "undefined" ? window.innerWidth : 1000);
@@ -765,19 +830,21 @@ export default function App() {
 
   const now = nowClock;
 
-  const overrideKey = (patternId, date) => patternId + ":" + date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
-  const togglePatternOverride = (patternId, date) => {
-    const key = overrideKey(patternId, date);
-    setPatternOverrides(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  const overrideKey = (shiftId, date) => shiftId + ":" + date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
+  const toggleShiftOverride = (shiftId, date) => {
+    const key = overrideKey(shiftId, date);
+    setShiftOverrides(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   };
-  const isOverridden = (patternId, date) => patternOverrides.has(overrideKey(patternId, date));
+  const isOverridden = (shiftId, date) => shiftOverrides.has(overrideKey(shiftId, date));
 
-  const closeSheet = () => { setSheet(null); setActiveEvent(null); setActivePattern(null); setActiveGroup(null); setActiveMajorEvent(null); setPreviewEvent(null); setPreviewPattern(null); setPreviewMajor(null); };
+  const closeSheet = () => { setSheet(null); setActiveEvent(null); setActiveShift(null); setActiveGroup(null); setActiveMajorEvent(null); setPreviewEvent(null); setPreviewShift(null); setPreviewMajor(null); };
   const openEvent = (ev) => { setActiveEvent(ev); setSheet("eventDetail"); };
   const openEditEvent = (ev) => { setActiveEvent(ev); setSheet("editEvent"); };
   const openNewEvent = () => setSheet("newEvent");
+  // Double-tap/click on a calendar cell opens a small chooser — event vs major event
+  const openAddChooser = (date) => { setSelectedDate(date); setSheet("addChooser"); };
   const openEditGroup = (g) => { setActiveGroup(g); setSheet("editGroup"); };
-  const openEditPattern = (p) => { setActivePattern(p); setSheet("editPattern"); };
+  const openEditShift = (p) => { setActiveShift(p); setSheet("editShift"); };
   const addCalendar    = (cal) => { setCalendars(prev => [...prev, { ...cal, id: "c" + uid() }]); closeSheet(); showToast("Calendar created"); };
   const updateCalendar = (cal) => { setCalendars(prev => prev.map(c => c.id === cal.id ? cal : c)); closeSheet(); showToast("Calendar updated"); };
   const deleteCalendar = (id) => {
@@ -797,7 +864,7 @@ export default function App() {
   const doSoftReset = () => {
     setEvents([]);
     setMajorEvents([]);
-    setPatterns([]);
+    setShifts([]);
     setGroups([]);
     setGroupMembers([]);
     setFriends([]);
@@ -806,7 +873,7 @@ export default function App() {
     setHiddenCalendars(new Set());
     setHiddenGroups(new Set());
     setDayNotes({});
-    setPatternOverrides(new Set());
+    setShiftOverrides(new Set());
     setFeedSeenAt(new Date());
     // Keep only the first calendar, clear the rest
     setCalendars(prev => prev.slice(0, 1));
@@ -823,7 +890,7 @@ export default function App() {
     setCalendars(seed.calendars);
     setGroups([]);
     setGroupMembers([]);
-    setPatterns([]);
+    setShifts([]);
     setMajorEvents([]);
     setFriends([]);
     setActivityFeed([]);
@@ -833,7 +900,7 @@ export default function App() {
     setHiddenGroups(new Set());
     setHolidayCountries(new Set(["us"]));
     setDayNotes({});
-    setPatternOverrides(new Set());
+    setShiftOverrides(new Set());
     setHomeOrder(["status","pinned","nextup","major","freetime"]);
     setThemeMode("auto");
     setUserProfile({ name: "Alex Morgan", email: "", handle: "", defaultCalendar: "c1", defaultReminder: "15", avatar: null, badges: { friendRequests: true, feed: true, todayEvents: true } });
@@ -856,7 +923,7 @@ export default function App() {
         calendars,
         groups,
         groupMembers,
-        patterns,
+        shifts,
         majorEvents,
         friends,
         activityFeed,
@@ -876,7 +943,7 @@ export default function App() {
       });
     }, 300);
     return () => clearTimeout(saveHandle);
-  }, [events, calendars, groups, groupMembers, patterns, majorEvents, friends,
+  }, [events, calendars, groups, groupMembers, shifts, majorEvents, friends,
       activityFeed, feedSeenAt, onboardingActive, onboardingCompletedAt,
       customColorRecents, customColorFavorites,
       pinnedEvents, hiddenCalendars, hiddenGroups, holidayCountries,
@@ -898,8 +965,18 @@ export default function App() {
     closeSheet();
     showToast("Event created");
   };
-  const deleteEvent = (id) => {
+  const deleteEvent = (id, opts = {}) => {
     const base = baseEventId(id);
+    // Scope: "instance" deletes a single occurrence via override; "series" (default) deletes the whole event.
+    if (opts.scope === "instance" && opts.dateKey) {
+      setEvents(prev => prev.map(e => {
+        if (e.id !== base) return e;
+        return { ...e, overrides: { ...(e.overrides||{}), [opts.dateKey]: { skip: true } } };
+      }));
+      closeSheet();
+      showToast("Occurrence removed", "err");
+      return;
+    }
     setEvents(prev => {
       const ev = prev.find(e => e.id === base);
       if (ev) (ev.groupIds||[]).forEach(gid => addActivity(gid, "deleted", ev.title, ev.start));
@@ -914,12 +991,38 @@ export default function App() {
     closeSheet();
     showToast("Event duplicated");
   };
-  const updateEvent = (ev) => {
+  const updateEvent = (ev, opts = {}) => {
     const base = baseEventId(ev.id);
-    // Restore base ID so it doesn't accumulate "_N" suffixes
-    const saved = { ...ev, id: base };
-    setEvents(prev => prev.map(e => e.id === base ? saved : e));
-    (saved.groupIds||[]).forEach(gid => addActivity(gid, "updated", saved.title, saved.start));
+    // Scope: "instance" writes an override for a single occurrence; "series" (default) updates the whole event.
+    if (opts.scope === "instance" && opts.dateKey) {
+      // Series-level fields (frequency, monthDays, overrides, id) must not leak into a per-date override.
+      const { id: _id, _seriesId, _occurrenceKey, start, end, overrides: _ovr, frequency: _fq, monthDays: _md, ...rest } = ev;
+      const override = { ...rest, start: start.toISOString(), end: end.toISOString() };
+      setEvents(prev => prev.map(e => {
+        if (e.id !== base) return e;
+        return { ...e, overrides: { ...(e.overrides||{}), [opts.dateKey]: override } };
+      }));
+      closeSheet();
+      showToast("Occurrence updated");
+      return;
+    }
+    // Series edit from an occurrence: preserve the base series' anchor dates but carry time-of-day
+    // and other fields forward. Otherwise the series would jump to the edited occurrence's date.
+    const { _seriesId, _occurrenceKey, ...clean } = ev;
+    setEvents(prev => prev.map(e => {
+      if (e.id !== base) return e;
+      const saved = { ...clean, id: base };
+      if (opts.scope === "series" && _occurrenceKey && e.start && e.end) {
+        const baseStart = new Date(e.start);
+        const baseEnd = new Date(e.end);
+        baseStart.setHours(ev.start.getHours(), ev.start.getMinutes(), 0, 0);
+        baseEnd.setHours(ev.end.getHours(), ev.end.getMinutes(), 0, 0);
+        saved.start = baseStart;
+        saved.end = baseEnd;
+      }
+      return saved;
+    }));
+    (ev.groupIds||[]).forEach(gid => addActivity(gid, "updated", ev.title, ev.start));
     closeSheet();
     showToast("Event updated");
   };
@@ -967,10 +1070,10 @@ export default function App() {
   const declineFriendRequest = (id) => setFriends(prev => prev.filter(f => f.id !== id));
   const cancelFriendRequest = (id) => setFriends(prev => prev.filter(f => f.id !== id));
   const removeFriend = (id) => setFriends(prev => prev.filter(f => f.id !== id));
-  const addPattern = (p) => { setPatterns(prev => { const maxP = prev.reduce((m,x) => Math.max(m, x.priority ?? 0), -1); return [...prev, { ...p, id: "p" + uid(), priority: maxP + 1 }]; }); closeSheet(); showToast("Pattern created"); };
-  const updatePattern = (p) => { setPatterns(prev => prev.map(x => x.id === p.id ? p : x)); closeSheet(); showToast("Pattern updated"); };
+  const addShift = (p) => { setShifts(prev => { const maxP = prev.reduce((m,x) => Math.max(m, x.priority ?? 0), -1); return [...prev, { ...p, id: "p" + uid(), priority: maxP + 1 }]; }); closeSheet(); showToast("Shift created"); };
+  const updateShift = (p) => { setShifts(prev => prev.map(x => x.id === p.id ? p : x)); closeSheet(); showToast("Shift updated"); };
 
-  const deletePattern = (id) => { setPatterns(prev => prev.filter(p => p.id !== id)); closeSheet(); showToast("Pattern deleted", "err"); };
+  const deleteShift = (id) => { setShifts(prev => prev.filter(p => p.id !== id)); closeSheet(); showToast("Shift deleted", "err"); };
 
   const visibleEvents = useMemo(() => events.filter(e => {
     if (hiddenCalendars.has(e.calendarId)) return false;
@@ -1079,10 +1182,10 @@ export default function App() {
         results.push({ type:"holiday", id:h.id+":"+h.year, item:h });
       }
     });
-    // Patterns
-    patterns.forEach(p => {
+    // Shifts
+    shifts.forEach(p => {
       if (matches(p.name)) {
-        results.push({ type:"pattern", id:p.id, item:p });
+        results.push({ type:"shift", id:p.id, item:p });
       }
     });
     // Calendars
@@ -1216,7 +1319,7 @@ export default function App() {
     }
 
     return results.slice(0, 30);
-  }, [searchQuery, visibleEvents, visibleMajorEvents, holidays, holidayCountries, patterns, calendars, groups, friends]);
+  }, [searchQuery, visibleEvents, visibleMajorEvents, holidays, holidayCountries, shifts, calendars, groups, friends]);
 
   // Core gap finder — returns gaps on a given day from a start time
   const findDayGaps = React.useCallback((dayStart, fromMs) => {
@@ -1227,13 +1330,13 @@ export default function App() {
       .filter(ev => !ev.allDay)
       .map(ev => [Math.max(ev.start.getTime(), fromMs),
                   Math.min(ev.end.getTime(), winEndMs)]);
-    for (var pi = 0; pi < patterns.length; pi++) {
-      const p = patterns[pi]; var st = p.config?.shiftTime;
+    for (var pi = 0; pi < shifts.length; pi++) {
+      const p = shifts[pi]; var st = p.config?.shiftTime;
       if (!st?.enabled) continue;
       const oKey = p.id+":"+dayStart.getFullYear()+"-"+dayStart.getMonth()+"-"+dayStart.getDate();
-      if (patternOverrides.has(oKey)) continue;
+      if (shiftOverrides.has(oKey)) continue;
       const isWork = p.type==="rotation" ? getRotationStatus(p,dayStart)==="work" : (p.config.days||[]).includes(dayStart.getDay());
-      if (!isWork && !patternOverrides.has("extra:"+oKey)) continue;
+      if (!isWork && !shiftOverrides.has("extra:"+oKey)) continue;
       const shP=st.start.split(":").map(Number), enP=st.end.split(":").map(Number);
       const shMs=new Date(dayStart).setHours(shP[0],shP[1],0,0);
       let enMs=new Date(dayStart).setHours(enP[0],enP[1],0,0);
@@ -1256,7 +1359,7 @@ export default function App() {
       if (j<merged.length) cursor=Math.max(cursor,merged[j][1]);
     }
     return gaps;
-  }, [events, patterns, patternOverrides]);
+  }, [events, shifts, shiftOverrides]);
 
   // Parse free time query and return a plain-language answer
   const freeTimeAnswer = useMemo(() => {
@@ -1626,7 +1729,7 @@ export default function App() {
               // Clear ALL seed data — blank slate for real first-time users
               setEvents([]);
               setMajorEvents([]);
-              setPatterns([]);
+              setShifts([]);
               setGroups([]);
               setGroupMembers([]);
               setFriends([]);
@@ -1635,7 +1738,7 @@ export default function App() {
               setHiddenCalendars(new Set());
               setHiddenGroups(new Set());
               setDayNotes({});
-              setPatternOverrides(new Set());
+              setShiftOverrides(new Set());
               setOnboardingActive(false);
               setOnboardingCompletedAt(Date.now());
               if (startTour) { setTab("home"); setTourOpen(true); }
@@ -1665,7 +1768,7 @@ export default function App() {
         {(isDesktop || isSplit) && (() => {
           const todayHasEvents = todayEvents.length > 0;
           const hasConflicts = getConflicts(todayEvents).size > 0;
-          const patternOverrideCount = patternOverrides.size;
+          const shiftOverrideCount = shiftOverrides.size;
           const friendRequestsRaw = friends.filter(f => f.status === "pending_received").length;
           const feedUnseenRaw = activityFeed.filter(a => a.userId !== "u1" && a.ts > feedSeenAt).length;
           const friendRequests = userProfile.badges?.friendRequests !== false ? friendRequestsRaw : 0;
@@ -1676,7 +1779,7 @@ export default function App() {
             { id:"home", label:"Home", icon:Icon.home, dot: hasConflicts ? "#ef4444" : null },
             ...(!isSplit ? [{ id:"calendar", label:"Calendar", icon:Icon.calendar, dot: (todayHasEvents && userProfile.badges?.todayEvents !== false) ? "var(--accent2)" : null }] : []),
             ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups, badge: groupsBadge }] : []),
-            { id:"patterns", label:"Patterns", icon:Icon.patterns, dot: patternOverrideCount > 0 ? "#f59e0b" : null },
+            { id:"shifts", label:"Shifts", icon:Icon.shifts, dot: shiftOverrideCount > 0 ? "#f59e0b" : null },
             { id:"settings", label:"Settings", icon:Icon.settings },
           ];
           if (isSplit) {
@@ -1795,8 +1898,8 @@ export default function App() {
               {searchQuery.trim() !== "" && searchResults.length === 0 && <div style={{ textAlign:"center", padding:"48px 0", color:"var(--muted)", fontSize:"0.875rem" }}>No results for "{searchQuery}"</div>}
                             {/* Shared per-result renderer */}
               {(() => {
-                const TYPE_ORDER = ["date","event","major","holiday","pattern","calendar","group","friend","settings"];
-                const TYPE_LABELS = { date:"Jump to date", event:"Events", major:"Major events", holiday:"Holidays", pattern:"Patterns", calendar:"Calendars", group:"Groups", friend:"Friends", settings:"Settings" };
+                const TYPE_ORDER = ["date","event","major","holiday","shift","calendar","group","friend","settings"];
+                const TYPE_LABELS = { date:"Jump to date", event:"Events", major:"Major events", holiday:"Holidays", shift:"Shifts", calendar:"Calendars", group:"Groups", friend:"Friends", settings:"Settings" };
                 const renderResult = (r) => {
                   const handleClick = () => {
                     rememberSearch(searchQuery);
@@ -1804,7 +1907,7 @@ export default function App() {
                     else if (r.type === "major")    { openMajorEventDetail(r.item); }
                     else if (r.type === "date")     { setSelectedDate(r.item.date); setCalMonth({year:r.item.date.getFullYear(),month:r.item.date.getMonth()}); setCalView("day"); setTab("calendar"); }
                     else if (r.type === "holiday")  { const d = new Date(r.item.year, r.item.month-1, r.item.day); setSelectedDate(d); setTab("calendar"); }
-                    else if (r.type === "pattern")  { openEditPattern(r.item); }
+                    else if (r.type === "shift")  { openEditShift(r.item); }
                     else if (r.type === "calendar") { setActiveCalendar(r.item); setSheet("editCalendar"); }
                     else if (r.type === "group")    { setActiveGroup(r.item); setTab("groups"); setGroupsSubTab("groups"); }
                     else if (r.type === "friend")   { setTab("groups"); setGroupsSubTab("friends"); }
@@ -1862,14 +1965,14 @@ export default function App() {
                       </div>
                     );
                   }
-                  if (r.type === "pattern") {
+                  if (r.type === "shift") {
                     const p = r.item;
                     return (
                       <div key={r.type+r.id} onClick={handleClick} className="event-pill" style={{ marginTop:8 }}>
                         <div className="event-dot" style={{ background: p.color || "#888" }} />
                         <div className="event-pill-info">
                           <div className="event-pill-title">{p.name}</div>
-                          <div className="event-pill-time">Pattern · {p.type}</div>
+                          <div className="event-pill-time">Shift · {p.type}</div>
                         </div>
                       </div>
                     );
@@ -2431,21 +2534,21 @@ export default function App() {
 
             {calView === "month" && (
               <>
-                {/* Pattern filter — scrollable single row */}
-                {patterns.length > 0 && (
+                {/* Shift filter — scrollable single row */}
+                {shifts.length > 0 && (
                   <div style={{ display:"flex", gap:5, overflowX:"auto", marginBottom:12, paddingBottom:2, WebkitOverflowScrolling:"touch", scrollbarWidth:"none" }}>
-                    <button onClick={() => setCalPatternFilter(null)}
+                    <button onClick={() => setCalShiftFilter(null)}
                       style={{ flexShrink:0, padding:"5px 12px", borderRadius:14, fontSize:"0.6875rem", fontWeight:700,
-                        border:"1.5px solid "+(calPatternFilter===null ? "var(--accent)" : "var(--border)"),
-                        background: calPatternFilter===null ? "var(--accent)" : "var(--surface2)",
-                        color: calPatternFilter===null ? "white" : "var(--muted)",
+                        border:"1.5px solid "+(calShiftFilter===null ? "var(--accent)" : "var(--border)"),
+                        background: calShiftFilter===null ? "var(--accent)" : "var(--surface2)",
+                        color: calShiftFilter===null ? "white" : "var(--muted)",
                         cursor:"pointer", fontFamily:"var(--font)" }}>All</button>
-                    {patterns.map(p => (
-                      <button key={p.id} onClick={() => setCalPatternFilter(calPatternFilter===p.id ? null : p.id)}
+                    {shifts.map(p => (
+                      <button key={p.id} onClick={() => setCalShiftFilter(calShiftFilter===p.id ? null : p.id)}
                         style={{ flexShrink:0, display:"flex", alignItems:"center", gap:5, padding:"5px 12px", borderRadius:14,
-                          border:"1.5px solid " + (calPatternFilter===p.id ? p.color : "var(--border)"),
-                          background: calPatternFilter===p.id ? p.color+"22" : "var(--surface2)",
-                          color: calPatternFilter===p.id ? p.color : "var(--muted)",
+                          border:"1.5px solid " + (calShiftFilter===p.id ? p.color : "var(--border)"),
+                          background: calShiftFilter===p.id ? p.color+"22" : "var(--surface2)",
+                          color: calShiftFilter===p.id ? p.color : "var(--muted)",
                           cursor:"pointer", fontSize:"0.6875rem", fontWeight:700, fontFamily:"var(--font)" }}>
                         <div style={{ width:7, height:7, borderRadius:"50%", background:p.color, flexShrink:0 }} />
                         {p.name}
@@ -2456,30 +2559,31 @@ export default function App() {
 
                 {/* Calendar grid */}
                 <MonthGrid year={calMonth.year} month={calMonth.month} events={visibleEvents} calendars={calendars}
-                  patterns={calPatternFilter ? patterns.filter(p => p.id === calPatternFilter) : patterns}
-                  majorEvents={calPatternFilter ? [] : visibleMajorEvents}
-                  patternOverrides={patternOverrides}
+                  shifts={calShiftFilter ? shifts.filter(p => p.id === calShiftFilter) : shifts}
+                  majorEvents={calShiftFilter ? [] : visibleMajorEvents}
+                  shiftOverrides={shiftOverrides}
                   onLongPress={(date) => setDayPopup({ date })}
+                  onQuickAdd={openAddChooser}
                   dayNotes={dayNotes}
                   holidays={holidays} holidayCountries={holidayCountries}
                   selectedDate={selectedDate} onSelect={d => setSelectedDate(d)}
-                  previewPattern={previewPattern} previewEvent={previewEvent} previewMajor={previewMajor} />
+                  previewShift={previewShift} previewEvent={previewEvent} previewMajor={previewMajor} />
 
                 {/* Legend — only show major events visible in current month */}
                 {(() => {
                   const monthStart = new Date(calMonth.year, calMonth.month, 1);
                   const monthEnd = new Date(calMonth.year, calMonth.month + 1, 0, 23, 59, 59);
-                  const visibleMajor = (calPatternFilter ? [] : visibleMajorEvents).filter(me => {
+                  const visibleMajor = (calShiftFilter ? [] : visibleMajorEvents).filter(me => {
                     const [lsy,lsm,lsd]=me.startDate.slice(0,10).split("-").map(Number);
                     const [ley,lem,led]=me.endDate.slice(0,10).split("-").map(Number);
                     const start = new Date(lsy,lsm-1,lsd);
                     const end   = new Date(ley,lem-1,led); end.setHours(23,59,59,999);
                     return start <= monthEnd && end >= monthStart;
                   });
-                  if (patterns.length === 0 && visibleMajor.length === 0) return null;
+                  if (shifts.length === 0 && visibleMajor.length === 0) return null;
                   return (
                     <div style={{ display:"flex", flexWrap:"wrap", gap:10, marginTop:10, paddingTop:10, borderTop:"1px solid var(--border)" }}>
-                      {patterns.map(p => (
+                      {shifts.map(p => (
                         <div key={p.id} style={{ display:"flex", alignItems:"center", gap:5, fontSize:"0.6875rem", color:"var(--muted)" }}>
                           <svg width="14" height="14" viewBox="0 0 100 100" style={{flexShrink:0}}><path d="M 65 4 L 78 4 A 18 18 0 0 1 96 22 L 96 78 A 18 18 0 0 1 78 96 L 22 96 A 18 18 0 0 1 4 78 L 4 22 A 18 18 0 0 1 22 4 L 35 4" fill="none" stroke={p.color||"#6366f1"} strokeWidth="8" strokeLinecap="round" /></svg>
                           {p.name}
@@ -2519,12 +2623,14 @@ export default function App() {
                   <WeekViewColumns weekDays={weekDays} events={visibleEvents} calendars={calendars}
                     majorEvents={visibleMajorEvents} holidays={holidays} holidayCountries={holidayCountries}
                     onSelect={d => { setSelectedDate(d); setCalView("day"); }}
+                    onQuickAdd={openAddChooser}
                     onEventClick={openEvent}
                     onMajorEventClick={openMajorEventDetail} />
                 ) : (
                   <WeekView weekDays={weekDays} events={visibleEvents} calendars={calendars}
                     majorEvents={visibleMajorEvents} holidays={holidays} holidayCountries={holidayCountries}
                     selectedDate={selectedDate} onSelect={d => setSelectedDate(d)}
+                    onQuickAdd={openAddChooser}
                     onEventClick={openEvent} />
                 )}
               </>
@@ -2537,13 +2643,13 @@ export default function App() {
             )}
 
             {dayPopup && (() => {
-              const activeForDay = patterns.filter(p => {
+              const activeForDay = shifts.filter(p => {
                 if (p.type === "rotation") return getRotationStatus(p, dayPopup.date) === "work";
                 if (p.type === "weekly") return (p.config.days ?? []).includes(dayPopup.date.getDay());
                 if (p.type === "monthly") return isMonthlyWorkDay(p, dayPopup.date);
                 return false;
               });
-              const inactiveForDay = patterns.filter(p => !activeForDay.includes(p));
+              const inactiveForDay = shifts.filter(p => !activeForDay.includes(p));
               return (
                 <div className="sheet-overlay" onClick={() => setDayPopup(null)}>
                   <div className="sheet" onClick={e => e.stopPropagation()}>
@@ -2552,11 +2658,11 @@ export default function App() {
                       <div style={{ fontSize:"1.0625rem", fontWeight:700 }}>{fmtDate(dayPopup.date)}</div>
                       <button className="btn-icon" style={{ background:"var(--surface3)" }} onClick={() => setDayPopup(null)}>{Icon.close}</button>
                     </div>
-                    {activeForDay.length > 0 && <div className="section-label" style={{ marginBottom:8 }}>Active patterns</div>}
+                    {activeForDay.length > 0 && <div className="section-label" style={{ marginBottom:8 }}>Active shifts</div>}
                     {activeForDay.map(p => {
                       const hidden = isOverridden(p.id, dayPopup.date);
                       return (
-                        <div key={p.id} onClick={() => togglePatternOverride(p.id, dayPopup.date)}
+                        <div key={p.id} onClick={() => toggleShiftOverride(p.id, dayPopup.date)}
                           style={{ display:"flex", alignItems:"center", gap:10, padding:"12px", borderRadius:10, marginBottom:6, cursor:"pointer",
                             background: hidden ? "var(--surface2)" : p.color+"22",
                             border:"1px solid "+(hidden ? "var(--border)" : p.color+"55"),
@@ -2573,7 +2679,7 @@ export default function App() {
                         {inactiveForDay.map(p => {
                           const added = isOverridden("extra:"+p.id, dayPopup.date);
                           return (
-                            <div key={p.id} onClick={() => togglePatternOverride("extra:"+p.id, dayPopup.date)}
+                            <div key={p.id} onClick={() => toggleShiftOverride("extra:"+p.id, dayPopup.date)}
                               style={{ display:"flex", alignItems:"center", gap:10, padding:"12px", borderRadius:10, marginBottom:6, cursor:"pointer",
                                 background: added ? p.color+"22" : "var(--surface2)",
                                 border:"1px solid "+(added ? p.color+"55" : "var(--border)"), transition:"all .15s" }}>
@@ -2585,7 +2691,7 @@ export default function App() {
                         })}
                       </>
                     )}
-                    {activeForDay.length === 0 && inactiveForDay.length === 0 && <div className="empty">No patterns configured</div>}
+                    {activeForDay.length === 0 && inactiveForDay.length === 0 && <div className="empty">No shifts configured</div>}
                   </div>
                 </div>
               );
@@ -2989,22 +3095,22 @@ export default function App() {
         })()}
 
         {/* PATTERNS TAB */}
-        {tab === "patterns" && (
+        {tab === "shifts" && (
           <div className="screen" ref={setScreenRef}>
             <div className="header">
-              <h1>Patterns</h1>
-              <button className="btn btn-secondary" style={{ padding:"8px 14px", fontSize:"0.8125rem" }} onClick={() => setSheet("newPattern")}>+ New</button>
+              <h1>Shifts</h1>
+              <button className="btn btn-secondary" style={{ padding:"8px 14px", fontSize:"0.8125rem" }} onClick={() => setSheet("newShift")}>+ New</button>
             </div>
-            {patterns.length > 1 && (
+            {shifts.length > 1 && (
               <div className="card card-sm" style={{ marginBottom:14 }}>
                 <div className="section-label" style={{ marginBottom:4 }}>Ring priority</div>
-                <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginBottom:12 }}>Higher priority = outer ring when patterns overlap.</div>
+                <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginBottom:12 }}>Higher priority = outer ring when shifts overlap.</div>
                 <TapSwapList
-                  items={[...patterns].sort((a,b) => (a.priority??99)-(b.priority??99)).map(p => p.id)}
-                  labels={Object.fromEntries(patterns.map(p => [p.id, p.name]))}
-                  colors={Object.fromEntries(patterns.map(p => [p.id, p.color || "#888"]))}
+                  items={[...shifts].sort((a,b) => (a.priority??99)-(b.priority??99)).map(p => p.id)}
+                  labels={Object.fromEntries(shifts.map(p => [p.id, p.name]))}
+                  colors={Object.fromEntries(shifts.map(p => [p.id, p.color || "#888"]))}
                   onReorder={(newOrder) => {
-                    setPatterns(prev => newOrder.map((id, idx) => {
+                    setShifts(prev => newOrder.map((id, idx) => {
                       const p = prev.find(x => x.id === id);
                       return { ...p, priority: idx };
                     }));
@@ -3012,21 +3118,21 @@ export default function App() {
                 />
               </div>
             )}
-            {patterns.length === 0 && (
-              <EmptyState icon={Icon.patterns} title="No patterns yet"
-                subtitle="Patterns are recurring shifts or days — like 3 on / 2 off rotations, weekly schedules, or specific days each month."
-                actionLabel="Create a pattern" onAction={() => setSheet("newPattern")} />
+            {shifts.length === 0 && (
+              <EmptyState icon={Icon.shifts} title="No shifts yet"
+                subtitle="Shifts are recurring shifts or days — like 3 on / 2 off rotations, weekly schedules, or specific days each month."
+                actionLabel="Create a shift" onAction={() => setSheet("newShift")} />
             )}
-            {[...patterns].sort((a,b) => (a.priority??99)-(b.priority??99)).map(p => (
-              <PatternCard key={p.id} pattern={p} onEdit={() => openEditPattern(p)}
-                patternOverrides={patternOverrides}
-                onAddManualDay={(patternId, date) => {
-                  const key = "extra:" + patternId + ":" + date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
-                  setPatternOverrides(prev => { const next = new Set(prev); next.add(key); return next; });
+            {[...shifts].sort((a,b) => (a.priority??99)-(b.priority??99)).map(p => (
+              <ShiftCard key={p.id} shift={p} onEdit={() => openEditShift(p)}
+                shiftOverrides={shiftOverrides}
+                onAddManualDay={(shiftId, date) => {
+                  const key = "extra:" + shiftId + ":" + date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
+                  setShiftOverrides(prev => { const next = new Set(prev); next.add(key); return next; });
                 }}
-                onToggleMonthDay={(patternId, year, month, day) => {
-                  setPatterns(prev => prev.map(pat => {
-                    if (pat.id !== patternId) return pat;
+                onToggleMonthDay={(shiftId, year, month, day) => {
+                  setShifts(prev => prev.map(pat => {
+                    if (pat.id !== shiftId) return pat;
                     const key = `${year}-${month}`;
                     const existing = pat.config?.months?.[key] || [];
                     const next = existing.includes(day) ? existing.filter(d=>d!==day) : [...existing, day].sort((a,b)=>a-b);
@@ -3037,7 +3143,7 @@ export default function App() {
                   if (p.type !== "weekly") return;
                   const days = p.config.days || [];
                   const next = days.includes(dow) ? days.filter(d => d !== dow) : [...days, dow].sort((a,b)=>a-b);
-                  updatePattern({ ...p, config: { ...p.config, days: next } });
+                  updateShift({ ...p, config: { ...p.config, days: next } });
                 }} />
             ))}
           </div>
@@ -3387,7 +3493,7 @@ export default function App() {
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontSize:"0.875rem", fontWeight:600, color:"#fbbf24" }}>Clear my data</div>
                     <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:2 }}>
-                      Remove all events and patterns, keep your profile
+                      Remove all events and shifts, keep your profile
                     </div>
                   </div>
                   <div style={{ display:"flex", width:16, height:16, color:"#fbbf24", flexShrink:0 }}>{Icon.chevR}</div>
@@ -3401,7 +3507,7 @@ export default function App() {
                     <strong style={{ color:"#6ee7b7" }}>Keeps:</strong> Your name, calendar color, theme, and onboarding
                   </div>
                   <div style={{ fontSize:"0.75rem", color:"var(--text)", lineHeight:1.6, marginBottom:12 }}>
-                    <strong style={{ color:"#fca5a5" }}>Removes:</strong> {events.length} events, {majorEvents.length} major events, {patterns.length} patterns, {groups.length} groups, {friends.length} friends, and pinned/hidden state
+                    <strong style={{ color:"#fca5a5" }}>Removes:</strong> {events.length} events, {majorEvents.length} major events, {shifts.length} shifts, {groups.length} groups, {friends.length} friends, and pinned/hidden state
                   </div>
                   <div style={{ display:"flex", gap:8 }}>
                     <button onClick={() => setConfirmSoftReset(false)} className="btn btn-secondary"
@@ -3441,7 +3547,7 @@ export default function App() {
                     This will permanently delete:<br/>
                     • <strong>{events.length}</strong> events<br/>
                     • <strong>{majorEvents.length}</strong> major events<br/>
-                    • <strong>{patterns.length}</strong> patterns<br/>
+                    • <strong>{shifts.length}</strong> shifts<br/>
                     • <strong>{groups.length}</strong> groups, <strong>{friends.length}</strong> friends<br/>
                     • All settings and your profile
                   </div>
@@ -3517,7 +3623,7 @@ export default function App() {
           {(() => {
             const todayHasEvents = todayEvents.length > 0;
             const hasConflicts = getConflicts(todayEvents).size > 0;
-            const patternOverrideCount = patternOverrides.size;
+            const shiftOverrideCount = shiftOverrides.size;
             const friendRequestsRaw = friends.filter(f => f.status === "pending_received").length;
             const feedUnseenRaw = activityFeed.filter(a => a.userId !== "u1" && a.ts > feedSeenAt).length;
             // Respect user's badge preferences
@@ -3528,7 +3634,7 @@ export default function App() {
               { id:"home", label:"Home", icon:Icon.home, dot: hasConflicts ? "#ef4444" : null },
               { id:"calendar", label:"Calendar", icon:Icon.calendar, dot: (todayHasEvents && userProfile.badges?.todayEvents !== false) ? "var(--accent2)" : null },
               ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups, badge: groupsBadge }] : []),
-              { id:"patterns", label:"Patterns", icon:Icon.patterns, dot: patternOverrideCount > 0 ? "#f59e0b" : null },
+              { id:"shifts", label:"Shifts", icon:Icon.shifts, dot: shiftOverrideCount > 0 ? "#f59e0b" : null },
               { id:"settings", label:"Settings", icon:Icon.settings },
             ].map(n => (
               <button key={n.id} ref={!(isDesktop || isSplit) ? setTourRef("nav-"+n.id) : undefined} className={"nav-btn "+(tab===n.id?"active":"")} onClick={() => { setTab(n.id); setFabOpen(false); }}>
@@ -3543,7 +3649,31 @@ export default function App() {
           })()}
         </nav>
 
-        {sheet === "newMajorEvent" && <MajorEventSheet onPreview={setPreviewMajor} groups={groups} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addMajorEvent} onClose={() => { setPreviewMajor(null); closeSheet(); }} />}
+        {sheet === "addChooser" && (
+          <div className="sheet-overlay" onClick={e => e.target===e.currentTarget && closeSheet()}>
+            <div className="sheet">
+              <div className="sheet-handle" />
+              <div style={{ fontSize:"1rem", fontWeight:700, marginBottom:4 }}>Add to {selectedDate.toLocaleDateString(undefined, { weekday:"long", month:"long", day:"numeric" })}</div>
+              <div style={{ fontSize:"0.8125rem", color:"var(--muted)", marginBottom:14 }}>What are you adding?</div>
+              <button className="btn btn-primary" onClick={() => setSheet("newEvent")}
+                style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                <span style={{ display:"flex", width:16, height:16 }}>{Icon.calendar}</span>
+                Add event
+              </button>
+              <button className="btn btn-secondary" onClick={() => setSheet("newMajorEvent")}
+                style={{ width:"100%", marginTop:8, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                <span style={{ display:"flex", width:16, height:16 }}>{Icon.pin}</span>
+                Add major event
+              </button>
+              <button onClick={closeSheet}
+                style={{ width:"100%", marginTop:12, background:"none", border:"none", padding:"8px",
+                  color:"var(--muted)", fontFamily:"var(--font)", fontSize:"0.8125rem", cursor:"pointer" }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {sheet === "newMajorEvent" && <MajorEventSheet defaultDate={selectedDate} onPreview={setPreviewMajor} groups={groups} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addMajorEvent} onClose={() => { setPreviewMajor(null); closeSheet(); }} />}
         {sheet === "editCalendar" && <CalendarSheet existing={activeCalendar} allCalendars={calendars} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={activeCalendar ? updateCalendar : addCalendar} onDelete={activeCalendar && calendars.length > 1 ? deleteCalendar : null} onClose={closeSheet} />}
         {sheet === "editProfile" && (
           <EditProfileSheet
@@ -3582,8 +3712,8 @@ export default function App() {
             }}
           />
         )}
-        {sheet === "newPattern" && <PatternSheet onPreview={setPreviewPattern} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addPattern} onClose={() => { setPreviewPattern(null); closeSheet(); }} />}
-        {sheet === "editPattern" && activePattern && <PatternSheet existing={activePattern} onPreview={setPreviewPattern} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updatePattern} onDelete={deletePattern} onClose={() => { setPreviewPattern(null); closeSheet(); }} />}
+        {sheet === "newShift" && <ShiftSheet onPreview={setPreviewShift} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addShift} onClose={() => { setPreviewShift(null); closeSheet(); }} />}
+        {sheet === "editShift" && activeShift && <ShiftSheet existing={activeShift} onPreview={setPreviewShift} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateShift} onDelete={deleteShift} onClose={() => { setPreviewShift(null); closeSheet(); }} />}
       </div>
     </>
   );
@@ -3768,7 +3898,7 @@ function DayView({ date, events, calendars, onEventClick, majorEvents=[], holida
 // ── WEEK VIEW ─────────────────────────────────────────────
 // ── WEEK VIEW (Columns) — whole week at a glance ──
 // Compact overview; tap a day to drill into Day view. Good for planning.
-function WeekViewColumns({ weekDays, events, calendars, majorEvents=[], holidays=[], holidayCountries=new Set(), onSelect, onEventClick, onMajorEventClick }) {
+function WeekViewColumns({ weekDays, events, calendars, majorEvents=[], holidays=[], holidayCountries=new Set(), onSelect, onQuickAdd, onEventClick, onMajorEventClick }) {
   // Bucket events & major events per day
   const byDay = weekDays.map(d => {
     const dayStart = new Date(d); dayStart.setHours(0,0,0,0);
@@ -3813,6 +3943,7 @@ function WeekViewColumns({ weekDays, events, calendars, majorEvents=[], holidays
 
           return (
             <div key={di} onClick={() => onSelect && onSelect(d)}
+              onDoubleClick={() => onQuickAdd && onQuickAdd(d)}
               style={{
                 background: isToday ? "rgba(124,106,247,0.1)" : "var(--surface)",
                 border: `1px solid ${isToday ? "rgba(124,106,247,0.35)" : "var(--border)"}`,
@@ -3903,7 +4034,7 @@ function WeekViewColumns({ weekDays, events, calendars, majorEvents=[], holidays
   );
 }
 
-function WeekView({ weekDays, events, calendars, selectedDate, onSelect, onEventClick, majorEvents=[], holidays=[], holidayCountries=new Set() }) {
+function WeekView({ weekDays, events, calendars, selectedDate, onSelect, onQuickAdd, onEventClick, majorEvents=[], holidays=[], holidayCountries=new Set() }) {
   const HOUR_H = 52;
   const START_H = 0;
   const hours = Array.from({ length: 24 }, (_, i) => i + START_H);
@@ -3943,7 +4074,7 @@ function WeekView({ weekDays, events, calendars, selectedDate, onSelect, onEvent
           const isToday = sameDay(d, new Date());
           const isSel = sameDay(d, selectedDate);
           return (
-            <div key={i} onClick={() => onSelect(d)} style={{ textAlign:"center", cursor:"pointer", padding:"2px 0" }}>
+            <div key={i} onClick={() => onSelect(d)} onDoubleClick={() => onQuickAdd && onQuickAdd(d)} style={{ textAlign:"center", cursor:"pointer", padding:"2px 0" }}>
               <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:3 }}>
                 {DAYS[d.getDay()].slice(0,2)}
               </div>
@@ -4192,7 +4323,7 @@ function EventPill({ ev, cal, onClick, showDate, onDelete }) {
 // Concentric rounded-rect rings that hug the container. Used by month cells
 // (square) and week columns (portrait). For non-square containers, the viewBox
 // stretches and vectorEffect keeps stroke thickness uniform.
-function PatternRings({ colors, uniformStroke = false, zIndex = 2 }) {
+function ShiftRings({ colors, uniformStroke = false, zIndex = 2 }) {
   if (!colors || colors.length === 0) return null;
   return (
     <svg viewBox="0 0 100 100" preserveAspectRatio="none"
@@ -4213,7 +4344,7 @@ function PatternRings({ colors, uniformStroke = false, zIndex = 2 }) {
 }
 
 // ── MONTH GRID ────────────────────────────────────────────
-function MonthGrid({ year, month, events, calendars, patterns, patternOverrides, onLongPress, majorEvents, selectedDate, onSelect, dayNotes, holidays=[], holidayCountries=new Set(), previewPattern=null, previewEvent=null, previewMajor=null }) {
+function MonthGrid({ year, month, events, calendars, shifts, shiftOverrides, onLongPress, onQuickAdd, majorEvents, selectedDate, onSelect, dayNotes, holidays=[], holidayCountries=new Set(), previewShift=null, previewEvent=null, previewMajor=null }) {
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const prevDays = new Date(year, month, 0).getDate();
@@ -4222,26 +4353,26 @@ function MonthGrid({ year, month, events, calendars, patterns, patternOverrides,
   for (let d = 1; d <= daysInMonth; d++) cells.push({ day: d, curr: true });
   while (cells.length % 7 !== 0) cells.push({ day: cells.length - daysInMonth - firstDay + 1, curr: false });
 
-  const allRingPatterns = [...(patterns||[])].sort((a,b) => (a.priority??99)-(b.priority??99));
+  const allRingShifts = [...(shifts||[])].sort((a,b) => (a.priority??99)-(b.priority??99));
 
   const rotationMap = useMemo(() => {
     const map = {};
     for (let d = 1; d <= daysInMonth; d++) {
       const date = new Date(year, month, d);
       const colors = [];
-      for (var rpi = 0; rpi < allRingPatterns.length; rpi++) {
-        let p = allRingPatterns[rpi];
+      for (var rpi = 0; rpi < allRingShifts.length; rpi++) {
+        let p = allRingShifts[rpi];
         let oKey = p.id+":"+date.getFullYear()+"-"+date.getMonth()+"-"+date.getDate();
-        if (patternOverrides && patternOverrides.has(oKey)) continue;
+        if (shiftOverrides && shiftOverrides.has(oKey)) continue;
         const extraKey = "extra:"+p.id+":"+date.getFullYear()+"-"+date.getMonth()+"-"+date.getDate();
-        const isExtra = patternOverrides && patternOverrides.has(extraKey);
+        const isExtra = shiftOverrides && shiftOverrides.has(extraKey);
         const isNatural = p.type==="rotation" ? getRotationStatus(p,date)==="work" : p.type==="monthly" ? isMonthlyWorkDay(p,date) : (p.config.days||[]).includes(date.getDay());
         if (isNatural||isExtra) colors.push(p.color||"#6366f1");
       }
       if (colors.length) map[d] = colors;
     }
     return map;
-  }, [year, month, JSON.stringify(allRingPatterns), JSON.stringify([...(patternOverrides||[])])]);
+  }, [year, month, JSON.stringify(allRingShifts), JSON.stringify([...(shiftOverrides||[])])]);
 
   const majorEventMap = useMemo(() => {
     const map = {};
@@ -4262,6 +4393,9 @@ function MonthGrid({ year, month, events, calendars, patterns, patternOverrides,
   }, [year, month, majorEvents]);
 
   const lpTimerRef = React.useRef(null);
+  // Track last tap per-cell to detect double-tap on touch devices (mobile has no native dblclick reliably)
+  const lastTapRef = React.useRef({ time: 0, key: null });
+  const DOUBLE_TAP_MS = 300;
 
   return (
     <div className="cal-grid">
@@ -4280,16 +4414,16 @@ function MonthGrid({ year, month, events, calendars, patterns, patternOverrides,
         const dayEvs = expandEvents(events, dayFrom, dayTo).filter(e => sameDay(e.start, date) || (e.allDay && e.start <= dayTo && e.end >= dayFrom));
         const dots = dayEvs.slice(0,3).map(e => { const cal = calendars.find(cc => cc.id===e.calendarId); return e.color || cal?.color||"#888"; });
         const extraEventCount = Math.max(0, dayEvs.length - 3);
-        const hasHideOverride = c.curr && patterns && patterns.some(p => { const oKey = p.id+":"+date.getFullYear()+"-"+date.getMonth()+"-"+date.getDate(); return patternOverrides && patternOverrides.has(oKey); });
+        const hasHideOverride = c.curr && shifts && shifts.some(p => { const oKey = p.id+":"+date.getFullYear()+"-"+date.getMonth()+"-"+date.getDate(); return shiftOverrides && shiftOverrides.has(oKey); });
         const bgTint = !majorColor && rotColors.length>0 ? rotColors[0]+"12" : undefined;
         const busyScore = c.curr && !majorColor && rotColors.length===0 ? getBusyScore(date, events) : 0;
         const busyBg = busyScore > 0.1 ? `rgba(124,106,247,${(busyScore*0.18).toFixed(2)})` : undefined;
-        // Preview pattern highlight — only for weekly patterns (most common/simple)
+        // Preview shift highlight — only for weekly shifts (most common/simple)
         let previewTint = undefined;
         let previewBorder = undefined;
-        if (c.curr && previewPattern && previewPattern.type === "weekly" && previewPattern.weekDays && previewPattern.weekDays.includes(date.getDay())) {
-          previewTint = (previewPattern.color || "#6366f1") + "33";
-          previewBorder = "2px dashed " + (previewPattern.color || "#6366f1");
+        if (c.curr && previewShift && previewShift.type === "weekly" && previewShift.weekDays && previewShift.weekDays.includes(date.getDay())) {
+          previewTint = (previewShift.color || "#6366f1") + "33";
+          previewBorder = "2px dashed " + (previewShift.color || "#6366f1");
         }
         // Ghost event preview: show on the date currently selected in the New/Edit Event sheet
         const isGhostDay = c.curr && previewEvent && previewEvent.date && sameDay(date, previewEvent.date);
@@ -4306,9 +4440,23 @@ function MonthGrid({ year, month, events, calendars, patterns, patternOverrides,
             onMouseLeave={() => { if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; } }}
             onContextMenu={e => { if (!c.curr) return; e.preventDefault(); onLongPress&&onLongPress(date); }}
             onTouchStart={e => { if (!c.curr) return; e.preventDefault(); lpTimerRef.current = setTimeout(() => { lpTimerRef.current="fired"; onLongPress&&onLongPress(date); }, 500); }}
-            onTouchEnd={() => { if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; } }}
+            onTouchEnd={() => {
+              if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; }
+              if (!c.curr) return;
+              if (lpTimerRef.current === "fired") return;
+              const now = Date.now();
+              const key = date.getFullYear()+"-"+date.getMonth()+"-"+date.getDate();
+              if (onQuickAdd && now - lastTapRef.current.time < DOUBLE_TAP_MS && lastTapRef.current.key === key) {
+                lastTapRef.current = { time: 0, key: null };
+                onQuickAdd(date);
+                return;
+              }
+              lastTapRef.current = { time: now, key };
+              onSelect && onSelect(date);
+            }}
             onTouchMove={() => { if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; } }}
-            onClick={() => { if (lpTimerRef.current==="fired") { lpTimerRef.current=null; return; } c.curr&&onSelect(date); }}>
+            onClick={() => { if (lpTimerRef.current==="fired") { lpTimerRef.current=null; return; } c.curr&&onSelect(date); }}
+            onDoubleClick={() => { if (!c.curr) return; onQuickAdd && onQuickAdd(date); }}>
             {hasHideOverride && <div style={{ position:"absolute", top:2, right:3, width:5, height:5, borderRadius:"50%", background:"#f87171", zIndex:3, pointerEvents:"none" }} />}
             {/* Holiday H badge — top-left, zIndex 7 so it's above all rings and stripes */}
             {cellHoliday && (
@@ -4324,8 +4472,8 @@ function MonthGrid({ year, month, events, calendars, patterns, patternOverrides,
                 background:`repeating-linear-gradient(45deg, ${majorColor}40 0px, ${majorColor}40 3px, transparent 3px, transparent 9px)`,
                 border:`1.5px solid ${majorColor}77` }} />
             )}
-            {/* Pattern rings — concentric, parallel to cell edge, legend-style */}
-            <PatternRings colors={rotColors} />
+            {/* Shift rings — concentric, parallel to cell edge, legend-style */}
+            <ShiftRings colors={rotColors} />
             {/* Color tag centered above the day number */}
             {majorColor && (
               <div style={{ position:"absolute", top:3, left:"50%", transform:"translateX(-50%)", width:8, height:3, borderRadius:2, background:majorColor, pointerEvents:"none", zIndex:4 }} />
@@ -4362,12 +4510,15 @@ function MonthGrid({ year, month, events, calendars, patterns, patternOverrides,
   );
 }
 
-// ── MONTHLY SPECIFIC-DAYS COMPONENT ──────────────────────────
-function MonthlySpecificDays({ pattern, col, onToggleDay }) {
+// ── SPECIFIC-DAYS PICKER (generic) ──────────────────────────
+// Shared by shift "monthly" type and event "specific" frequency — both pick
+// individual calendar dates month-by-month rather than following a repeating rule.
+function SpecificDaysPicker({ daysByMonth = {}, color = "#6366f1", onToggle, showWarningsAndActions = true }) {
   const [viewMonth, setViewMonth] = React.useState({ year: TODAY.getFullYear(), month: TODAY.getMonth() });
   const { year, month } = viewMonth;
   const monthKey = `${year}-${month}`;
-  const selectedDays = pattern.config?.months?.[monthKey] || [];
+  const selectedDays = daysByMonth[monthKey] || [];
+  const col = color;
 
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -4383,8 +4534,8 @@ function MonthlySpecificDays({ pattern, col, onToggleDay }) {
   const daysLeft = new Date(TODAY.getFullYear(), TODAY.getMonth() + 1, 0).getDate() - TODAY.getDate();
   const nextD = new Date(year, month + 1, 1);
   const nextKey = `${nextD.getFullYear()}-${nextD.getMonth()}`;
-  const nextMonthDays = pattern.config?.months?.[nextKey] || [];
-  const showWarning = isCurrentMonth && daysLeft <= 5 && nextMonthDays.length === 0;
+  const nextMonthDays = daysByMonth[nextKey] || [];
+  const showWarning = showWarningsAndActions && isCurrentMonth && daysLeft <= 5 && nextMonthDays.length === 0;
 
   return (
     <div style={{ marginBottom:12 }}>
@@ -4422,7 +4573,7 @@ function MonthlySpecificDays({ pattern, col, onToggleDay }) {
           const isActive = selectedDays.includes(c.day);
           const isToday = isCurrentMonth && c.day === TODAY.getDate();
           return (
-            <div key={i} onClick={() => onToggleDay && onToggleDay(pattern.id, year, month, c.day)}
+            <div key={i} onClick={() => onToggle && onToggle(year, month, c.day)}
               style={{ height:34, borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer",
                 background: isActive ? col : isToday ? "var(--surface3)" : "var(--surface2)",
                 border: isToday ? "2px solid "+col : isActive ? "2px solid "+col+"88" : "2px solid transparent",
@@ -4435,22 +4586,22 @@ function MonthlySpecificDays({ pattern, col, onToggleDay }) {
         })}
       </div>
 
-      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", textAlign:"center", marginTop:6 }}>Tap days to toggle work days</div>
+      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", textAlign:"center", marginTop:6 }}>Tap days to toggle</div>
 
-      {workCount > 0 && (
+      {showWarningsAndActions && workCount > 0 && (
         <div style={{ display:"flex", gap:6, marginTop:8 }}>
           <button onClick={() => {
             const nKey = `${nextD.getFullYear()}-${nextD.getMonth()}`;
             const nDays = new Date(nextD.getFullYear(), nextD.getMonth()+1, 0).getDate();
             const validDays = selectedDays.filter(d => d <= nDays);
-            const existingNext = pattern.config?.months?.[nKey] || [];
-            validDays.forEach(d => { if (!existingNext.includes(d)) onToggleDay && onToggleDay(pattern.id, nextD.getFullYear(), nextD.getMonth(), d); });
+            const existingNext = daysByMonth[nKey] || [];
+            validDays.forEach(d => { if (!existingNext.includes(d)) onToggle && onToggle(nextD.getFullYear(), nextD.getMonth(), d); });
             setViewMonth({ year: nextD.getFullYear(), month: nextD.getMonth() });
           }} style={{ flex:1, background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"6px 0", cursor:"pointer", fontSize:"0.6875rem", color:"var(--muted)", fontFamily:"var(--font)", fontWeight:600 }}>
             Copy to next month →
           </button>
           <button onClick={() => {
-            [...selectedDays].forEach(d => onToggleDay && onToggleDay(pattern.id, year, month, d));
+            [...selectedDays].forEach(d => onToggle && onToggle(year, month, d));
           }} style={{ background:"none", border:"1px solid rgba(248,113,113,0.3)", borderRadius:8, padding:"6px 10px", cursor:"pointer", fontSize:"0.6875rem", color:"#f87171", fontFamily:"var(--font)", fontWeight:600 }}>
             Clear
           </button>
@@ -4460,8 +4611,19 @@ function MonthlySpecificDays({ pattern, col, onToggleDay }) {
   );
 }
 
+// ── MONTHLY SPECIFIC-DAYS COMPONENT (shifts) ──────────────────────────
+// Thin adapter so ShiftCard can keep its existing call shape while reusing the generic picker.
+function MonthlySpecificDays({ shift, col, onToggleDay }) {
+  return (
+    <SpecificDaysPicker
+      daysByMonth={shift.config?.months || {}}
+      color={col}
+      onToggle={(y, m, d) => onToggleDay && onToggleDay(shift.id, y, m, d)} />
+  );
+}
+
 // ── PATTERN CARD ──────────────────────────────────────────
-function PatternCard({ pattern, onEdit, patternOverrides, onToggleDay, onAddManualDay, onToggleMonthDay }) {
+function ShiftCard({ shift, onEdit, shiftOverrides, onToggleDay, onAddManualDay, onToggleMonthDay }) {
   const [expanded, setExpanded] = React.useState(false);
   const [showMonth, setShowMonth] = React.useState(false);
   const [previewMonth, setPreviewMonth] = React.useState({ year: TODAY.getFullYear(), month: TODAY.getMonth() });
@@ -4469,47 +4631,47 @@ function PatternCard({ pattern, onEdit, patternOverrides, onToggleDay, onAddManu
   const padD = n => String(n).padStart(2,"0");
   const todayStrD = () => { const d=new Date(); return d.getFullYear()+"-"+padD(d.getMonth()+1)+"-"+padD(d.getDate()); };
   const [manualDate, setManualDate] = React.useState(todayStrD());
-  const cycleLen = pattern.type==="rotation" ? (pattern.config?.sequence??[]).reduce((s,b) => s+b.days, 0) : null;
+  const cycleLen = shift.type==="rotation" ? (shift.config?.sequence??[]).reduce((s,b) => s+b.days, 0) : null;
 
   const cycleDay = useMemo(() => {
-    if (pattern.type!=="rotation"||!pattern.config?.startDate||!cycleLen) return null;
-    const start = new Date(pattern.config.startDate); start.setHours(0,0,0,0);
+    if (shift.type!=="rotation"||!shift.config?.startDate||!cycleLen) return null;
+    const start = new Date(shift.config.startDate); start.setHours(0,0,0,0);
     const diff = Math.floor((TODAY-start)/86400000);
     if (diff < 0) return null;
     return (diff%cycleLen)+1;
-  }, [pattern, cycleLen]);
+  }, [shift, cycleLen]);
 
   const upcoming = useMemo(() => {
     return Array.from({length:7},(_,i) => {
       const d = new Date(TODAY); d.setDate(d.getDate()+i);
-      let isWork = pattern.type==="rotation" ? getRotationStatus(pattern,d)==="work" : pattern.type==="monthly" ? isMonthlyWorkDay(pattern,d) : (pattern.config?.days??[]).includes(d.getDay());
+      let isWork = shift.type==="rotation" ? getRotationStatus(shift,d)==="work" : shift.type==="monthly" ? isMonthlyWorkDay(shift,d) : (shift.config?.days??[]).includes(d.getDay());
       return { date:d, isWork, isToday:i===0 };
     });
-  }, [pattern]);
+  }, [shift]);
 
   // Next 3 work days within next 30 days — compact quick-view
   const nextWorkDays = useMemo(() => {
     const out = [];
     for (let i = 0; i < 60 && out.length < 3; i++) {
       const d = new Date(TODAY); d.setDate(d.getDate()+i);
-      const isWork = pattern.type==="rotation" ? getRotationStatus(pattern,d)==="work"
-        : pattern.type==="monthly" ? isMonthlyWorkDay(pattern,d)
-        : (pattern.config?.days??[]).includes(d.getDay());
+      const isWork = shift.type==="rotation" ? getRotationStatus(shift,d)==="work"
+        : shift.type==="monthly" ? isMonthlyWorkDay(shift,d)
+        : (shift.config?.days??[]).includes(d.getDay());
       if (isWork) out.push(d);
     }
     return out;
-  }, [pattern]);
+  }, [shift]);
 
   const overrides = useMemo(() => {
-    if (!patternOverrides) return [];
+    if (!shiftOverrides) return [];
     const list = [];
-    const pfx = pattern.id+":"; const ePfx = "extra:"+pattern.id+":";
-    patternOverrides.forEach(key => {
+    const pfx = shift.id+":"; const ePfx = "extra:"+shift.id+":";
+    shiftOverrides.forEach(key => {
       if (key.startsWith(pfx)) { const parts=key.slice(pfx.length).split("-"); if (parts.length===3) { const d=new Date(Number(parts[0]),Number(parts[1]),Number(parts[2])); list.push({date:d,type:"hidden",key}); } }
       else if (key.startsWith(ePfx)) { const parts=key.slice(ePfx.length).split("-"); if (parts.length===3) { const d=new Date(Number(parts[0]),Number(parts[1]),Number(parts[2])); list.push({date:d,type:"extra",key}); } }
     });
     list.sort((a,b) => a.date-b.date); return list;
-  }, [patternOverrides, pattern.id]);
+  }, [shiftOverrides, shift.id]);
 
   const monthCells = useMemo(() => {
     if (!showMonth) return [];
@@ -4522,29 +4684,29 @@ function PatternCard({ pattern, onEdit, patternOverrides, onToggleDay, onAddManu
     return cells.map(c => {
       if (!c.curr) return {...c,isWork:false,isOverride:false,isExtra:false,isToday:false};
       const date=new Date(year,month,c.day);
-      const oKey=pattern.id+":"+year+"-"+month+"-"+c.day, eKey="extra:"+pattern.id+":"+year+"-"+month+"-"+c.day;
-      const isOverride=patternOverrides?patternOverrides.has(oKey):false, isExtra=patternOverrides?patternOverrides.has(eKey):false;
-      let isWork=pattern.type==="rotation"?getRotationStatus(pattern,date)==="work":pattern.type==="monthly"?isMonthlyWorkDay(pattern,date):(pattern.config?.days??[]).includes(date.getDay());
+      const oKey=shift.id+":"+year+"-"+month+"-"+c.day, eKey="extra:"+shift.id+":"+year+"-"+month+"-"+c.day;
+      const isOverride=shiftOverrides?shiftOverrides.has(oKey):false, isExtra=shiftOverrides?shiftOverrides.has(eKey):false;
+      let isWork=shift.type==="rotation"?getRotationStatus(shift,date)==="work":shift.type==="monthly"?isMonthlyWorkDay(shift,date):(shift.config?.days??[]).includes(date.getDay());
       if (isOverride) isWork=false; if (isExtra) isWork=true;
       return {...c,date,isWork,isOverride,isExtra,isToday:sameDay(date,TODAY)};
     });
-  }, [showMonth, previewMonth, pattern, patternOverrides]);
+  }, [showMonth, previewMonth, shift, shiftOverrides]);
 
   const todayIsWork = upcoming[0].isWork;
-  const col = pattern.color||"#6366f1";
-  const weekDays = pattern.config?.days??[];
+  const col = shift.color||"#6366f1";
+  const weekDays = shift.config?.days??[];
 
   return (
     <div className="card" style={{ marginBottom:14 }}>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
         <div style={{ width:12, height:12, borderRadius:3, background:col, flexShrink:0 }} />
-        <div style={{ fontWeight:700, fontSize:"1rem", flex:1, color:"var(--text)" }}>{pattern.name}</div>
+        <div style={{ fontWeight:700, fontSize:"1rem", flex:1, color:"var(--text)" }}>{shift.name}</div>
         {overrides.length > 0 && (
           <button onClick={() => setExpanded(v=>!v)} style={{ fontSize:"0.6875rem", background:"rgba(245,158,11,0.15)", border:"1px solid rgba(245,158,11,0.3)", color:"#f59e0b", borderRadius:20, padding:"2px 8px", cursor:"pointer", fontFamily:"var(--font)", fontWeight:600 }}>
             {overrides.length} override{overrides.length!==1?"s":""}
           </button>
         )}
-        <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontFamily:"var(--mono)" }}>{pattern.type==="rotation"?cycleLen+"-day":pattern.type==="monthly"?"monthly":"weekly"}</div>
+        <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontFamily:"var(--mono)" }}>{shift.type==="rotation"?cycleLen+"-day":shift.type==="monthly"?"monthly":"weekly"}</div>
         <button className="btn btn-secondary" style={{ fontSize:"0.75rem", padding:"5px 10px" }} onClick={onEdit}>Edit</button>
       </div>
 
@@ -4552,9 +4714,9 @@ function PatternCard({ pattern, onEdit, patternOverrides, onToggleDay, onAddManu
         background: todayIsWork?col+"20":"var(--surface2)", border:"1px solid "+(todayIsWork?col+"44":"var(--border)") }}>
         <div style={{ width:8, height:8, borderRadius:"50%", background:todayIsWork?col:"var(--muted)", flexShrink:0 }} />
         <div style={{ fontSize:"0.8125rem", fontWeight:600, flex:1, color:todayIsWork?"var(--text)":"var(--muted)" }}>
-          Today: {todayIsWork?"Work Day":"Day Off"}{pattern.config?.shiftTime?.enabled&&todayIsWork?" · "+shiftTimeLabel(pattern.config):""}
+          Today: {todayIsWork?"Work Day":"Day Off"}{shift.config?.shiftTime?.enabled&&todayIsWork?" · "+shiftTimeLabel(shift.config):""}
         </div>
-        {pattern.type==="rotation"&&cycleDay&&cycleLen&&<div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontFamily:"var(--mono)" }}>Day {cycleDay}/{cycleLen}</div>}
+        {shift.type==="rotation"&&cycleDay&&cycleLen&&<div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontFamily:"var(--mono)" }}>Day {cycleDay}/{cycleLen}</div>}
       </div>
 
       {/* Next work days — compact one-liner */}
@@ -4574,7 +4736,7 @@ function PatternCard({ pattern, onEdit, patternOverrides, onToggleDay, onAddManu
         </div>
       )}
 
-      {pattern.type==="weekly" && (
+      {shift.type==="weekly" && (
         <div style={{ display:"flex", gap:4, marginBottom:12 }}>
           {DAYS.map((d,i) => { const active=weekDays.includes(i); return (
             <button key={i} onClick={() => onToggleDay&&onToggleDay(i)}
@@ -4586,11 +4748,11 @@ function PatternCard({ pattern, onEdit, patternOverrides, onToggleDay, onAddManu
           ); })}
         </div>
       )}
-      {pattern.type==="monthly" && (
-        <MonthlySpecificDays pattern={pattern} col={col} onToggleDay={onToggleMonthDay} />
+      {shift.type==="monthly" && (
+        <MonthlySpecificDays shift={shift} col={col} onToggleDay={onToggleMonthDay} />
       )}
 
-      {pattern.type !== "monthly" && <>
+      {shift.type !== "monthly" && <>
       <div style={{ display:"flex", gap:3, marginBottom:4 }}>
         {upcoming.map((u,i) => (
           <div key={i} style={{ flex:1, textAlign:"center" }}>
@@ -4619,7 +4781,7 @@ function PatternCard({ pattern, onEdit, patternOverrides, onToggleDay, onAddManu
         </div>
       )}
 
-      {pattern.type !== "monthly" && <div style={{ marginBottom:8 }}>
+      {shift.type !== "monthly" && <div style={{ marginBottom:8 }}>
         {!showManualPicker ? (
           <button onClick={() => setShowManualPicker(true)}
             style={{ width:"100%", background:"none", border:"1px dashed "+col+"66", borderRadius:8, padding:"7px 0", cursor:"pointer", fontSize:"0.75rem", color:col, fontFamily:"var(--font)", fontWeight:600, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
@@ -4630,7 +4792,7 @@ function PatternCard({ pattern, onEdit, patternOverrides, onToggleDay, onAddManu
             <div style={{ fontSize:"0.6875rem", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.7px", color:col, marginBottom:8 }}>Add one-off day</div>
             <div style={{ display:"flex", gap:8, alignItems:"center" }}>
               <input type="date" className="form-input" value={manualDate} onChange={e => setManualDate(e.target.value)} style={{ flex:1, fontSize:"0.8125rem", padding:"8px 10px" }} />
-              <button onClick={() => { if (manualDate) { const [y,m,d]=manualDate.split("-").map(Number); onAddManualDay&&onAddManualDay(pattern.id,new Date(y,m-1,d)); setShowManualPicker(false); setManualDate(todayStrD()); } }}
+              <button onClick={() => { if (manualDate) { const [y,m,d]=manualDate.split("-").map(Number); onAddManualDay&&onAddManualDay(shift.id,new Date(y,m-1,d)); setShowManualPicker(false); setManualDate(todayStrD()); } }}
                 style={{ background:col, border:"none", borderRadius:8, padding:"8px 14px", cursor:"pointer", color:"white", fontSize:"0.8125rem", fontWeight:600, whiteSpace:"nowrap" }}>Add</button>
               <button onClick={() => { setShowManualPicker(false); setManualDate(todayStrD()); }}
                 style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"8px", cursor:"pointer", color:"var(--muted)", display:"flex", alignItems:"center", justifyContent:"center", width:36, height:36 }}><span style={{ display:"flex", width:14, height:14 }}>{Icon.x}</span></button>
@@ -4640,7 +4802,7 @@ function PatternCard({ pattern, onEdit, patternOverrides, onToggleDay, onAddManu
         )}
       </div>}
 
-      {pattern.type !== "monthly" && <button onClick={() => setShowMonth(v=>!v)} style={{ width:"100%", background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"6px 0", cursor:"pointer", fontSize:"0.75rem", color:"var(--muted)", fontFamily:"var(--font)", fontWeight:500 }}>
+      {shift.type !== "monthly" && <button onClick={() => setShowMonth(v=>!v)} style={{ width:"100%", background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"6px 0", cursor:"pointer", fontSize:"0.75rem", color:"var(--muted)", fontFamily:"var(--font)", fontWeight:500 }}>
         {showMonth?"Hide month view":"View month"}
       </button>}
 
@@ -4913,6 +5075,7 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
   const [visibility, setVisibility] = useState(existing?.visibility==="inherit" ? "private" : (existing?.visibility??"private"));
   const [selGroups, setSelGroups] = useState(existing?.groupIds??[]);
   const [frequency, setFrequency] = useState(existing?.frequency??"none");
+  const [monthDays, setMonthDays] = useState(existing?.monthDays ?? {});
   const [reminder, setReminder] = useState(existing?.reminder??defaultReminder??"none");
   const [location, setLocation] = useState(existing?.location??"");
   const [url, setUrl] = useState(existing?.url??"");
@@ -4920,6 +5083,11 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
   const [attendees, setAttendees] = useState(existing?.attendees??[]);
   const [eventColor, setEventColor] = useState(existing?.color??null);
   const [showMore, setShowMore] = useState(isEdit); // show advanced fields when editing
+
+  // Scope toggle for recurring-event occurrences: default to instance so an edit lands on
+  // just the tapped date, which matches the user's mental model of "edit this one."
+  const isRecurringOccurrence = isEdit && existing?.frequency && existing.frequency !== "none" && !!existing?._occurrenceKey;
+  const [scope, setScope] = useState(isRecurringOccurrence ? "instance" : "series");
 
   const toggleGroup = id => setSelGroups(prev => prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
 
@@ -4932,8 +5100,24 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
     const start = new Date(sy,sm-1,sd, allDay?0:sh, allDay?0:smin);
     const end = new Date(ey,em-1,ed, allDay?23:eh, allDay?59:emin);
     const saved = { title, calendarId:calId, start, end, allDay, notes, visibility, groupIds:selGroups, frequency, reminder, location, color:eventColor, url, attendees };
-    if (isEdit) saved.id = existing.id;
-    onSave(saved);
+    if (frequency === "specific") saved.monthDays = monthDays;
+    if (isEdit) {
+      saved.id = existing.id;
+      saved._seriesId = existing._seriesId;
+      saved._occurrenceKey = existing._occurrenceKey;
+    }
+    const opts = isRecurringOccurrence
+      ? { scope, dateKey: existing._occurrenceKey }
+      : {};
+    onSave(saved, opts);
+  };
+
+  const handleDelete = () => {
+    if (!onDelete) return;
+    const opts = isRecurringOccurrence
+      ? { scope, dateKey: existing._occurrenceKey }
+      : {};
+    onDelete(existing.id, opts);
   };
 
   const calColor = calendars.find(c=>c.id===calId)?.color || "var(--accent)";
@@ -4996,6 +5180,29 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
           </div>
           <button className="btn-icon" style={{ background:"var(--surface3)" }} onClick={onClose}>{Icon.close}</button>
         </div>
+
+        {/* Scope toggle — only when editing a single occurrence of a recurring event */}
+        {isRecurringOccurrence && (
+          <div style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10, padding:"8px 10px", marginBottom:10 }}>
+            <div style={{ fontSize:"0.6875rem", fontWeight:700, color:"var(--muted)", textTransform:"uppercase", letterSpacing:"0.4px", marginBottom:6 }}>
+              Apply changes to
+            </div>
+            <div style={{ display:"flex", gap:6 }}>
+              {[["instance","This date only"],["series","All dates"]].map(([v,l]) => (
+                <button key={v} onClick={()=>setScope(v)}
+                  style={{
+                    flex:1, padding:"8px 10px", borderRadius:8, cursor:"pointer",
+                    fontFamily:"var(--font)", fontSize:"0.8125rem", fontWeight:600,
+                    background: scope===v ? "rgba(124,106,247,0.2)" : "var(--surface)",
+                    border:"1.5px solid "+(scope===v ? "var(--accent)" : "var(--border)"),
+                    color: scope===v ? "var(--accent2)" : "var(--muted)",
+                  }}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Title */}
         <div style={{ display:"flex", alignItems:"center", gap:8, background:"var(--surface2)", borderRadius:10, padding:"10px 12px", marginBottom:8 }}>
@@ -5103,10 +5310,38 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
             <div style={{ marginBottom:8 }}>
               <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Repeat</div>
               <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
-                {[["none","None"],["daily","Daily"],["weekly","Weekly"],["biweekly","2 wks"],["monthly","Monthly"]].map(([v,l]) => (
-                  <div key={v} className={"chip"+(frequency===v?" active":"")} onClick={()=>setFrequency(v)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{l}</div>
+                {[["none","None"],["daily","Daily"],["weekly","Weekly"],["biweekly","2 wks"],["monthly","Monthly"],["specific","Specific days"]].map(([v,l]) => (
+                  <div key={v} className={"chip"+(frequency===v?" active":"")}
+                    onClick={() => {
+                      setFrequency(v);
+                      // When switching to specific, seed the picker with the start date so the user isn't staring at empty state.
+                      if (v === "specific" && Object.keys(monthDays).length === 0) {
+                        const [sy,sm,sd] = startDate.split("-").map(Number);
+                        if (sy && sm && sd) setMonthDays({ [(sy)+"-"+(sm-1)]: [sd] });
+                      }
+                    }}
+                    style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{l}</div>
                 ))}
               </div>
+              {frequency === "specific" && (
+                <div style={{ marginTop:8, padding:10, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10 }}>
+                  <SpecificDaysPicker
+                    daysByMonth={monthDays}
+                    color={eventColor || calColor}
+                    showWarningsAndActions={false}
+                    onToggle={(y, m, d) => setMonthDays(prev => {
+                      const key = y + "-" + m;
+                      const cur = prev[key] || [];
+                      const next = cur.includes(d) ? cur.filter(x => x !== d) : [...cur, d].sort((a,b) => a-b);
+                      const updated = { ...prev };
+                      if (next.length === 0) delete updated[key]; else updated[key] = next;
+                      return updated;
+                    })} />
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", lineHeight:1.5, marginTop:4 }}>
+                    Each tapped day becomes an occurrence at the time above. No automatic pattern — you fill it in as you learn it.
+                  </div>
+                </div>
+              )}
             </div>
             {FEATURES.sharing && (
             <div style={{ marginBottom:8 }}>
@@ -5173,14 +5408,23 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
             </div>
           </div>
         )}
-        <button className="btn btn-primary" onClick={handleSave} disabled={!title.trim()} style={{ opacity:title.trim()?1:0.5 }}>
-          {isEdit?"Save Changes":"Save Event"}
-        </button>
-        {isEdit&&onDelete&&(
-          <button className="btn btn-secondary" onClick={()=>onDelete(existing.id)} style={{ width:"100%", marginTop:8, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>
-            Delete Event
+        <div style={{
+          position:"sticky", bottom:-40,
+          marginLeft:-20, marginRight:-20, marginTop:12, marginBottom:-40,
+          padding:"12px 20px 24px",
+          background:"var(--surface)",
+          borderTop:"1px solid var(--border)",
+          zIndex:2,
+        }}>
+          <button className="btn btn-primary" onClick={handleSave} disabled={!title.trim()} style={{ opacity:title.trim()?1:0.5 }}>
+            {isEdit?"Save Changes":"Save Event"}
           </button>
-        )}
+          {isEdit&&onDelete&&(
+            <button className="btn btn-secondary" onClick={handleDelete} style={{ width:"100%", marginTop:8, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>
+              {isRecurringOccurrence && scope === "instance" ? "Delete This Date" : "Delete Event"}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -5190,6 +5434,7 @@ function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplic
   const isMultiDay = ev.allDay && !sameDay(ev.start, ev.end);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const isRecurring = ev.frequency && ev.frequency !== "none";
+  const isRecurringOccurrence = isRecurring && !!ev._occurrenceKey;
   return (
     <div className="sheet-overlay" onClick={e => e.target===e.currentTarget&&onClose()}>
       <div className="sheet">
@@ -5207,7 +5452,7 @@ function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplic
         <div className="card card-sm" style={{ marginBottom:12 }}>
           <div style={{ fontSize:"0.875rem", fontWeight:500 }}>{isMultiDay ? fmtDate(ev.start)+" – "+fmtDate(ev.end) : fmtDate(ev.start)}</div>
           <div style={{ fontSize:"0.8125rem", color:"var(--muted)", marginTop:2 }}>{ev.allDay?(isMultiDay?Math.round((ev.end-ev.start)/86400000)+1+" days":"All day"):fmtTime(ev.start)+" – "+fmtTime(ev.end)}</div>
-          {ev.frequency&&ev.frequency!=="none"&&<div style={{ fontSize:"0.75rem", color:"var(--accent2)", marginTop:6 }}>{{daily:"Repeats daily",weekly:"Repeats weekly",biweekly:"Every 2 weeks",monthly:"Repeats monthly"}[ev.frequency]}</div>}
+          {ev.frequency&&ev.frequency!=="none"&&<div style={{ fontSize:"0.75rem", color:"var(--accent2)", marginTop:6 }}>{{daily:"Repeats daily",weekly:"Repeats weekly",biweekly:"Every 2 weeks",monthly:"Repeats monthly",specific:"Specific days"}[ev.frequency]}</div>}
         </div>
         {ev.reminder&&ev.reminder!=="none"&&(
           <div className="card card-sm" style={{ marginBottom:12, display:"flex", alignItems:"center", gap:10 }}>
@@ -5283,24 +5528,48 @@ function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplic
               Delete "{ev.title}"?
             </div>
             <div style={{ fontSize:"0.75rem", color:"var(--text)", lineHeight:1.5, marginBottom:12 }}>
-              {isRecurring
-                ? <>This is a <strong>{ev.frequency}</strong> recurring event. All future occurrences will also be removed.</>
-                : <>This event will be permanently removed.</>}
+              {isRecurringOccurrence
+                ? <>This is one occurrence of a <strong>{ev.frequency}</strong> event. Pick what to delete.</>
+                : isRecurring
+                  ? <>This is a <strong>{ev.frequency}</strong> recurring event. All future occurrences will also be removed.</>
+                  : <>This event will be permanently removed.</>}
             </div>
-            <div style={{ display:"flex", gap:8 }}>
-              <button onClick={() => setConfirmDelete(false)}
-                style={{ flex:1, padding:"10px", borderRadius:8, background:"var(--surface2)",
-                  border:"1px solid var(--border)", fontSize:"0.8125rem", fontWeight:600,
-                  color:"var(--text)", cursor:"pointer", fontFamily:"var(--font)" }}>
-                Cancel
-              </button>
-              <button onClick={() => onDelete(ev.id)}
-                style={{ flex:1, padding:"10px", borderRadius:8, background:"#ef4444",
-                  border:"none", fontSize:"0.8125rem", fontWeight:700, color:"#fff",
-                  cursor:"pointer", fontFamily:"var(--font)" }}>
-                Delete
-              </button>
-            </div>
+            {isRecurringOccurrence ? (
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                <button onClick={() => onDelete(ev.id, { scope:"instance", dateKey: ev._occurrenceKey })}
+                  style={{ padding:"10px", borderRadius:8, background:"#ef4444", border:"none",
+                    fontSize:"0.8125rem", fontWeight:700, color:"#fff", cursor:"pointer", fontFamily:"var(--font)" }}>
+                  Delete this date only
+                </button>
+                <button onClick={() => onDelete(ev.id, { scope:"series" })}
+                  style={{ padding:"10px", borderRadius:8, background:"var(--surface2)",
+                    border:"1px solid rgba(248,113,113,0.4)", fontSize:"0.8125rem", fontWeight:700,
+                    color:"#fca5a5", cursor:"pointer", fontFamily:"var(--font)" }}>
+                  Delete entire series
+                </button>
+                <button onClick={() => setConfirmDelete(false)}
+                  style={{ padding:"10px", borderRadius:8, background:"none",
+                    border:"1px solid var(--border)", fontSize:"0.8125rem", fontWeight:600,
+                    color:"var(--muted)", cursor:"pointer", fontFamily:"var(--font)" }}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={() => setConfirmDelete(false)}
+                  style={{ flex:1, padding:"10px", borderRadius:8, background:"var(--surface2)",
+                    border:"1px solid var(--border)", fontSize:"0.8125rem", fontWeight:600,
+                    color:"var(--text)", cursor:"pointer", fontFamily:"var(--font)" }}>
+                  Cancel
+                </button>
+                <button onClick={() => onDelete(ev.id)}
+                  style={{ flex:1, padding:"10px", borderRadius:8, background:"#ef4444",
+                    border:"none", fontSize:"0.8125rem", fontWeight:700, color:"#fff",
+                    cursor:"pointer", fontFamily:"var(--font)" }}>
+                  Delete
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -5488,16 +5757,17 @@ function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, o
 }
 
 // ── MAJOR EVENT SHEET ─────────────────────────────────────
-function MajorEventSheet({ existing, groups=[], customColors, onSave, onDelete, onClose, onPreview }) {
+function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSave, onDelete, onClose, onPreview }) {
   const isEdit = !!existing;
   const pad = n => String(n).padStart(2,"0");
   const fmtForInput = d => { const dt=new Date(d); return dt.getFullYear()+"-"+pad(dt.getMonth()+1)+"-"+pad(dt.getDate()); };
   const todayStr = () => { const d=new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); };
+  const initialDate = defaultDate ? fmtForInput(defaultDate) : todayStr();
 
   const [title, setTitle] = useState(existing?.title??"");
   const [color, setColor] = useState(existing?.color??"#f59e0b");
-  const [startDate, setStartDate] = useState(existing?fmtForInput(existing.startDate):todayStr());
-  const [endDate, setEndDate] = useState(existing?fmtForInput(existing.endDate):todayStr());
+  const [startDate, setStartDate] = useState(existing?fmtForInput(existing.startDate):initialDate);
+  const [endDate, setEndDate] = useState(existing?fmtForInput(existing.endDate):initialDate);
   const [allDay, setAllDay] = useState(existing?.allDay??true);
   const [startTime, setStartTime] = useState(existing?.startTime??"09:00");
   const [endTime, setEndTime] = useState(existing?.endTime??"17:00");
@@ -5670,7 +5940,7 @@ function MajorEventSheet({ existing, groups=[], customColors, onSave, onDelete, 
 }
 
 // ── PATTERN SHEET ─────────────────────────────────────────
-// Pattern template presets — shown when creating a new pattern
+// Shift template presets — shown when creating a new shift
 const PATTERN_TEMPLATES = [
   {
     id: "blank", name: "Blank", description: "Start from scratch",
@@ -5679,7 +5949,7 @@ const PATTERN_TEMPLATES = [
   {
     id: "kelly", name: "Kelly Schedule",
     description: "1 on, 1 off, 1 on, 1 off, 1 on, 4 off · 9-day cycle",
-    iconKey: "patterns", type: "rotation",
+    iconKey: "shifts", type: "rotation",
     config: { sequence: [
       { type: "work", days: 1 }, { type: "off", days: 1 },
       { type: "work", days: 1 }, { type: "off", days: 1 },
@@ -5712,9 +5982,9 @@ const PATTERN_TEMPLATES = [
   },
 ];
 
-function PatternSheet({ existing, customColors, onSave, onDelete, onClose, onPreview }) {
+function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPreview }) {
   const isEdit = !!existing;
-  // Template picker: shown ONLY for NEW patterns (not edit mode), and only until a template is chosen
+  // Template picker: shown ONLY for NEW shifts (not edit mode), and only until a template is chosen
   const [showTemplates, setShowTemplates] = useState(!isEdit);
   const [name, setName] = useState(existing?.name??"");
   const [type, setType] = useState(existing?.type??"rotation");
@@ -5757,7 +6027,7 @@ function PatternSheet({ existing, customColors, onSave, onDelete, onClose, onPre
     return hh + ":" + String(m).padStart(2,"0") + " " + ampm;
   };
   // Live preview: whenever any relevant state changes, report up to the parent
-  // so the persistent calendar (in split mode) can visualize the in-progress pattern.
+  // so the persistent calendar (in split mode) can visualize the in-progress shift.
   React.useEffect(() => {
     if (onPreview) onPreview({ type, color, weekDays, sequence, cycleStart: null, id: existing?.id });
   }, [type, color, weekDays, sequence, existing?.id, onPreview]);
@@ -5785,12 +6055,12 @@ function PatternSheet({ existing, customColors, onSave, onDelete, onClose, onPre
         <div className="sheet-handle" />
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
           <div className="sheet-title" style={{ marginBottom:0 }}>
-            {isEdit ? "Edit Pattern" : showTemplates ? "New Pattern" : "Configure Pattern"}
+            {isEdit ? "Edit Shift" : showTemplates ? "New Shift" : "Configure Shift"}
           </div>
           <button className="btn-icon" style={{ background:"var(--surface3)" }} onClick={onClose}>{Icon.close}</button>
         </div>
 
-        {/* TEMPLATE PICKER — only when creating a new pattern */}
+        {/* TEMPLATE PICKER — only when creating a new shift */}
         {showTemplates && (
           <>
             <div style={{ marginBottom:16 }}>
@@ -5832,7 +6102,7 @@ function PatternSheet({ existing, customColors, onSave, onDelete, onClose, onPre
         <div className="form-group">
           <label className="form-label">Type</label>
           <div className="chip-row">{[{v:"rotation",l:"Custom rotation"},{v:"weekly",l:"Weekly days"},{v:"monthly",l:"Specific Days"}].map(t=><div key={t.v} className={"chip"+(type===t.v?" active":"")} onClick={()=>setType(t.v)}>{t.l}</div>)}</div>
-          {type==="monthly"&&<div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:8, lineHeight:1.5 }}>Tap days on the calendar each month to mark your work days. No repeating pattern — you fill it in when you get your schedule.</div>}
+          {type==="monthly"&&<div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:8, lineHeight:1.5 }}>Tap days on the calendar each month to mark your work days. No repeating shift — you fill it in when you get your schedule.</div>}
         </div>
         <div className="form-group">
           <label className="form-label">Colour</label>
@@ -5933,8 +6203,17 @@ function PatternSheet({ existing, customColors, onSave, onDelete, onClose, onPre
             Shift duration: {shiftMetrics.durationHours} hours ({formatTime12h(shiftStart)} &ndash; {formatTime12h(shiftEnd)})
           </div>
         )}
-        <button className="btn btn-primary" onClick={handleSave} style={{ opacity:name.trim()?1:0.5, marginTop:16 }}>{isEdit?"Save Changes":"Save Pattern"}</button>
-        {isEdit&&onDelete&&<button className="btn btn-secondary" onClick={()=>onDelete(existing.id)} style={{ width:"100%", marginTop:10, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>Delete Pattern</button>}
+        <div style={{
+          position:"sticky", bottom:-40,
+          marginLeft:-20, marginRight:-20, marginTop:12, marginBottom:-40,
+          padding:"12px 20px 24px",
+          background:"var(--surface)",
+          borderTop:"1px solid var(--border)",
+          zIndex:2,
+        }}>
+          <button className="btn btn-primary" onClick={handleSave} style={{ opacity:name.trim()?1:0.5 }}>{isEdit?"Save Changes":"Save Shift"}</button>
+          {isEdit&&onDelete&&<button className="btn btn-secondary" onClick={()=>onDelete(existing.id)} style={{ width:"100%", marginTop:8, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>Delete Shift</button>}
+        </div>
           </>
         )}
       </div>
@@ -6235,7 +6514,7 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
   const [name, setName] = useState(defaultName || "");
   const [color, setColor] = useState(defaultColor || "#6366f1");
 
-  const STEPS = 5; // Welcome → Text size → Name → Color → Done
+  const STEPS = 6; // Welcome → Install → Text size → Name → Color → Done
   const handleFinish = (startTour) => onFinish({ name: name.trim(), color, startTour: !!startTour });
 
   // Shared progress dots component
@@ -6281,7 +6560,7 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
               <div style={{ fontSize:"0.8125rem", color:"var(--text)", lineHeight:1.6,
                 display:"flex", flexDirection:"column", gap:10 }}>
                 {[
-                  { icon: Icon.repeat,  title: "Patterns",          body: "Handle rotations, weekly shifts, and recurring schedules that other calendars can't." },
+                  { icon: Icon.repeat,  title: "Shifts",          body: "Handle rotations, weekly schedules, and recurring days that other calendars can't." },
                   { icon: Icon.search,  title: "Free-time finder",  body: "Ask \"when am I free?\" in plain English." },
                   { icon: Icon.pin,     title: "Major events",      body: "Countdowns to big days that actually matter." },
                 ].map((f, i) => (
@@ -6309,8 +6588,8 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
           </>
         )}
 
-        {/* STEP 1 — TEXT SIZE (early, so rest is readable) */}
-        {step === 1 && (
+        {/* STEP 2 — TEXT SIZE (early, so rest is readable) */}
+        {step === 2 && (
           <>
             <div style={{ display:"flex", width:56, height:56, borderRadius:14,
               background:"rgba(124,106,247,0.15)", border:"1px solid rgba(124,106,247,0.3)",
@@ -6358,19 +6637,19 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
               </div>
             </div>
             <div style={{ display:"flex", gap:10, marginTop:"auto", paddingTop:12 }}>
-              <button onClick={() => setStep(0)} className="btn btn-secondary"
+              <button onClick={() => setStep(1)} className="btn btn-secondary"
                 style={{ flex:"0 0 auto", padding:"14px 22px" }}>
                 Back
               </button>
-              <button onClick={() => setStep(2)} className="btn btn-primary" style={{ flex:1 }}>
+              <button onClick={() => setStep(3)} className="btn btn-primary" style={{ flex:1 }}>
                 Continue
               </button>
             </div>
           </>
         )}
 
-        {/* STEP 2 — NAME */}
-        {step === 2 && (
+        {/* STEP 3 — NAME */}
+        {step === 3 && (
           <>
             <div style={{ display:"flex", width:56, height:56, borderRadius:14,
               background:"rgba(124,106,247,0.15)", border:"1px solid rgba(124,106,247,0.3)",
@@ -6387,16 +6666,16 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
             </div>
             <input autoFocus value={name} onChange={e => setName(e.target.value)}
               placeholder="First name"
-              onKeyDown={e => { if (e.key === "Enter" && name.trim()) setStep(3); }}
+              onKeyDown={e => { if (e.key === "Enter" && name.trim()) setStep(4); }}
               style={{ background:"var(--surface2)", border:"1px solid var(--border)",
                 borderRadius:10, padding:"14px 16px", color:"var(--text)", fontSize:"1.0625rem", width:"100%",
                 outline:"none", fontFamily:"var(--font)", boxSizing:"border-box", marginTop:4 }} />
             <div style={{ display:"flex", gap:10, marginTop:"auto", paddingTop:12 }}>
-              <button onClick={() => setStep(1)} className="btn btn-secondary"
+              <button onClick={() => setStep(2)} className="btn btn-secondary"
                 style={{ flex:"0 0 auto", padding:"14px 22px" }}>
                 Back
               </button>
-              <button onClick={() => setStep(3)} disabled={!name.trim()}
+              <button onClick={() => setStep(4)} disabled={!name.trim()}
                 className="btn btn-primary"
                 style={{ flex:1, opacity: name.trim() ? 1 : 0.4, cursor: name.trim() ? "pointer" : "not-allowed" }}>
                 Continue
@@ -6405,8 +6684,8 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
           </>
         )}
 
-        {/* STEP 3 — COLOR */}
-        {step === 3 && (
+        {/* STEP 4 — COLOR */}
+        {step === 4 && (
           <>
             <div style={{ display:"flex", width:56, height:56, borderRadius:14,
               background:color+"33", border:"1px solid "+color+"66",
@@ -6427,25 +6706,30 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
                 onRecentsChange={customColors?.setRecents} onFavoritesChange={customColors?.setFavorites} />
             </div>
             <div style={{ display:"flex", gap:10, marginTop:"auto", paddingTop:12 }}>
-              <button onClick={() => setStep(2)} className="btn btn-secondary"
+              <button onClick={() => setStep(3)} className="btn btn-secondary"
                 style={{ flex:"0 0 auto", padding:"14px 22px" }}>
                 Back
               </button>
-              <button onClick={() => setStep(4)} className="btn btn-primary" style={{ flex:1 }}>
+              <button onClick={() => setStep(5)} className="btn btn-primary" style={{ flex:1 }}>
                 Continue
               </button>
             </div>
           </>
         )}
 
-        {/* STEP 4 — INSTALL DAYTU (Add to Home Screen, platform-aware) */}
-        {step === 4 && (() => {
+        {/* STEP 1 — INSTALL DAYTU (Add to Home Screen, platform-aware) */}
+        {step === 1 && (() => {
           // Detect platform AND browser for accurate install instructions
           const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
-          const isIOS = /iPhone|iPad|iPod/.test(ua) && !(/Android/.test(ua));
+          // iPadOS 13+ reports UA as Macintosh by default — disambiguate via multi-touch support
+          const hasMultiTouch = typeof navigator !== "undefined" && (navigator.maxTouchPoints || 0) > 1;
+          const isIPad = /iPad/.test(ua) || (/Macintosh/.test(ua) && hasMultiTouch);
+          const isIPhone = /iPhone|iPod/.test(ua) && !(/Android/.test(ua));
+          const isIOS = (isIPhone || isIPad) && !(/Android/.test(ua));
           const isAndroid = /Android/.test(ua);
-          const isMac = /Macintosh/.test(ua) && !isIOS;
+          const isMac = /Macintosh/.test(ua) && !isIPad;
           const isWindows = /Windows/.test(ua);
+          const iosDevice = isIPad ? "iPad" : "iPhone";
           // Browser detection on iOS — Apple only allows real PWA install from Safari
           const isIOSSafari = isIOS && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|DuckDuckGo|OPT|FBAN|FBAV/.test(ua);
           const isIOSChrome = isIOS && /CriOS/.test(ua);
@@ -6468,16 +6752,22 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
                          : "other";
           const instructionsByPlatform = {
             "ios-safari": {
-              heading: "How to install on iPhone / iPad",
-              steps: [
-                "Tap the Share button at the bottom of Safari",
-                "Scroll and tap \"Add to Home Screen\"",
-                "Tap \"Add\" in the top-right corner"
-              ],
+              heading: "How to install on " + iosDevice,
+              steps: isIPad
+                ? [
+                    "Tap the Share button in Safari's toolbar (top-right)",
+                    "Scroll and tap \"Add to Home Screen\"",
+                    "Tap \"Add\" in the top-right corner"
+                  ]
+                : [
+                    "Tap the Share button at the bottom of Safari",
+                    "Scroll and tap \"Add to Home Screen\"",
+                    "Tap \"Add\" in the top-right corner"
+                  ],
               note: null,
             },
             "ios-other": {
-              heading: "A note about " + (iosBrowserName || "this browser") + " on iPhone",
+              heading: "A note about " + (iosBrowserName || "this browser") + " on " + iosDevice,
               steps: [
                 "Apple only allows installing web apps from Safari on iPhone and iPad",
                 "Open daytu.app in Safari",
@@ -6538,7 +6828,7 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
                   {isStandalone
                     ? "Daytu is already running as an installed app. Nothing more to do here."
                     : isIOSOtherBrowser
-                      ? "You're using " + iosBrowserName + " on iPhone. To install Daytu as an app, you'll need to switch to Safari first."
+                      ? "You're using " + iosBrowserName + " on " + iosDevice + ". To install Daytu as an app, you'll need to switch to Safari first."
                       : "Add Daytu to your home screen for the best experience — opens full-screen, no browser bars, feels like a real app."}
                 </div>
               </div>
@@ -6566,10 +6856,10 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
                 You can also keep using Daytu in your browser — installing is optional.
               </div>
               <div style={{ display:"flex", flexDirection:"column", gap:10, marginTop:"auto", paddingTop:12 }}>
-                <button onClick={() => setStep(5)} className="btn btn-primary">
+                <button onClick={() => setStep(2)} className="btn btn-primary">
                   {isStandalone ? "Continue" : "I'll do this later"}
                 </button>
-                <button onClick={() => setStep(3)}
+                <button onClick={() => setStep(0)}
                   style={{ background:"none", border:"none", color:"var(--muted)",
                     fontSize:"0.8125rem", cursor:"pointer", padding:"6px", fontFamily:"var(--font)" }}>
                   ← Back
@@ -6579,7 +6869,7 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
           );
         })()}
 
-        {/* STEP 5 — DONE + OFFER TOUR (was step 4 before install step was inserted) */}
+        {/* STEP 5 — DONE + OFFER TOUR */}
         {step === 5 && (
           <>
             <div style={{ display:"flex", width:56, height:56, borderRadius:14,
@@ -6630,12 +6920,12 @@ const TOUR_CARDS = [
     body: "Type questions in plain English — \"free this weekend,\" \"next 2 hours,\" \"free Friday afternoon.\" It finds the real gaps in your schedule, including around your routines.",
   },
   {
-    target: "nav-patterns",
+    target: "nav-shifts",
     placement: "above",
     icon: "repeat",
-    title: "Patterns for any schedule",
+    title: "Shifts for any schedule",
     tag: "The heart of this app — and what other calendars can't do.",
-    body: "Offshore rotations, nursing shifts, alternating custody weekends, split weeks, the 1st and 3rd Monday of every month — if it repeats, it belongs here. Open the Patterns tab here.",
+    body: "Offshore rotations, nursing shifts, alternating custody weekends, split weeks, the 1st and 3rd Monday of every month — if it repeats, it belongs here. Open the Shifts tab here.",
   },
   {
     target: "major",

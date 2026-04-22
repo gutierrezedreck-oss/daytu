@@ -1,7 +1,7 @@
 {
   "name": "Daytu",
   "short_name": "Daytu",
-  "description": "A calendar for schedules that repeat — rotations, shifts, patterns.",
+  "description": "A calendar for schedules that repeat — rotations, shifts, and recurring days.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
