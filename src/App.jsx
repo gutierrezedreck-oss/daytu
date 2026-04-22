@@ -550,45 +550,73 @@ function computeHolidays(year) {
     return { month, day };
   };
 
+  // Shift an anchor (month, day) by delta days using real Date arithmetic,
+  // so Easter-relative holidays cross month boundaries correctly
+  // (e.g. Easter = Apr 1 → Good Friday = Mar 30, not Apr 30).
+  const shiftDate = (y, month, day, delta) => {
+    const d = new Date(y, month-1, day);
+    d.setDate(d.getDate() + delta);
+    return { month: d.getMonth()+1, day: d.getDate() };
+  };
+
   const e = easter(year);
+  const gf = shiftDate(year, e.month, e.day, -2);  // Good Friday
+  const em = shiftDate(year, e.month, e.day, +1);  // Easter Monday
   return [
     // ── US ────────────────────────────────────────────────
     { id:"hol_ny",    name:"New Year's Day",      color:"#f59e0b", country:"US",     month:1,  day:1 },
     { id:"hol_mlk",   name:"MLK Day",              color:"#f59e0b", country:"US",     month:1,  day:nthWeekday(year,1,1,3) },
     { id:"hol_pres",  name:"Presidents' Day",     color:"#f59e0b", country:"US",     month:2,  day:nthWeekday(year,2,1,3) },
+    { id:"hol_usgf",  name:"Good Friday",          color:"#a78bfa", country:"US",     month:gf.month, day:gf.day },
     { id:"hol_mem",   name:"Memorial Day",         color:"#f59e0b", country:"US",     month:5,  day:lastWeekday(year,5,1) },
+    { id:"hol_mom",   name:"Mother's Day",        color:"#ec4899", country:"US",     month:5,  day:nthWeekday(year,5,0,2) },
     { id:"hol_jun",   name:"Juneteenth",           color:"#f59e0b", country:"US",     month:6,  day:19 },
+    { id:"hol_dad",   name:"Father's Day",        color:"#3b82f6", country:"US",     month:6,  day:nthWeekday(year,6,0,3) },
     { id:"hol_ind",   name:"Independence Day",     color:"#f59e0b", country:"US",     month:7,  day:4 },
     { id:"hol_lab",   name:"Labor Day",            color:"#f59e0b", country:"US",     month:9,  day:nthWeekday(year,9,1,1) },
     { id:"hol_col",   name:"Columbus Day",         color:"#f59e0b", country:"US",     month:10, day:nthWeekday(year,10,1,2) },
     { id:"hol_vet",   name:"Veterans Day",         color:"#f59e0b", country:"US",     month:11, day:11 },
     { id:"hol_thx",   name:"Thanksgiving",         color:"#f59e0b", country:"US",     month:11, day:nthWeekday(year,11,4,4) },
     { id:"hol_xmas",  name:"Christmas",            color:"#f59e0b", country:"US",     month:12, day:25 },
-    { id:"hol_mom",   name:"Mother's Day",        color:"#ec4899", country:"US",     month:5,  day:nthWeekday(year,5,0,2) },
-    { id:"hol_dad",   name:"Father's Day",        color:"#3b82f6", country:"US",     month:6,  day:nthWeekday(year,6,0,3) },
     // ── GLOBAL ───────────────────────────────────────────
-    { id:"hol_ny2",   name:"New Year's Eve",      color:"#f59e0b", country:"GLOBAL", month:12, day:31 },
+    { id:"hol_gny",   name:"New Year's Day",      color:"#f59e0b", country:"GLOBAL", month:1,  day:1 },
     { id:"hol_val",   name:"Valentine's Day",     color:"#ec4899", country:"GLOBAL", month:2,  day:14 },
+    { id:"hol_iwd",   name:"International Women's Day", color:"#ec4899", country:"GLOBAL", month:3,  day:8 },
+    { id:"hol_stp",   name:"St. Patrick's Day",   color:"#10b981", country:"GLOBAL", month:3,  day:17 },
+    { id:"hol_apr",   name:"April Fools' Day",    color:"#f97316", country:"GLOBAL", month:4,  day:1 },
     { id:"hol_easter",name:"Easter Sunday",        color:"#a78bfa", country:"GLOBAL", month:e.month, day:e.day },
+    { id:"hol_earth", name:"Earth Day",            color:"#10b981", country:"GLOBAL", month:4,  day:22 },
     { id:"hol_hal",   name:"Halloween",            color:"#f97316", country:"GLOBAL", month:10, day:31 },
     { id:"hol_xeve",  name:"Christmas Eve",        color:"#f59e0b", country:"GLOBAL", month:12, day:24 },
+    { id:"hol_ny2",   name:"New Year's Eve",      color:"#f59e0b", country:"GLOBAL", month:12, day:31 },
     // ── CA ────────────────────────────────────────────────
-    { id:"hol_can",   name:"Canada Day",           color:"#ef4444", country:"CA",     month:7,  day:1 },
-    { id:"hol_cthx",  name:"Thanksgiving (CA)",    color:"#f59e0b", country:"CA",     month:10, day:nthWeekday(year,10,1,2) },
-    { id:"hol_box",   name:"Boxing Day",           color:"#f59e0b", country:"CA",     month:12, day:26 },
+    { id:"hol_cny",   name:"New Year's Day",      color:"#ef4444", country:"CA",     month:1,  day:1 },
+    { id:"hol_cfam",  name:"Family Day",           color:"#ef4444", country:"CA",     month:2,  day:nthWeekday(year,2,1,3) },
+    { id:"hol_cgf",   name:"Good Friday",          color:"#a78bfa", country:"CA",     month:gf.month, day:gf.day },
+    { id:"hol_cem",   name:"Easter Monday",        color:"#a78bfa", country:"CA",     month:em.month, day:em.day },
     { id:"hol_vic",   name:"Victoria Day",         color:"#ef4444", country:"CA",     month:5,  day:lastWeekday(year,5,1)-7 },
+    { id:"hol_can",   name:"Canada Day",           color:"#ef4444", country:"CA",     month:7,  day:1 },
+    { id:"hol_clab",  name:"Labour Day",           color:"#ef4444", country:"CA",     month:9,  day:nthWeekday(year,9,1,1) },
+    { id:"hol_cthx",  name:"Thanksgiving (CA)",    color:"#f59e0b", country:"CA",     month:10, day:nthWeekday(year,10,1,2) },
+    { id:"hol_crem",  name:"Remembrance Day",      color:"#ef4444", country:"CA",     month:11, day:11 },
+    { id:"hol_cxm",   name:"Christmas Day",        color:"#ef4444", country:"CA",     month:12, day:25 },
+    { id:"hol_box",   name:"Boxing Day",           color:"#f59e0b", country:"CA",     month:12, day:26 },
     // ── UK ────────────────────────────────────────────────
     { id:"hol_ukny",  name:"New Year's Day",      color:"#3b82f6", country:"UK",     month:1,  day:1 },
-    { id:"hol_ukeg",  name:"Easter Good Friday",   color:"#a78bfa", country:"UK",     month:e.month, day:e.day-2 > 0 ? e.day-2 : e.day-2+31 },
-    { id:"hol_ukem",  name:"Easter Monday",        color:"#a78bfa", country:"UK",     month:e.month, day:e.day+1 <= new Date(year,e.month,0).getDate() ? e.day+1 : 1 },
+    { id:"hol_ukeg",  name:"Good Friday",          color:"#a78bfa", country:"UK",     month:gf.month, day:gf.day },
+    { id:"hol_ukem",  name:"Easter Monday",        color:"#a78bfa", country:"UK",     month:em.month, day:em.day },
     { id:"hol_ukbh",  name:"Early May Bank Hol",   color:"#3b82f6", country:"UK",     month:5,  day:nthWeekday(year,5,1,1) },
     { id:"hol_ukbs",  name:"Spring Bank Holiday",  color:"#3b82f6", country:"UK",     month:5,  day:lastWeekday(year,5,1) },
     { id:"hol_ukba",  name:"Summer Bank Holiday",  color:"#3b82f6", country:"UK",     month:8,  day:lastWeekday(year,8,1) },
     { id:"hol_ukxm",  name:"Christmas Day",        color:"#3b82f6", country:"UK",     month:12, day:25 },
     { id:"hol_ukbx",  name:"Boxing Day",           color:"#3b82f6", country:"UK",     month:12, day:26 },
     // ── AU ────────────────────────────────────────────────
+    { id:"hol_auny",  name:"New Year's Day",      color:"#10b981", country:"AU",     month:1,  day:1 },
     { id:"hol_auday", name:"Australia Day",        color:"#10b981", country:"AU",     month:1,  day:26 },
+    { id:"hol_augf",  name:"Good Friday",          color:"#a78bfa", country:"AU",     month:gf.month, day:gf.day },
+    { id:"hol_auem",  name:"Easter Monday",        color:"#a78bfa", country:"AU",     month:em.month, day:em.day },
     { id:"hol_auanz", name:"ANZAC Day",            color:"#10b981", country:"AU",     month:4,  day:25 },
+    { id:"hol_aukb",  name:"King's Birthday",      color:"#10b981", country:"AU",     month:6,  day:nthWeekday(year,6,1,2) },
     { id:"hol_auxm",  name:"Christmas Day",        color:"#10b981", country:"AU",     month:12, day:25 },
     { id:"hol_aubx",  name:"Boxing Day",           color:"#10b981", country:"AU",     month:12, day:26 },
   ].map(h => ({ ...h, year }));
