@@ -2748,6 +2748,7 @@ export default function App() {
                 </div>
                 {weekLayout === "columns" ? (
                   <WeekViewColumns weekDays={weekDays} events={visibleEvents} calendars={calendars}
+                    shifts={shifts} shiftOverrides={shiftOverrides}
                     majorEvents={visibleMajorEvents} holidays={holidays} holidayCountries={holidayCountries}
                     onSelect={d => { setSelectedDate(d); setCalView("day"); }}
                     onQuickAdd={openAddChooser}
@@ -4043,7 +4044,7 @@ function DayView({ date, events, calendars, onEventClick, majorEvents=[], holida
 // ── WEEK VIEW ─────────────────────────────────────────────
 // ── WEEK VIEW (Columns) — whole week at a glance ──
 // Compact overview; tap a day to drill into Day view. Good for planning.
-function WeekViewColumns({ weekDays, events, calendars, majorEvents=[], holidays=[], holidayCountries=new Set(), onSelect, onQuickAdd, onEventClick, onMajorEventClick }) {
+function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverrides, majorEvents=[], holidays=[], holidayCountries=new Set(), onSelect, onQuickAdd, onEventClick, onMajorEventClick }) {
   // Bucket events & major events per day
   const byDay = weekDays.map(d => {
     const dayStart = new Date(d); dayStart.setHours(0,0,0,0);
@@ -4064,6 +4065,21 @@ function WeekViewColumns({ weekDays, events, calendars, majorEvents=[], holidays
     holidayCountries.has(h.country) &&
     h.year === d.getFullYear() && h.month === d.getMonth()+1 && h.day === d.getDate()
   ));
+  // Shift colors per day — same rules as the month grid (honors overrides & extras).
+  const ringShifts = [...(shifts||[])].sort((a,b) => (a.priority??99)-(b.priority??99));
+  const colorsByDay = weekDays.map(d => {
+    const colors = [];
+    for (const p of ringShifts) {
+      const k = p.id+":"+d.getFullYear()+"-"+d.getMonth()+"-"+d.getDate();
+      if (shiftOverrides && shiftOverrides.has(k)) continue;
+      const extra = shiftOverrides && shiftOverrides.has("extra:"+k);
+      const natural = p.type==="rotation" ? getRotationStatus(p,d)==="work"
+        : p.type==="monthly" ? isMonthlyWorkDay(p,d)
+        : (p.config.days||[]).includes(d.getDay());
+      if (natural || extra) colors.push(p.color || "#6366f1");
+    }
+    return colors;
+  });
 
   const fmtEvTime = (d) => {
     const h = d.getHours(), m = d.getMinutes();
@@ -4081,10 +4097,16 @@ function WeekViewColumns({ weekDays, events, calendars, majorEvents=[], holidays
           const dayEvents = byDay[di];
           const dayMajors = majorsByDay[di];
           const dayHols = holsByDay[di];
+          const dayColors = colorsByDay[di];
           const isToday = sameDay(d, TODAY);
           const visibleEvents = dayEvents.slice(0, MAX_VISIBLE);
           const hiddenCount = Math.max(0, dayEvents.length - MAX_VISIBLE);
           const totalItems = dayEvents.length + dayMajors.length + dayHols.length;
+          // Concentric shift rings via stacked inset box-shadows. Outer
+          // (priority) ring is 3px so it reads at a glance; inner rings
+          // stay 2px so the stack fits inside the cell's 6px padding.
+          const ringShadow = dayColors.length === 0 ? undefined
+            : dayColors.slice(0,3).map((c, i) => `inset 0 0 0 ${3+i*2}px ${c}`).join(", ");
 
           return (
             <div key={di} onClick={() => onSelect && onSelect(d)}
@@ -4094,6 +4116,7 @@ function WeekViewColumns({ weekDays, events, calendars, majorEvents=[], holidays
                 border: `1px solid ${isToday ? "rgba(124,106,247,0.35)" : "var(--border)"}`,
                 borderRadius: 10, padding: 6, minHeight: 150, cursor: "pointer",
                 display: "flex", flexDirection: "column", gap: 3,
+                boxShadow: ringShadow,
                 transition: "background .12s"
               }}>
               {/* Day header */}
@@ -4138,7 +4161,7 @@ function WeekViewColumns({ weekDays, events, calendars, majorEvents=[], holidays
               {visibleEvents.map(ev => {
                 const cal = calendars.find(c => c.id === ev.calendarId) || {};
                 const color = ev.color || cal.color || "#888";
-                const timeLabel = ev.allDay ? "all day" : fmtEvTime(ev.start);
+                const timeLabel = ev.allDay ? "all day" : fmtEvTime(ev.start) + "–" + fmtEvTime(ev.end);
                 return (
                   <div key={ev.id}
                     onClick={(e) => { e.stopPropagation(); onEventClick && onEventClick(ev); }}
@@ -4147,7 +4170,8 @@ function WeekViewColumns({ weekDays, events, calendars, majorEvents=[], holidays
                       padding:"2px 4px", borderRadius:3, fontSize:"0.6875rem", color:"var(--text)",
                       fontWeight:500, lineHeight:1.3, overflow:"hidden", whiteSpace:"nowrap",
                       textOverflow:"ellipsis" }} title={ev.title + " · " + timeLabel}>
-                    <div style={{ fontSize:"0.6875rem", color, fontFamily:"var(--mono)", fontWeight:700 }}>
+                    <div style={{ fontSize:"0.6875rem", color, fontFamily:"var(--mono)", fontWeight:700,
+                      overflow:"hidden", textOverflow:"ellipsis" }}>
                       {timeLabel}
                     </div>
                     {ev.title}
