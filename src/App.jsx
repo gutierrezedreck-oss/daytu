@@ -4339,6 +4339,15 @@ function EmptyState({ icon, title, subtitle, actionLabel, onAction, style }) {
 
 function EventPill({ ev, cal, onClick, showDate, onDelete }) {
   const isMultiDay = ev.allDay && !sameDay(ev.start, ev.end);
+  // Pretty display for the URL field: prefer hostname (e.g. "meet.google.com"),
+  // falling back to the raw value for malformed input so we never swallow it silently.
+  const urlHost = (() => {
+    const raw = ev.url && ev.url.trim();
+    if (!raw) return null;
+    try { return new URL(raw).hostname.replace(/^www\./, ""); } catch { /* fall through */ }
+    try { return new URL("https://" + raw).hostname.replace(/^www\./, ""); } catch { /* fall through */ }
+    return raw;
+  })();
   const [swipeX, setSwipeX] = React.useState(0);
   const [swiping, setSwiping] = React.useState(false);
   const [hovered, setHovered] = React.useState(false);
@@ -4407,11 +4416,10 @@ function EventPill({ ev, cal, onClick, showDate, onDelete }) {
           {ev.allDay ? (isMultiDay ? fmtDateShort(ev.start)+" – "+fmtDateShort(ev.end) : "All day") : fmtTime(ev.start)+" – "+fmtTime(ev.end)}
           {ev.location && ev.location.trim() ? <span style={{ opacity:0.6, marginLeft:4 }}><span style={{ display:"inline-flex", width:10, height:10, marginRight:2, verticalAlign:"middle" }}>{Icon.mapPin}</span>{ev.location.slice(0,22)+(ev.location.length>22?"…":"")}</span> : null}
           {ev.notes && ev.notes.trim() ? <span style={{ opacity:0.5, marginLeft:4 }}>{" · "+ev.notes.slice(0,28)+(ev.notes.length>28?"…":"")}</span> : null}
+          {urlHost ? <span style={{ opacity:0.7, marginLeft:4, color:"#3b82f6" }}><span style={{ display:"inline-flex", width:10, height:10, marginRight:2, verticalAlign:"middle" }}>{Icon.link}</span>{urlHost.slice(0,24)+(urlHost.length>24?"…":"")}</span> : null}
+          {Array.isArray(ev.attendees) && ev.attendees.length > 0 ? <span style={{ opacity:0.6, marginLeft:4 }}><span style={{ display:"inline-flex", width:10, height:10, marginRight:2, verticalAlign:"middle" }}>{Icon.user}</span>{ev.attendees.length}</span> : null}
         </div>
       </div>
-      {ev.url && ev.url.trim() && (
-        <span style={{ display:"flex", width:11, height:11, color:"#3b82f6", flexShrink:0 }}>{Icon.link}</span>
-      )}
       {ev.reminder && ev.reminder !== "none" && (
         <span style={{ display:"flex", width:12, height:12, color:"var(--muted)", flexShrink:0 }}>{Icon.bell}</span>
       )}
