@@ -7709,7 +7709,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); -web
 .nav-btn { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; background: none; border: none; color: var(--muted); font-family: var(--font); font-size: 0.6875rem; font-weight: 500; cursor: pointer; padding: 6px 0; border-radius: 10px; transition: color .15s; }
 .nav-btn.active { color: var(--accent2); }
 .nav-btn svg { width: 22px; height: 22px; }
-.screen { flex: 1; overflow-y: visible; padding: 52px 16px 90px; }
+.screen { flex: 1; overflow-y: visible; padding: max(52px, calc(env(safe-area-inset-top, 0px) + 24px)) 16px 90px; }
 .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
 .header h1 { font-size: 1.375rem; font-weight: 600; letter-spacing: -0.4px; }
 .header-sub { font-size: 0.8125rem; color: var(--muted); }
