@@ -4405,7 +4405,8 @@ function EventPill({ ev, cal, onClick, showDate, onDelete }) {
           {ev.frequency && ev.frequency !== "none" && <span style={{ display:"inline-flex", width:11, height:11, color:"var(--accent2)", marginRight:4, verticalAlign:"middle" }}>{Icon.repeat}</span>}
           {showDate && <>{fmtDate(ev.start)} · </>}
           {ev.allDay ? (isMultiDay ? fmtDateShort(ev.start)+" – "+fmtDateShort(ev.end) : "All day") : fmtTime(ev.start)+" – "+fmtTime(ev.end)}
-          {ev.location && ev.location.trim() ? <span style={{ opacity:0.6, marginLeft:4 }}><span style={{ display:"inline-flex", width:10, height:10, marginRight:2, verticalAlign:"middle" }}>{Icon.mapPin}</span>{ev.location.slice(0,22)+(ev.location.length>22?"…":"")}</span> : ev.notes && ev.notes.trim() ? <span style={{ opacity:0.5, marginLeft:4 }}>{" · "+ev.notes.slice(0,28)+(ev.notes.length>28?"…":"")}</span> : null}
+          {ev.location && ev.location.trim() ? <span style={{ opacity:0.6, marginLeft:4 }}><span style={{ display:"inline-flex", width:10, height:10, marginRight:2, verticalAlign:"middle" }}>{Icon.mapPin}</span>{ev.location.slice(0,22)+(ev.location.length>22?"…":"")}</span> : null}
+          {ev.notes && ev.notes.trim() ? <span style={{ opacity:0.5, marginLeft:4 }}>{" · "+ev.notes.slice(0,28)+(ev.notes.length>28?"…":"")}</span> : null}
         </div>
       </div>
       {ev.url && ev.url.trim() && (
