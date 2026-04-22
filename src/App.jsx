@@ -1889,7 +1889,7 @@ export default function App() {
         {/* SEARCH OVERLAY */}
         {showSearch && (
           <div style={{ position:"fixed", inset:0, zIndex:300, background:"var(--bg)", display:"flex", flexDirection:"column" }}>
-            <div style={{ padding:"16px 16px 8px", display:"flex", gap:10, alignItems:"center" }}>
+            <div style={{ padding:"max(20px, calc(env(safe-area-inset-top, 0px) + 16px)) 16px 8px", display:"flex", gap:10, alignItems:"center" }}>
               <div style={{ flex:1, display:"flex", alignItems:"center", gap:8, background:"var(--surface2)", borderRadius:12, padding:"10px 14px" }}>
                 <span style={{ display:"flex", width:16, height:16, color:"var(--muted)", flexShrink:0 }}>{Icon.search}</span>
                 <input autoFocus value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
