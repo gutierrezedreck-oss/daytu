@@ -754,7 +754,10 @@ export default function App() {
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, [themeMode]);
-  const [homeOrder, setHomeOrder] = useState(() => (_ls?.homeOrder ?? ["status","pinned","nextup","major","freetime"]).filter(k => k !== "today"));
+  const [homeOrder, setHomeOrder] = useState(() => {
+    const stored = (_ls?.homeOrder ?? ["shiftstatus","status","pinned","nextup","major","freetime"]).filter(k => k !== "today");
+    return stored.includes("shiftstatus") ? stored : ["shiftstatus", ...stored];
+  });
   const [dayPopup, setDayPopup] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   // Recent searches: last 5 non-trivial queries (persisted to localStorage)
@@ -901,7 +904,7 @@ export default function App() {
     setHolidayCountries(new Set(["us"]));
     setDayNotes({});
     setShiftOverrides(new Set());
-    setHomeOrder(["status","pinned","nextup","major","freetime"]);
+    setHomeOrder(["shiftstatus","status","pinned","nextup","major","freetime"]);
     setThemeMode("auto");
     setUserProfile({ name: "Alex Morgan", email: "", handle: "", defaultCalendar: "c1", defaultReminder: "15", avatar: null, badges: { friendRequests: true, feed: true, todayEvents: true } });
     // Trigger onboarding to run fresh
@@ -2309,6 +2312,81 @@ export default function App() {
                 );
               }
 
+              if (id === "shiftstatus") {
+                if (!shifts || shifts.length === 0) return null;
+                const todayY = TODAY.getFullYear(), todayM = TODAY.getMonth(), todayD = TODAY.getDate();
+                const oKeyOf = (pid) => pid + ":" + todayY + "-" + todayM + "-" + todayD;
+                const minsNow = now2.getHours() * 60 + now2.getMinutes();
+                const parseHM = (s) => { const [h,m] = s.split(":").map(Number); return h*60 + m; };
+                const fmtHM = (s) => {
+                  const [h,m] = s.split(":").map(Number);
+                  const ampm = h >= 12 ? "pm" : "am";
+                  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+                  return m === 0 ? h12 + ampm : h12 + ":" + String(m).padStart(2,"0") + ampm;
+                };
+                const rows = shifts.map(p => {
+                  const isNatural = p.type === "rotation" ? getRotationStatus(p, TODAY) === "work"
+                    : p.type === "monthly" ? isMonthlyWorkDay(p, TODAY)
+                    : (p.config?.days ?? []).includes(TODAY.getDay());
+                  const isHidden = shiftOverrides.has(oKeyOf(p.id));
+                  const isExtra = shiftOverrides.has("extra:" + oKeyOf(p.id));
+                  const isWorkToday = (isNatural && !isHidden) || (!isNatural && isExtra);
+                  const st = p.config?.shiftTime;
+                  if (!isWorkToday) return { p, state:"off", sub:"off today" };
+                  if (!st?.enabled) return { p, state:"on-allday", sub:"all day" };
+                  const startM = parseHM(st.start), endM = parseHM(st.end);
+                  const overnight = endM <= startM;
+                  let active;
+                  if (overnight) active = minsNow >= startM || minsNow < endM;
+                  else active = minsNow >= startM && minsNow < endM;
+                  if (active) return { p, state:"on", sub:"until " + fmtHM(st.end) };
+                  if (!overnight && minsNow < startM) return { p, state:"upcoming", sub:"starts " + fmtHM(st.start) };
+                  return { p, state:"ended", sub:"ended " + fmtHM(st.end) };
+                });
+                rows.sort((a,b) => {
+                  const rank = { on:0, "on-allday":1, upcoming:2, ended:3, off:4 };
+                  return rank[a.state] - rank[b.state];
+                });
+                const goToShift = (pid) => { setCalShiftFilter(pid); setTab("calendar"); };
+                return (
+                  <div key="shiftstatus" style={{ marginBottom:16 }}>
+                    <div className="section-label" style={{ marginBottom:8 }}>Shifts today</div>
+                    <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:4, WebkitOverflowScrolling:"touch" }}>
+                      {rows.map(({ p, state, sub }) => {
+                        const c = p.color || "#6366f1";
+                        const isOn = state === "on" || state === "on-allday";
+                        const bg = state === "on" ? c + "26"
+                          : state === "on-allday" ? c + "1a"
+                          : state === "upcoming" ? "transparent"
+                          : "var(--surface2)";
+                        const border = state === "on" ? "1.5px solid " + c
+                          : state === "on-allday" ? "1px solid " + c + "55"
+                          : state === "upcoming" ? "1px dashed " + c + "88"
+                          : "1px solid var(--border)";
+                        const textColor = isOn ? "var(--text)" : "var(--muted)";
+                        const dotColor = state === "off" ? "var(--muted)"
+                          : state === "ended" ? c + "66"
+                          : c;
+                        return (
+                          <button key={p.id} onClick={() => goToShift(p.id)}
+                            style={{ flexShrink:0, display:"flex", alignItems:"center", gap:6,
+                              padding:"6px 10px", borderRadius:20, background:bg, border,
+                              cursor:"pointer", fontFamily:"var(--font)",
+                              opacity: state === "off" ? 0.7 : 1 }}>
+                            <span style={{ width:8, height:8, borderRadius:"50%", background:dotColor,
+                              animation: state === "on" ? "nowPulse 2s ease-in-out infinite" : undefined,
+                              flexShrink:0 }} />
+                            <span style={{ fontSize:"0.75rem", fontWeight:700, color:textColor,
+                              textDecoration: state === "off" ? "line-through" : "none" }}>{p.name}</span>
+                            <span style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:500 }}>{sub}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              }
+
               if (id === "status") {
                 if (!currentEvent) return null;
                 const evColor = currentEvent.color || calForCalendar(currentEvent.calendarId).color || "var(--accent)";
@@ -3424,7 +3502,7 @@ export default function App() {
                   <div style={{ fontSize:"0.75rem", color:"var(--muted)", margin:"12px 0" }}>Tap an item to select it, then tap another to swap positions.</div>
                   <TapSwapList
                     items={homeOrder}
-                    labels={{ major:"Major Events", pinned:"Pinned", nextup:"Later Today", status:"Now", freetime:"Free Slots" }}
+                    labels={{ shiftstatus:"Shifts on/off", major:"Major Events", pinned:"Pinned", nextup:"Later Today", status:"Now", freetime:"Free Slots" }}
                     onReorder={setHomeOrder}
                   />
                 </div>
