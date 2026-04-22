@@ -4393,9 +4393,10 @@ function MonthGrid({ year, month, events, calendars, shifts, shiftOverrides, onL
   }, [year, month, majorEvents]);
 
   const lpTimerRef = React.useRef(null);
-  // Track last tap per-cell to detect double-tap on touch devices (mobile has no native dblclick reliably)
+  // Track last tap per-cell to detect double-tap. Lives on click (not touchend)
+  // so the same path serves desktop double-click and mobile double-tap.
   const lastTapRef = React.useRef({ time: 0, key: null });
-  const DOUBLE_TAP_MS = 300;
+  const DOUBLE_TAP_MS = 400;
 
   return (
     <div className="cal-grid">
@@ -4435,15 +4436,19 @@ function MonthGrid({ year, month, events, calendars, shifts, shiftOverrides, onL
           <div key={i}
             className={"cal-cell"+(isToday?" today":"")+(isSel?" selected":"")+(!c.curr?" other-month":"")}
             style={{ background: previewTint || bgTint || busyBg || undefined, outline: previewBorder, outlineOffset: previewBorder ? -2 : 0 }}
-            onMouseDown={e => { if (!c.curr) return; lpTimerRef.current = setTimeout(() => { lpTimerRef.current="fired"; onLongPress&&onLongPress(date); }, 500); }}
-            onMouseUp={() => { if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; } }}
-            onMouseLeave={() => { if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; } }}
-            onContextMenu={e => { if (!c.curr) return; e.preventDefault(); onLongPress&&onLongPress(date); }}
-            onTouchStart={e => { if (!c.curr) return; lpTimerRef.current = setTimeout(() => { lpTimerRef.current="fired"; onLongPress&&onLongPress(date); }, 500); }}
-            onTouchEnd={() => {
-              if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; }
+            onPointerDown={e => {
               if (!c.curr) return;
-              if (lpTimerRef.current === "fired") return;
+              if (e.pointerType === "mouse" && e.button !== 0) return;
+              lpTimerRef.current = setTimeout(() => { lpTimerRef.current="fired"; onLongPress&&onLongPress(date); }, 500);
+            }}
+            onPointerUp={() => { if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; } }}
+            onPointerCancel={() => { if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; } }}
+            onPointerLeave={() => { if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; } }}
+            onPointerMove={() => { if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; } }}
+            onContextMenu={e => { if (!c.curr) return; e.preventDefault(); onLongPress&&onLongPress(date); }}
+            onClick={() => {
+              if (lpTimerRef.current === "fired") { lpTimerRef.current = null; return; }
+              if (!c.curr) return;
               const now = Date.now();
               const key = date.getFullYear()+"-"+date.getMonth()+"-"+date.getDate();
               if (onQuickAdd && now - lastTapRef.current.time < DOUBLE_TAP_MS && lastTapRef.current.key === key) {
@@ -4453,10 +4458,7 @@ function MonthGrid({ year, month, events, calendars, shifts, shiftOverrides, onL
               }
               lastTapRef.current = { time: now, key };
               onSelect && onSelect(date);
-            }}
-            onTouchMove={() => { if (lpTimerRef.current&&lpTimerRef.current!=="fired") { clearTimeout(lpTimerRef.current); lpTimerRef.current=null; } }}
-            onClick={() => { if (lpTimerRef.current==="fired") { lpTimerRef.current=null; return; } c.curr&&onSelect(date); }}
-            onDoubleClick={() => { if (!c.curr) return; onQuickAdd && onQuickAdd(date); }}>
+            }}>
             {hasHideOverride && <div style={{ position:"absolute", top:2, right:3, width:5, height:5, borderRadius:"50%", background:"#f87171", zIndex:3, pointerEvents:"none" }} />}
             {/* Holiday H badge — top-left, zIndex 7 so it's above all rings and stripes */}
             {cellHoliday && (
