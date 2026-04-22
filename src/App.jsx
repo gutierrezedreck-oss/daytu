@@ -398,6 +398,25 @@ const reviveFeed = (feed) => feed.map(f => ({
   eventDate: f.eventDate ? new Date(f.eventDate) : null,
 }));
 
+// ── MAP PROVIDER ─────────────────────────────────────────
+// We can't detect which map apps are installed from a browser, so we stick
+// to providers that work universally: Apple Maps (pre-installed on iOS/macOS)
+// and Google Maps (web or app on every platform). "Auto" picks a platform
+// default; users can override in Settings.
+// On iOS the `maps://` custom scheme launches the Apple Maps app directly —
+// `https://maps.apple.com/` is a universal link but can resolve to the web
+// view when triggered via window.open inside a SPA, which isn't what we want.
+const isIOS = () => typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
+const MAP_PROVIDERS = {
+  apple:  (q) => (isIOS() ? "maps://?q=" : "https://maps.apple.com/?q=") + encodeURIComponent(q),
+  google: (q) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`,
+};
+const resolveMapProvider = (pref) => {
+  if (pref && MAP_PROVIDERS[pref]) return pref;
+  return isIOS() ? "apple" : "google";
+};
+const mapUrl = (query, pref) => MAP_PROVIDERS[resolveMapProvider(pref)](query);
+
 // ── HOLIDAY CALCULATOR ───────────────────────────────────
 // Returns { month (1-12), day } for a given year
 // Types: fixed | nthWeekday | lastWeekday | easter
@@ -680,6 +699,8 @@ export default function App() {
   const [textSize, setTextSize] = useState(() => _ls?.textSize ?? 1.0);
   // Accessibility: high-contrast mode — brightens muted text & strengthens borders
   const [highContrast, setHighContrast] = useState(() => _ls?.highContrast ?? false);
+  // Preferred map provider for opening locations (auto | apple | google | waze)
+  const [mapProvider, setMapProvider] = useState(() => _ls?.mapProvider ?? "auto");
   // View mode: "auto" (width-based) | "mobile" (force phone layout) | "desktop" (force sidebar layout)
   const [viewMode, setViewMode] = useState(() => _ls?.viewMode ?? "auto");
   // Live-preview state for real-time calendar reactions in split mode
@@ -969,7 +990,7 @@ export default function App() {
         holidayCountries: [...holidayCountries],
         dayNotes,
         homeOrder,
-        themeMode, weekLayout, textSize, highContrast, viewMode, recentSearches,
+        themeMode, weekLayout, textSize, highContrast, viewMode, mapProvider, recentSearches,
         userProfile,
       });
     }, 300);
@@ -978,7 +999,7 @@ export default function App() {
       activityFeed, feedSeenAt, onboardingActive, onboardingCompletedAt,
       customColorRecents, customColorFavorites,
       pinnedEvents, hiddenCalendars, hiddenGroups, holidayCountries,
-      dayNotes, homeOrder, themeMode, weekLayout, textSize, highContrast, viewMode, recentSearches, userProfile]);
+      dayNotes, homeOrder, themeMode, weekLayout, textSize, highContrast, viewMode, mapProvider, recentSearches, userProfile]);
   const openNewCalendar  = () => { setActiveCalendar(null); setSheet("editCalendar"); };
   const openEditCalendar = (cal) => { setActiveCalendar(cal); setSheet("editCalendar"); };
   const openNewMajorEvent = () => setSheet("newMajorEvent");
@@ -3372,6 +3393,28 @@ export default function App() {
               </div>
             </div>
 
+            {/* Maps — default app for opening location links */}
+            <div className="section-label">Maps</div>
+            <div className="card" style={{ marginBottom:16 }}>
+              <div style={{ fontSize:"0.875rem", fontWeight:500, color:"var(--text)", marginBottom:10 }}>Default map app</div>
+              <div style={{ display:"flex", gap:3, background:"var(--surface2)", borderRadius:10, padding:3, marginBottom:10 }}>
+                {[["auto","Auto"],["apple","Apple"],["google","Google"]].map(([v,l]) => (
+                  <button key={v} onClick={() => setMapProvider(v)} style={{
+                    flex:1, padding:"6px 0", borderRadius:7, border:"none", cursor:"pointer",
+                    fontFamily:"var(--font)", fontSize:"0.75rem", fontWeight:600, transition:"all .15s",
+                    background: mapProvider===v ? "var(--surface)" : "none",
+                    color: mapProvider===v ? "var(--text)" : "var(--muted)",
+                    boxShadow: mapProvider===v ? "0 1px 3px rgba(0,0,0,0.15)" : "none"
+                  }}>{l}</button>
+                ))}
+              </div>
+              <div style={{ fontSize:"0.6875rem", color:"var(--muted)", lineHeight:1.4 }}>
+                {mapProvider === "auto" ? "Apple Maps on iOS, Google Maps elsewhere." :
+                 mapProvider === "apple" ? "Opens Apple Maps. On non-Apple devices this falls back to the web version." :
+                 "Opens Google Maps — in-app on iOS/Android when installed, otherwise in the browser."}
+              </div>
+            </div>
+
             {/* Notifications */}
             <div className="section-label">Notifications</div>
             <div className="card" style={{ marginBottom:16 }}>
@@ -3784,11 +3827,11 @@ export default function App() {
             onClose={closeSheet}
           />
         )}
-        {sheet === "majorEventDetail" && activeMajorEvent && <MajorEventDetailSheet me={activeMajorEvent} groups={groups} onEdit={() => openEditMajorEvent(activeMajorEvent)} onDelete={deleteMajorEvent} onDuplicate={duplicateMajorEvent} onClose={closeSheet} />}
+        {sheet === "majorEventDetail" && activeMajorEvent && <MajorEventDetailSheet me={activeMajorEvent} groups={groups} onEdit={() => openEditMajorEvent(activeMajorEvent)} onDelete={deleteMajorEvent} onDuplicate={duplicateMajorEvent} onClose={closeSheet} mapProvider={mapProvider} />}
         {sheet === "editMajorEvent" && activeMajorEvent && <MajorEventSheet existing={activeMajorEvent} onPreview={setPreviewMajor} groups={groups} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateMajorEvent} onDelete={deleteMajorEvent} onClose={() => { setPreviewMajor(null); closeSheet(); }} />}
         {sheet === "newEvent" && <NewEventSheet onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} defaultCalendar={userProfile.defaultCalendar} defaultReminder={userProfile.defaultReminder} />}
         {sheet === "editEvent" && activeEvent && <NewEventSheet existing={activeEvent} onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateEvent} onDelete={deleteEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} />}
-        {sheet === "eventDetail" && activeEvent && <EventDetailSheet ev={activeEvent} cal={calForCalendar(activeEvent.calendarId)} groups={groups} onDelete={deleteEvent} onEdit={() => openEditEvent(activeEvent)} onClose={closeSheet} onDuplicate={duplicateEvent} onPin={togglePin} isPinned={pinnedEvents.has(baseEventId(activeEvent.id))} />}
+        {sheet === "eventDetail" && activeEvent && <EventDetailSheet ev={activeEvent} cal={calForCalendar(activeEvent.calendarId)} groups={groups} onDelete={deleteEvent} onEdit={() => openEditEvent(activeEvent)} onClose={closeSheet} onDuplicate={duplicateEvent} onPin={togglePin} isPinned={pinnedEvents.has(baseEventId(activeEvent.id))} mapProvider={mapProvider} />}
         {sheet === "newGroup" && <NewGroupSheet onSave={addGroup} onClose={closeSheet} />}
         {sheet === "editGroup" && activeGroup && <NewGroupSheet existing={activeGroup} currentMembers={groupMembers.filter(m => m.groupId === activeGroup.id)} onSave={(g, members) => updateGroup(g, members)} onDelete={deleteGroup} onClose={closeSheet} />}
         {sheet === "icsPreview" && (
@@ -5542,7 +5585,7 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
     </div>
   );
 }
-function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplicate, onPin, isPinned }) {
+function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplicate, onPin, isPinned, mapProvider }) {
   const evGroups = groups.filter(g => ev.groupIds?.includes(g.id));
   const isMultiDay = ev.allDay && !sameDay(ev.start, ev.end);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -5586,7 +5629,7 @@ function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplic
         )}
         {ev.location&&(
           <div className="card card-sm" style={{ marginBottom:12, display:"flex", alignItems:"center", gap:10, cursor:"pointer" }}
-            onClick={() => window.open("https://maps.google.com?q="+encodeURIComponent(ev.location),"_blank")}>
+            onClick={() => window.open(mapUrl(ev.location, mapProvider),"_blank")}>
             <span style={{ display:"flex", width:16, height:16, color:"#ef4444", flexShrink:0 }}>{Icon.pin}</span>
             <div style={{ flex:1 }}>
               <div style={{ fontSize:"0.875rem", fontWeight:500 }}>{ev.location}</div>
@@ -5739,7 +5782,7 @@ function NewGroupSheet({ existing, currentMembers, onSave, onDelete, onClose }) 
 }
 
 // ── MAJOR EVENT DETAIL SHEET ─────────────────────────────
-function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, onClose }) {
+function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, onClose, mapProvider }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const parseLocal = s => { const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d); };
   const start = parseLocal(me.startDate);
@@ -5801,7 +5844,7 @@ function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, o
               background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
               <span style={{ display:"flex", width:14, height:14, color:"var(--muted)", flexShrink:0 }}>{Icon.mapPin}</span>
               <div style={{ fontSize:"0.8125rem", color:"var(--text)", flex:1 }}>{me.location}</div>
-              <a href={"https://maps.google.com/?q="+encodeURIComponent(me.location)} target="_blank" rel="noreferrer"
+              <a href={mapUrl(me.location, mapProvider)} target="_blank" rel="noreferrer"
                 style={{ fontSize:"0.6875rem", color:"var(--accent2)", textDecoration:"none", fontWeight:600 }}>Maps →</a>
             </div>
           )}
