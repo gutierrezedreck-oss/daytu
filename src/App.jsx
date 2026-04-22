@@ -3279,26 +3279,24 @@ export default function App() {
             <div className="section-label">Appearance</div>
             <div className="card" style={{ marginBottom:16 }}>
               {/* Theme mode — 3-way: Light / Auto / Dark */}
-              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
-                <div style={{ fontSize:"0.875rem", fontWeight:500, color:"var(--text)" }}>Theme</div>
-                <div style={{ display:"flex", gap:3, background:"var(--surface2)", borderRadius:10, padding:3 }}>
-                  {[["light","Light"],["auto","Auto"],["dark","Dark"]].map(([v,l]) => (
-                    <button key={v} onClick={() => {
-                      setThemeMode(v);
-                      if (v === "auto") {
-                        setDarkMode(window.matchMedia("(prefers-color-scheme: dark)").matches);
-                      } else {
-                        setDarkMode(v === "dark");
-                      }
-                    }} style={{
-                      padding:"5px 12px", borderRadius:7, border:"none", cursor:"pointer",
-                      fontFamily:"var(--font)", fontSize:"0.75rem", fontWeight:600, transition:"all .15s",
-                      background: themeMode===v ? "var(--surface)" : "none",
-                      color: themeMode===v ? "var(--text)" : "var(--muted)",
-                      boxShadow: themeMode===v ? "0 1px 3px rgba(0,0,0,0.15)" : "none"
-                    }}>{l}</button>
-                  ))}
-                </div>
+              <div style={{ fontSize:"0.875rem", fontWeight:500, color:"var(--text)", marginBottom:10 }}>Theme</div>
+              <div style={{ display:"flex", gap:3, background:"var(--surface2)", borderRadius:10, padding:3, marginBottom:10 }}>
+                {[["light","Light"],["auto","Auto"],["dark","Dark"]].map(([v,l]) => (
+                  <button key={v} onClick={() => {
+                    setThemeMode(v);
+                    if (v === "auto") {
+                      setDarkMode(window.matchMedia("(prefers-color-scheme: dark)").matches);
+                    } else {
+                      setDarkMode(v === "dark");
+                    }
+                  }} style={{
+                    flex:1, padding:"6px 0", borderRadius:7, border:"none", cursor:"pointer",
+                    fontFamily:"var(--font)", fontSize:"0.75rem", fontWeight:600, transition:"all .15s",
+                    background: themeMode===v ? "var(--surface)" : "none",
+                    color: themeMode===v ? "var(--text)" : "var(--muted)",
+                    boxShadow: themeMode===v ? "0 1px 3px rgba(0,0,0,0.15)" : "none"
+                  }}>{l}</button>
+                ))}
               </div>
               <div style={{ fontSize:"0.6875rem", color:"var(--muted)", lineHeight:1.4 }}>
                 {themeMode === "auto" ? "Matches your device's appearance setting." : themeMode === "dark" ? "Always use dark theme." : "Always use light theme."}
@@ -3307,19 +3305,17 @@ export default function App() {
 
             {/* Layout — mobile / compact / auto / desktop */}
             <div className="card" style={{ marginBottom:16 }}>
-              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
-                <div style={{ fontSize:"1rem", fontWeight:500, color:"var(--text)" }}>Layout</div>
-                <div style={{ display:"flex", gap:3, background:"var(--surface2)", borderRadius:10, padding:3 }}>
-                  {[["mobile","Mobile"],["compact","Compact"],["auto","Auto"],["desktop","Desktop"]].map(([v,l]) => (
-                    <button key={v} onClick={() => setViewMode(v)} style={{
-                      padding:"5px 12px", borderRadius:7, border:"none", cursor:"pointer",
-                      fontFamily:"var(--font)", fontSize:"0.75rem", fontWeight:600, transition:"all .15s",
-                      background: viewMode===v ? "var(--surface)" : "none",
-                      color: viewMode===v ? "var(--text)" : "var(--muted)",
-                      boxShadow: viewMode===v ? "0 1px 3px rgba(0,0,0,0.15)" : "none"
-                    }}>{l}</button>
-                  ))}
-                </div>
+              <div style={{ fontSize:"0.875rem", fontWeight:500, color:"var(--text)", marginBottom:10 }}>Layout</div>
+              <div style={{ display:"flex", gap:3, background:"var(--surface2)", borderRadius:10, padding:3, marginBottom:10 }}>
+                {[["mobile","Mobile"],["compact","Compact"],["auto","Auto"],["desktop","Desktop"]].map(([v,l]) => (
+                  <button key={v} onClick={() => setViewMode(v)} style={{
+                    flex:1, padding:"6px 0", borderRadius:7, border:"none", cursor:"pointer",
+                    fontFamily:"var(--font)", fontSize:"0.75rem", fontWeight:600, transition:"all .15s",
+                    background: viewMode===v ? "var(--surface)" : "none",
+                    color: viewMode===v ? "var(--text)" : "var(--muted)",
+                    boxShadow: viewMode===v ? "0 1px 3px rgba(0,0,0,0.15)" : "none"
+                  }}>{l}</button>
+                ))}
               </div>
               <div style={{ fontSize:"0.6875rem", color:"var(--muted)", lineHeight:1.4 }}>
                 {viewMode === "auto" ? "Mobile layout on phones, desktop on wider screens — picks automatically." :
