@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width="1000" height="1000">
+  <!-- Outer ring (darkest purple) -->
+  <path d="M 620 40 L 860 40 A 100 100 0 0 1 960 140 L 960 860 A 100 100 0 0 1 860 960 L 140 960 A 100 100 0 0 1 40 860 L 40 140 A 100 100 0 0 1 140 40 L 380 40"
+        fill="none" stroke="#5a3fbf" stroke-width="40" stroke-linecap="butt"/>
+  <!-- Middle ring (medium purple) -->
+  <path d="M 610 120 L 780 120 A 90 90 0 0 1 870 210 L 870 790 A 90 90 0 0 1 780 880 L 220 880 A 90 90 0 0 1 130 790 L 130 210 A 90 90 0 0 1 220 120 L 390 120"
+        fill="none" stroke="#6b4fd0" stroke-width="40" stroke-linecap="butt"/>
+  <!-- Inner ring (lightest purple) -->
+  <path d="M 600 200 L 700 200 A 80 80 0 0 1 780 280 L 780 720 A 80 80 0 0 1 700 800 L 300 800 A 80 80 0 0 1 220 720 L 220 280 A 80 80 0 0 1 300 200 L 400 200"
+        fill="none" stroke="#b49cf0" stroke-width="40" stroke-linecap="butt"/>
+  <!-- Left eye -->
+  <rect x="390" y="370" width="24" height="240" rx="12" fill="#000000"/>
+  <!-- Right eye -->
+  <rect x="586" y="370" width="24" height="240" rx="12" fill="#000000"/>
+</svg>

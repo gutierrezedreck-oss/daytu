@@ -1,5 +1,20 @@
 import React, { useState, useMemo } from "react";
 
+// Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
+// SVG source still lives at src/assets/daytu-logo.svg (used for the favicon).
+const DaytuLogo = ({ size = 48, style }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width={size} height={size} style={style} aria-label="Daytu">
+    <path d="M 620 40 L 860 40 A 100 100 0 0 1 960 140 L 960 860 A 100 100 0 0 1 860 960 L 140 960 A 100 100 0 0 1 40 860 L 40 140 A 100 100 0 0 1 140 40 L 380 40"
+      fill="none" stroke="#5a3fbf" strokeWidth="40" strokeLinecap="butt" />
+    <path d="M 610 120 L 780 120 A 90 90 0 0 1 870 210 L 870 790 A 90 90 0 0 1 780 880 L 220 880 A 90 90 0 0 1 130 790 L 130 210 A 90 90 0 0 1 220 120 L 390 120"
+      fill="none" stroke="#6b4fd0" strokeWidth="40" strokeLinecap="butt" />
+    <path d="M 600 200 L 700 200 A 80 80 0 0 1 780 280 L 780 720 A 80 80 0 0 1 700 800 L 300 800 A 80 80 0 0 1 220 720 L 220 280 A 80 80 0 0 1 300 200 L 400 200"
+      fill="none" stroke="#b49cf0" strokeWidth="40" strokeLinecap="butt" />
+    <rect x="390" y="370" width="24" height="240" rx="12" className="daytu-logo-eye" />
+    <rect x="586" y="370" width="24" height="240" rx="12" className="daytu-logo-eye" />
+  </svg>
+);
+
 // ── FEATURE FLAGS ─────────────────────────────────────
 // Hidden until a proper backend supports them.
 // Flip to true when ready — everything comes back, no re-work.
@@ -562,8 +577,12 @@ export default function App() {
 
   const [freeTimeQuery, setFreeTimeQuery] = useState("");
   const [themeMode, setThemeMode] = useState(() => _ls?.themeMode ?? "auto");
-  const systemDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-  const [darkMode, setDarkMode] = useState(systemDark);
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = _ls?.themeMode ?? "auto";
+    if (saved === "dark") return true;
+    if (saved === "light") return false;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
   // Accessibility: text size scale (1.0 = default, up to 1.5 = XL)
   const [textSize, setTextSize] = useState(() => _ls?.textSize ?? 1.0);
   // Accessibility: high-contrast mode — brightens muted text & strengthens borders
@@ -582,23 +601,35 @@ export default function App() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  // Resolved layout: honor user's explicit choice, else auto-detect based on width
-  // Desktop mode: user wants desktop OR auto + viewport wide enough
-  const isDesktop = viewMode === "desktop" || (viewMode === "auto" && viewportWidth >= 900);
-  // Within desktop, we prefer the split layout (calendar always on right) at ≥1100px.
-  // Below that, we fall back to the simpler sidebar layout since the 3-column split would be too cramped.
-  const isSplit = isDesktop && viewportWidth >= 1100;
+  // Resolved layout: honor user's explicit choice, else auto-detect based on width.
+  // viewMode values:
+  //   "mobile"  — always the phone layout
+  //   "compact" — desktop sidebar, no persistent calendar panel (the "in-between")
+  //   "desktop" — full split layout (sidebar + content + calendar panel)
+  //   "auto"    — pick based on viewport
+  const isDesktop =
+    viewMode === "desktop" || viewMode === "compact" ||
+    (viewMode === "auto" && viewportWidth >= 900);
+  // Split is only picked when explicitly chosen, or auto + viewport ≥ 1100px.
+  // "compact" stays non-split regardless of viewport.
+  const isSplit =
+    viewMode === "desktop" ? true
+    : viewMode === "compact" ? false
+    : (isDesktop && viewportWidth >= 1100);
   // In split mode, the Calendar tab is redundant (calendar is always visible). Redirect to Home.
   React.useEffect(() => {
     if (isSplit && tab === "calendar") setTab("home");
   }, [isSplit, tab]);
-  // In split mode, keep calMonth in sync when the user picks a date from another month
+  // In split mode, keep calMonth in sync when the user picks a date from another month.
+  // One-way: selectedDate → calMonth. Don't depend on calMonth, or prev/next buttons
+  // will loop-reset back to selectedDate's month.
   React.useEffect(() => {
     if (!isSplit) return;
-    if (selectedDate.getFullYear() !== calMonth.year || selectedDate.getMonth() !== calMonth.month) {
-      setCalMonth({ year: selectedDate.getFullYear(), month: selectedDate.getMonth() });
-    }
-  }, [isSplit, selectedDate, calMonth.year, calMonth.month]);
+    setCalMonth(m => {
+      if (selectedDate.getFullYear() === m.year && selectedDate.getMonth() === m.month) return m;
+      return { year: selectedDate.getFullYear(), month: selectedDate.getMonth() };
+    });
+  }, [isSplit, selectedDate]);
 
   // Apply text size scale by setting html root font-size (all rem units scale with this)
   React.useEffect(() => {
@@ -645,10 +676,15 @@ export default function App() {
     return () => Object.values(notifTimers.current).forEach(clearTimeout);
   }, [events, notifPermission]);
 
-  // Sync with system theme when in auto mode
+  // Keep darkMode in sync with themeMode on every change:
+  //   "dark"  → always dark
+  //   "light" → always light
+  //   "auto"  → follow system, live-updated via matchMedia
   React.useEffect(() => {
-    if (themeMode !== "auto") return;
+    if (themeMode === "dark") { setDarkMode(true); return; }
+    if (themeMode === "light") { setDarkMode(false); return; }
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    setDarkMode(mq.matches);
     const handler = (e) => setDarkMode(e.matches);
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
@@ -736,7 +772,7 @@ export default function App() {
   };
   const isOverridden = (patternId, date) => patternOverrides.has(overrideKey(patternId, date));
 
-  const closeSheet = () => { setSheet(null); setActiveEvent(null); setActivePattern(null); setActiveGroup(null); setActiveMajorEvent(null); };
+  const closeSheet = () => { setSheet(null); setActiveEvent(null); setActivePattern(null); setActiveGroup(null); setActiveMajorEvent(null); setPreviewEvent(null); setPreviewPattern(null); setPreviewMajor(null); };
   const openEvent = (ev) => { setActiveEvent(ev); setSheet("eventDetail"); };
   const openEditEvent = (ev) => { setActiveEvent(ev); setSheet("editEvent"); };
   const openNewEvent = () => setSheet("newEvent");
@@ -1626,7 +1662,7 @@ export default function App() {
         )}
 
         {/* Desktop sidebar — renders in both desktop (full) and split (icon-only) modes */}
-        {(isDesktop || isSplit) && !tourOpen && (() => {
+        {(isDesktop || isSplit) && (() => {
           const todayHasEvents = todayEvents.length > 0;
           const hasConflicts = getConflicts(todayEvents).size > 0;
           const patternOverrideCount = patternOverrides.size;
@@ -1647,7 +1683,9 @@ export default function App() {
             // Icon-only sidebar with tooltips on hover
             return (
               <nav className="split-sidebar">
-                <div className="split-sidebar-brand">D</div>
+                <div className="split-sidebar-brand">
+                  <DaytuLogo size={36} style={{ display:"block" }} />
+                </div>
                 {navItems.map(n => (
                   <button key={n.id} ref={setTourRef("nav-"+n.id)}
                     className={"split-nav-btn " + (tab===n.id ? "active" : "")}
@@ -1662,7 +1700,7 @@ export default function App() {
                 ))}
                 {/* Quick-add button at the bottom of the icon sidebar */}
                 <div style={{ flex:1 }} />
-                <button className="split-add-btn" onClick={() => setFabOpen(o => !o)}
+                <button className="split-add-btn" ref={setTourRef("fab")} onClick={() => setFabOpen(o => !o)}
                   title="Quick add"
                   style={{ transform: fabOpen ? "rotate(45deg)" : "rotate(0deg)", transition:"transform .2s ease" }}>
                   {Icon.plus}
@@ -1673,8 +1711,9 @@ export default function App() {
           // Full sidebar for desktop mode
           return (
             <nav className="desktop-sidebar">
-              <div className="desktop-sidebar-brand">
-                <span className="desktop-sidebar-brand-accent">Day</span>tu
+              <div className="desktop-sidebar-brand" style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <DaytuLogo size={28} style={{ flexShrink:0 }} />
+                <span><span className="desktop-sidebar-brand-accent">day</span>tu</span>
               </div>
               {navItems.map(n => (
                 <button key={n.id} ref={setTourRef("nav-"+n.id)}
@@ -1993,19 +2032,21 @@ export default function App() {
                 if (visible.length === 0) {
                   if (isBrandNew) {
                     return (
-                      <EmptyStateCard key="major-empty"
-                        icon={Icon.pin}
-                        title="Track the big days"
-                        body="Vacations, weddings, birthdays, trips home — major events live here with a live countdown. Add one to see how it looks."
-                        cta="Add a major event"
-                        onCta={() => openNewMajorEvent()}
-                      />
+                      <div key="major-empty" ref={setTourRef("major")}>
+                        <EmptyStateCard
+                          icon={Icon.pin}
+                          title="Track the big days"
+                          body="Vacations, weddings, birthdays, trips home — major events live here with a live countdown. Add one to see how it looks."
+                          cta="Add a major event"
+                          onCta={() => openNewMajorEvent()}
+                        />
+                      </div>
                     );
                   }
                   return null;
                 }
                 return (
-                  <div key="major">
+                  <div key="major" ref={setTourRef("major")}>
                     {visible.map(me => {
                       const [hsy,hsm,hsd]=me.startDate.slice(0,10).split("-").map(Number);
                       const [hey,hem,hed]=me.endDate.slice(0,10).split("-").map(Number);
@@ -2112,12 +2153,13 @@ export default function App() {
                 );
               }
               if (id === "nextup") {
-                // Later today first, then tomorrow if nothing left today
-                const todayRemaining = visibleEvents.filter(e => e.start > now2 && sameDay(e.start, TODAY)).sort((a,b) => a.start - b.start).slice(0,3);
+                // Today's full schedule (upcoming first, then passed); fall back to tomorrow.
+                const todayAll = visibleEvents.filter(e => sameDay(e.start, TODAY)).sort((a,b) => a.start - b.start);
                 const tomorrow = new Date(TODAY); tomorrow.setDate(tomorrow.getDate()+1);
-                const tomorrowEvs = visibleEvents.filter(e => sameDay(e.start, tomorrow)).sort((a,b) => a.start - b.start).slice(0,3);
-                const upNext = todayRemaining.length > 0 ? todayRemaining : tomorrowEvs;
-                const sectionLabel = todayRemaining.length > 0 ? "Later today" : tomorrowEvs.length > 0 ? "Tomorrow" : null;
+                const tomorrowEvs = visibleEvents.filter(e => sameDay(e.start, tomorrow)).sort((a,b) => a.start - b.start).slice(0,4);
+                const upNext = todayAll.length > 0 ? todayAll.slice(0,4) : tomorrowEvs;
+                const anyFutureToday = todayAll.some(e => e.start > now2);
+                const sectionLabel = todayAll.length > 0 ? (anyFutureToday ? "Today" : "Earlier today") : tomorrowEvs.length > 0 ? "Tomorrow" : null;
                 if (upNext.length === 0) {
                   if (isBrandNew) {
                     return (
@@ -2136,22 +2178,27 @@ export default function App() {
                   <div key="nextup" style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:14, marginBottom:16 }}>
                     <div style={{ fontSize:"0.6875rem", fontWeight:700, textTransform:"uppercase", letterSpacing:"1px", color:"var(--muted)", marginBottom:10 }}>{sectionLabel}</div>
                     {upNext.map((ev, idx) => {
-                      const secUntil = Math.max(0, Math.floor((ev.start - now2) / 1000));
-                      const daysU = Math.floor(secUntil/86400), hoursU = Math.floor((secUntil%86400)/3600), minsU = Math.floor((secUntil%3600)/60);
-                      const timeLabel = daysU>0?`${daysU}d ${hoursU}h`:hoursU>0?`${hoursU}h ${minsU}m`:`${minsU}m`;
+                      const isPast = ev.end < now2;
+                      const secUntil = Math.floor((ev.start - now2) / 1000);
+                      const daysU = Math.floor(Math.abs(secUntil)/86400), hoursU = Math.floor((Math.abs(secUntil)%86400)/3600), minsU = Math.floor((Math.abs(secUntil)%3600)/60);
+                      const timeLabel = isPast ? "done"
+                        : secUntil <= 0 ? "now"
+                        : daysU > 0 ? `${daysU}d ${hoursU}h`
+                        : hoursU > 0 ? `${hoursU}h ${minsU}m`
+                        : `${minsU}m`;
                       const cal = calForCalendar(ev.calendarId);
                       const col = ev.color || cal.color || "var(--accent)";
                       return (
-                        <div key={ev.id} onClick={() => openEvent(ev)} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom: idx < upNext.length-1 ? "1px solid var(--border)" : "none", cursor:"pointer" }}>
+                        <div key={ev.id} onClick={() => openEvent(ev)} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom: idx < upNext.length-1 ? "1px solid var(--border)" : "none", cursor:"pointer", opacity: isPast ? 0.5 : 1 }}>
                           <div style={{ width:3, height:32, borderRadius:2, background:col, flexShrink:0 }} />
                           <div style={{ flex:1, minWidth:0 }}>
-                            <div style={{ fontSize:"0.875rem", fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{ev.title}</div>
+                            <div style={{ fontSize:"0.875rem", fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", textDecoration: isPast ? "line-through" : "none" }}>{ev.title}</div>
                             <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontFamily:"var(--mono)", marginTop:1 }}>
                               {ev.allDay ? "All day" : fmtTime(ev.start)}
                               {ev.location ? <span style={{ marginLeft:6, opacity:0.7 }}><span style={{ display:"inline-flex", width:10, height:10, marginRight:2, verticalAlign:"middle" }}>{Icon.mapPin}</span>{ev.location.slice(0,18)}</span> : null}
                             </div>
                           </div>
-                          <div style={{ fontSize:"0.75rem", fontWeight:700, color:col, fontFamily:"var(--mono)", flexShrink:0 }}>{timeLabel}</div>
+                          <div style={{ fontSize:"0.75rem", fontWeight:700, color: isPast ? "var(--muted)" : col, fontFamily:"var(--mono)", flexShrink:0 }}>{timeLabel}</div>
                         </div>
                       );
                     })}
@@ -2297,6 +2344,13 @@ export default function App() {
 
               return null;
             })}
+
+            {/* Logo — mobile only, subtle mark at bottom of home */}
+            {!isDesktop && !isSplit && (
+              <div style={{ display:"flex", justifyContent:"center", padding:"24px 0 8px", opacity:0.5 }}>
+                <DaytuLogo size={48} />
+              </div>
+            )}
           </div>
         )}
 
@@ -2341,7 +2395,8 @@ export default function App() {
 
             {/* ── View switcher + Today jump ── */}
             <div style={{ display:"flex", gap:8, marginBottom:14, alignItems:"center" }}>
-              <div style={{ display:"flex", gap:4, background:"var(--surface2)", borderRadius:10, padding:3, flex:1 }}>
+              <div ref={isSplit ? (el => { if (el) tourRefs.current["nav-calendar"] = el; }) : undefined}
+                style={{ display:"flex", gap:4, background:"var(--surface2)", borderRadius:10, padding:3, flex:1 }}>
                 {[["month","Month"],["week","Week"],["day","Day"]].map(([v,l]) => (
                   <button key={v} onClick={() => setCalView(v)}
                     style={{ flex:1, padding:"6px 0", borderRadius:7, border:"none", fontFamily:"var(--font)",
@@ -2426,11 +2481,7 @@ export default function App() {
                     <div style={{ display:"flex", flexWrap:"wrap", gap:10, marginTop:10, paddingTop:10, borderTop:"1px solid var(--border)" }}>
                       {patterns.map(p => (
                         <div key={p.id} style={{ display:"flex", alignItems:"center", gap:5, fontSize:"0.6875rem", color:"var(--muted)" }}>
-                          <div style={{ width:14, height:14, borderRadius:3, border:"2px solid "+(p.color||"#6366f1"), position:"relative", flexShrink:0,
-                            WebkitMaskImage:"linear-gradient(to right,black 0%,black 30%,transparent 30%,transparent 70%,black 70%,black 100%),linear-gradient(to bottom,black 0%,black 100%)",
-                            WebkitMaskSize:"100% 5px,100% 100%", WebkitMaskPosition:"0 0,0 0", WebkitMaskRepeat:"no-repeat", WebkitMaskComposite:"destination-in",
-                            maskImage:"linear-gradient(to right,black 0%,black 30%,transparent 30%,transparent 70%,black 70%,black 100%),linear-gradient(to bottom,black 0%,black 100%)",
-                            maskSize:"100% 5px,100% 100%", maskPosition:"0 0,0 0", maskRepeat:"no-repeat", maskComposite:"intersect" }} />
+                          <svg width="14" height="14" viewBox="0 0 100 100" style={{flexShrink:0}}><path d="M 65 4 L 78 4 A 18 18 0 0 1 96 22 L 96 78 A 18 18 0 0 1 78 96 L 22 96 A 18 18 0 0 1 4 78 L 4 22 A 18 18 0 0 1 22 4 L 35 4" fill="none" stroke={p.color||"#6366f1"} strokeWidth="8" strokeLinecap="round" /></svg>
                           {p.name}
                         </div>
                       ))}
@@ -3042,12 +3093,12 @@ export default function App() {
               </div>
             </div>
 
-            {/* Layout — mobile / auto / desktop */}
+            {/* Layout — mobile / compact / auto / desktop */}
             <div className="card" style={{ marginBottom:16 }}>
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
                 <div style={{ fontSize:"1rem", fontWeight:500, color:"var(--text)" }}>Layout</div>
                 <div style={{ display:"flex", gap:3, background:"var(--surface2)", borderRadius:10, padding:3 }}>
-                  {[["mobile","Mobile"],["auto","Auto"],["desktop","Desktop"]].map(([v,l]) => (
+                  {[["mobile","Mobile"],["compact","Compact"],["auto","Auto"],["desktop","Desktop"]].map(([v,l]) => (
                     <button key={v} onClick={() => setViewMode(v)} style={{
                       padding:"5px 12px", borderRadius:7, border:"none", cursor:"pointer",
                       fontFamily:"var(--font)", fontSize:"0.75rem", fontWeight:600, transition:"all .15s",
@@ -3061,6 +3112,7 @@ export default function App() {
               <div style={{ fontSize:"0.6875rem", color:"var(--muted)", lineHeight:1.4 }}>
                 {viewMode === "auto" ? "Mobile layout on phones, desktop on wider screens — picks automatically." :
                  viewMode === "desktop" ? "Desktop layout with the calendar always visible on the right. Falls back to a compact sidebar on narrower windows." :
+                 viewMode === "compact" ? "Desktop sidebar layout without the persistent calendar panel — good for medium screens." :
                  "Always shows the compact phone layout."}
               </div>
             </div>
@@ -3446,7 +3498,7 @@ export default function App() {
           </>
         )}
         <button
-          ref={setTourRef("fab")}
+          ref={isSplit ? undefined : setTourRef("fab")}
           className={"fab"+(fabVisible?"":" hidden")}
           onClick={() => setFabOpen(v => !v)}
           style={{ transform: fabOpen ? "rotate(45deg)" : "rotate(0deg)", transition:"transform .2s ease, opacity .2s ease" }}>
@@ -3479,7 +3531,7 @@ export default function App() {
               { id:"patterns", label:"Patterns", icon:Icon.patterns, dot: patternOverrideCount > 0 ? "#f59e0b" : null },
               { id:"settings", label:"Settings", icon:Icon.settings },
             ].map(n => (
-              <button key={n.id} ref={setTourRef("nav-"+n.id)} className={"nav-btn "+(tab===n.id?"active":"")} onClick={() => { setTab(n.id); setFabOpen(false); }}>
+              <button key={n.id} ref={!(isDesktop || isSplit) ? setTourRef("nav-"+n.id) : undefined} className={"nav-btn "+(tab===n.id?"active":"")} onClick={() => { setTab(n.id); setFabOpen(false); }}>
                 <div style={{ position:"relative", display:"inline-flex" }}>
                   {n.icon}
                   {n.badge > 0 && <div style={{ position:"absolute", top:-5, right:-5, minWidth:14, height:14, borderRadius:7, background:"#ef4444", fontSize:"0.6875rem", fontWeight:700, color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", padding:"0 2px" }}>{n.badge}</div>}
@@ -4085,25 +4137,33 @@ function EventPill({ ev, cal, onClick, showDate, onDelete }) {
       <div className="event-pill" onClick={swipeX===0?onClick:()=>setSwipeX(0)}
         onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
         style={{ transform:`translateX(${swipeX}px)`, transition:swiping?"none":"transform .2s ease", marginBottom:0, borderRadius:10 }}>
-        {/* Desktop-only hover delete button — only visible on hover-capable devices */}
+        {/* Desktop-only hover delete button — only visible on hover-capable devices.
+            Wrapped in a gradient backdrop so text underneath fades out cleanly. */}
         {onDelete && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className="event-pill-delete"
-            title="Delete event"
+          <div
             style={{
-              position:"absolute", right:8, top:"50%", transform:"translateY(-50%)",
-              width:26, height:26, borderRadius:6,
-              background: "rgba(239,68,68,0.15)", border:"1px solid rgba(239,68,68,0.3)",
-              color:"#ef4444", display:"flex", alignItems:"center", justifyContent:"center",
-              cursor:"pointer", padding:0,
+              position:"absolute", right:0, top:0, bottom:0,
+              display:"flex", alignItems:"center", paddingRight:8, paddingLeft:28,
+              background: "linear-gradient(to right, transparent 0%, var(--surface2) 50%)",
               opacity: hovered ? 1 : 0,
               pointerEvents: hovered ? "auto" : "none",
               transition: "opacity .15s ease",
+              borderRadius: "0 10px 10px 0",
               zIndex: 2,
             }}>
-            <span style={{ display:"flex", width:13, height:13 }}>{Icon.trash}</span>
-          </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onDelete(); }}
+              className="event-pill-delete"
+              title="Delete event"
+              style={{
+                width:26, height:26, borderRadius:6,
+                background:"rgba(239,68,68,0.2)", border:"1px solid rgba(239,68,68,0.4)",
+                color:"#ef4444", display:"flex", alignItems:"center", justifyContent:"center",
+                cursor:"pointer", padding:0,
+              }}>
+              <span style={{ display:"flex", width:13, height:13 }}>{Icon.trash}</span>
+            </button>
+          </div>
         )}
       <div className="event-dot" style={{ background: ev.color || cal.color || "#888" }} />
       <div className="event-pill-info">
@@ -4125,6 +4185,30 @@ function EventPill({ ev, cal, onClick, showDate, onDelete }) {
       <div style={{ fontSize:"0.75rem" }}>{visibilityIcon(ev.visibility)}</div>
       </div>
     </div>
+  );
+}
+
+// ── PATTERN RINGS ─────────────────────────────────────────
+// Concentric rounded-rect rings that hug the container. Used by month cells
+// (square) and week columns (portrait). For non-square containers, the viewBox
+// stretches and vectorEffect keeps stroke thickness uniform.
+function PatternRings({ colors, uniformStroke = false, zIndex = 2 }) {
+  if (!colors || colors.length === 0) return null;
+  return (
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+      style={{ position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex }}>
+      {colors.slice(0,3).map((color, ri) => {
+        const inset = 4 + ri*8;
+        const r = Math.max(0, 18 - ri*8);
+        const g = 15, cx = 50, far = 100 - inset;
+        return (
+          <path key={ri}
+            d={`M ${cx+g} ${inset} L ${far-r} ${inset} A ${r} ${r} 0 0 1 ${far} ${inset+r} L ${far} ${far-r} A ${r} ${r} 0 0 1 ${far-r} ${far} L ${inset+r} ${far} A ${r} ${r} 0 0 1 ${inset} ${far-r} L ${inset} ${inset+r} A ${r} ${r} 0 0 1 ${inset+r} ${inset} L ${cx-g} ${inset}`}
+            fill="none" stroke={color} strokeWidth="6" strokeLinecap="round"
+            vectorEffect={uniformStroke ? "non-scaling-stroke" : undefined} />
+        );
+      })}
+    </svg>
   );
 }
 
@@ -4195,6 +4279,7 @@ function MonthGrid({ year, month, events, calendars, patterns, patternOverrides,
         const dayTo = new Date(date); dayTo.setHours(23,59,59,999);
         const dayEvs = expandEvents(events, dayFrom, dayTo).filter(e => sameDay(e.start, date) || (e.allDay && e.start <= dayTo && e.end >= dayFrom));
         const dots = dayEvs.slice(0,3).map(e => { const cal = calendars.find(cc => cc.id===e.calendarId); return e.color || cal?.color||"#888"; });
+        const extraEventCount = Math.max(0, dayEvs.length - 3);
         const hasHideOverride = c.curr && patterns && patterns.some(p => { const oKey = p.id+":"+date.getFullYear()+"-"+date.getMonth()+"-"+date.getDate(); return patternOverrides && patternOverrides.has(oKey); });
         const bgTint = !majorColor && rotColors.length>0 ? rotColors[0]+"12" : undefined;
         const busyScore = c.curr && !majorColor && rotColors.length===0 ? getBusyScore(date, events) : 0;
@@ -4227,10 +4312,10 @@ function MonthGrid({ year, month, events, calendars, patterns, patternOverrides,
             {hasHideOverride && <div style={{ position:"absolute", top:2, right:3, width:5, height:5, borderRadius:"50%", background:"#f87171", zIndex:3, pointerEvents:"none" }} />}
             {/* Holiday H badge — top-left, zIndex 7 so it's above all rings and stripes */}
             {cellHoliday && (
-              <div style={{ position:"absolute", top:2, left:2, width:11, height:11, borderRadius:3,
+              <div style={{ position:"absolute", top:2, left:2, width:15, height:15, borderRadius:3,
                 background:cellHoliday.color, zIndex:7, pointerEvents:"none",
                 display:"flex", alignItems:"center", justifyContent:"center" }}>
-                <span style={{ fontSize:"0.6875rem", fontWeight:900, color:"#000", lineHeight:1 }}>H</span>
+                <span style={{ fontSize:"0.8125rem", fontWeight:900, color:"#000", lineHeight:1 }}>H</span>
               </div>
             )}
             {/* Diagonal stripe for major events */}
@@ -4239,21 +4324,19 @@ function MonthGrid({ year, month, events, calendars, patterns, patternOverrides,
                 background:`repeating-linear-gradient(45deg, ${majorColor}40 0px, ${majorColor}40 3px, transparent 3px, transparent 9px)`,
                 border:`1.5px solid ${majorColor}77` }} />
             )}
-            {/* Pattern rings — always show, even on major event days */}
-            {rotColors.slice(0,3).map((color, ri) => {
-              const inset = 1+ri*4;
-              return <div key={ri} style={{ position:"absolute", top:inset, left:inset, right:inset, bottom:inset, border:"2px solid "+color, borderRadius:6-ri, pointerEvents:"none", zIndex:2,
-                WebkitMaskImage:"linear-gradient(to right, black 0%, black 30%, transparent 30%, transparent 70%, black 70%, black 100%), linear-gradient(to bottom, black 0%, black 100%)",
-                WebkitMaskSize:"100% 8px, 100% 100%", WebkitMaskPosition:"0 0, 0 0", WebkitMaskRepeat:"no-repeat", WebkitMaskComposite:"destination-in",
-                maskImage:"linear-gradient(to right, black 0%, black 30%, transparent 30%, transparent 70%, black 70%, black 100%), linear-gradient(to bottom, black 0%, black 100%)",
-                maskSize:"100% 8px, 100% 100%", maskPosition:"0 0, 0 0", maskRepeat:"no-repeat", maskComposite:"intersect" }} />;
-            })}
+            {/* Pattern rings — concentric, parallel to cell edge, legend-style */}
+            <PatternRings colors={rotColors} />
             {/* Color tag centered above the day number */}
             {majorColor && (
               <div style={{ position:"absolute", top:3, left:"50%", transform:"translateX(-50%)", width:8, height:3, borderRadius:2, background:majorColor, pointerEvents:"none", zIndex:4 }} />
             )}
             <div className="cal-day-num">{c.day}</div>
-            {dots.length > 0 && <div className="cal-dots">{dots.map((color,di) => <div key={di} className="cal-dot" style={{ background:color }} />)}</div>}
+            {dots.length > 0 && (
+              <div className="cal-dots">
+                {dots.map((color,di) => <div key={di} className="cal-dot" style={{ background:color }} />)}
+                {extraEventCount > 0 && <span className="cal-dot-more">+{extraEventCount}</span>}
+              </div>
+            )}
             {c.curr && (() => { const nk=date.getFullYear()+"-"+date.getMonth()+"-"+date.getDate(); return dayNotes[nk] ? <div style={{ width:4, height:4, borderRadius:"50%", background:"var(--accent2)", marginTop:1 }} /> : null; })()}
             {isGhostDay && (
               <div style={{
@@ -4266,9 +4349,9 @@ function MonthGrid({ year, month, events, calendars, patterns, patternOverrides,
             )}
             {majorPreviewColor && (
               <div style={{
-                position:"absolute", inset:0, borderRadius:8, pointerEvents:"none", zIndex:3,
+                position:"absolute", inset:0, borderRadius:8, pointerEvents:"none", zIndex:0,
                 background:`repeating-linear-gradient(45deg, ${majorPreviewColor}55 0px, ${majorPreviewColor}55 3px, transparent 3px, transparent 9px)`,
-                border:`2px dashed ${majorPreviewColor}`,
+                border:`1.5px solid ${majorPreviewColor}77`,
                 animation: "ghostPulse 1.5s ease-in-out infinite"
               }} />
             )}
@@ -6555,8 +6638,8 @@ const TOUR_CARDS = [
     body: "Offshore rotations, nursing shifts, alternating custody weekends, split weeks, the 1st and 3rd Monday of every month — if it repeats, it belongs here. Open the Patterns tab here.",
   },
   {
-    target: "nav-calendar",
-    placement: "above",
+    target: "major",
+    placement: "below",
     icon: "pin",
     title: "Big days, not just meetings",
     tag: "Wedding in 153 days. Vacation in 2 weeks. Birthday tomorrow.",
@@ -6694,11 +6777,17 @@ function CoachmarkTour({ tourRefs, onClose }) {
     setTimeout(onClose, 220);
   };
 
-  // Measure target element whenever idx changes, on resize, on scroll
+  // Measure target element whenever idx changes, on resize, on scroll.
+  // If a target doesn't exist in the current layout (e.g. nav-calendar in split
+  // mode), auto-advance rather than killing the tour.
   React.useEffect(() => {
     const measure = () => {
       const el = tourRefs.current[t.target];
-      if (!el) { setRect(null); return; }
+      if (!el || el.getClientRects().length === 0) {
+        if (idx < cards.length - 1) setIdx(idx + 1);
+        else handleClose();
+        return;
+      }
       const r = el.getBoundingClientRect();
       setRect({ left: r.left, top: r.top, width: r.width, height: r.height });
     };
@@ -6711,7 +6800,7 @@ function CoachmarkTour({ tourRefs, onClose }) {
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);
     };
-  }, [idx, t.target, tourRefs]);
+  }, [idx, t.target, tourRefs, cards.length]);
 
   if (!rect) return null;
 
@@ -7213,7 +7302,7 @@ input, textarea, select { font-size: max(16px, 1rem) !important; }
   .desktop-mode .fab { right: 40px; }
 }
 /* ── SPLIT MODE ─ calendar always visible on the right ─────────────────── */
-.split-mode.app { max-width: none; margin: 0; padding: 0 0 0 72px; display: grid; grid-template-columns: minmax(320px, 35fr) 65fr; column-gap: 0; min-height: 100vh; }
+.split-mode.app { max-width: none; margin: 0; padding: 0 0 0 72px; display: grid; grid-template-columns: minmax(320px, 35fr) 65fr; grid-auto-flow: dense; column-gap: 0; min-height: 100vh; }
 .split-mode .bottom-nav { display: none; }
 .split-mode .screen { padding: 40px 32px 40px; max-width: none; overflow-y: auto; max-height: 100vh; }
 .split-mode .fab { display: none; } /* replaced by a cleaner + button in the sidebar */
@@ -7232,6 +7321,10 @@ input, textarea, select { font-size: max(16px, 1rem) !important; }
 /* Right calendar panel */
 .split-calendar-panel { grid-column: 2; border-left: 1px solid var(--border); background: var(--bg); overflow-y: auto; max-height: 100vh; padding: 32px 32px 40px; }
 .split-calendar-panel .screen { padding: 0; max-height: none; overflow-y: visible; }
+.split-mode .cal-grid { max-width: 820px; margin-left: auto; margin-right: auto; }
+/* Logo eyes flip color with theme — black on light bg, white on dark bg */
+.daytu-logo-eye { fill: #ffffff; }
+.light-mode .daytu-logo-eye { fill: #000000; }
 /* The + button inside the split sidebar */
 .split-add-btn { width: 44px; height: 44px; border-radius: 12px; background: var(--accent); border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(124,106,247,0.4); transition: transform .15s; margin-top: 8px; }
 .split-add-btn:hover { transform: scale(1.05); }
@@ -7267,8 +7360,9 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); -web
 .cal-cell.selected { background: var(--surface2); }
 .cal-cell.other-month .cal-day-num { color: var(--muted); opacity: 0.4; }
 .cal-day-num { font-size: 0.875rem; font-weight: 600; line-height: 1; color: var(--text); }
-.cal-dots { display: flex; gap: 2px; margin-top: 3px; flex-wrap: wrap; justify-content: center; max-width: 28px; }
-.cal-dot { width: 5px; height: 5px; border-radius: 50%; }
+.cal-dots { display: flex; gap: 3px; margin-top: 10px; flex-wrap: wrap; justify-content: center; align-items: center; max-width: 40px; align-self: center; }
+.cal-dot { width: 7px; height: 7px; border-radius: 50%; }
+.cal-dot-more { font-size: 0.625rem; font-weight: 700; color: var(--muted); line-height: 1; letter-spacing: -0.5px; }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: none; border-radius: 10px; font-family: var(--font); font-weight: 500; cursor: pointer; transition: all .15s; }
 .btn-primary { background: var(--accent); color: white; padding: 12px 20px; font-size: 0.9375rem; width: 100%; border-radius: 12px; }
 .btn-primary:hover { opacity: 0.9; }
