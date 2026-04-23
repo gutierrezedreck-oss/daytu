@@ -55,7 +55,7 @@ const seed = {
       start: new Date(y, m, d + dayOffset, h, min),
       end: new Date(y, m, d + dayOffset, h, min + lenMin),
     });
-    const base = { allDay: false, visibility: "private", groupIds: [], reminder: "15", frequency: "none", location: "", color: null, url: "", attendees: [], pinned: false, notes: "" };
+    const base = { allDay: false, visibility: "private", groupIds: [], reminder: "15", frequency: "none", location: "", color: null, url: "", attendees: [], pinned: false, important: false, notes: "" };
     return [
       // ── TODAY ──
       { id: "e1", title: "Morning Run", calendarId: "c1", ...base, ...mk(0, 7, 0, 45), location: "Riverside Park", notes: "5k loop", reminder: "10" },
@@ -66,7 +66,7 @@ const seed = {
 
       // ── TOMORROW ──
       { id: "e6", title: "Morning Run", calendarId: "c1", ...base, ...mk(1, 7, 0, 45), location: "Riverside Park" },
-      { id: "e7", title: "Dentist appointment", calendarId: "c1", ...base, ...mk(1, 10, 0, 45), location: "Dr. Patel · 210 Oak Ave", notes: "Cleaning", reminder: "60" },
+      { id: "e7", title: "Dentist appointment", calendarId: "c1", ...base, ...mk(1, 10, 0, 45), location: "Dr. Patel · 210 Oak Ave", notes: "Cleaning", reminder: "60", important: true, pinned: true },
       { id: "e8", title: "Project Review", calendarId: "c2", ...base, ...mk(1, 14, 0, 90), notes: "Quarterly check-in", visibility: "groups", groupIds: ["g2"], attendees: ["Riley", "Sam", "Jordan"], url: "https://zoom.us/j/123456789" },
 
       // ── DAY AFTER ──
@@ -372,6 +372,20 @@ const Icon = {
   flag: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>,
   moon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
 };
+
+function ImportantBadge({ size = 14, color = "#f59e0b", style }) {
+  return (
+    <span aria-label="Important" style={{
+      display: "inline-flex", alignItems: "center", justifyContent: "center",
+      width: size, height: size, borderRadius: "50%",
+      background: color, color: "white",
+      fontSize: Math.max(7, Math.round(size * 0.8)) + "px",
+      fontWeight: 900, lineHeight: 1, flexShrink: 0,
+      letterSpacing: "-0.5px", verticalAlign: "middle",
+      ...style,
+    }}>!</span>
+  );
+}
 
 // ── LOCALSTORAGE HELPERS ─────────────────────────────────
 const LS_KEY = "daytu_v1";
@@ -874,8 +888,13 @@ export default function App() {
     return () => mq.removeEventListener("change", handler);
   }, [themeMode]);
   const [homeOrder, setHomeOrder] = useState(() => {
-    const stored = (_ls?.homeOrder ?? ["shiftstatus","status","pinned","nextup","major","freetime"]).filter(k => k !== "today");
-    return stored.includes("shiftstatus") ? stored : ["shiftstatus", ...stored];
+    const stored = (_ls?.homeOrder ?? ["shiftstatus","status","important","pinned","nextup","major","freetime"]).filter(k => k !== "today");
+    const withShift = stored.includes("shiftstatus") ? stored : ["shiftstatus", ...stored];
+    // Inject "important" just above "pinned" for users whose stored order predates this section.
+    if (withShift.includes("important")) return withShift;
+    const pinIdx = withShift.indexOf("pinned");
+    if (pinIdx === -1) return [...withShift, "important"];
+    return [...withShift.slice(0, pinIdx), "important", ...withShift.slice(pinIdx)];
   });
   const [dayPopup, setDayPopup] = useState(null);
   // Home page: collapse the major-events stack when there are more than a couple
@@ -905,6 +924,18 @@ export default function App() {
   const [holidayCountries, setHolidayCountries] = useState(() => new Set(_ls?.holidayCountries ?? ["US","GLOBAL"]));
   const [findTimeGroup, setFindTimeGroup] = useState(null); // groupId or null
   const [pinnedEvents, setPinnedEvents] = useState(() => new Set(_ls?.pinnedEvents ?? seed.events.filter(e=>e.pinned).map(e=>e.id)));
+  // Dismissal keys are `<baseEventId>:<YYYY-MM-DD>` so recurring occurrences dismiss individually.
+  const [dismissedImportantEvents, setDismissedImportantEvents] = useState(() => new Set(_ls?.dismissedImportantEvents ?? []));
+  const [importantExpanded, setImportantExpanded] = useState(false);
+  const dismissImportantKey = (ev) => {
+    const d = ev.start;
+    const pad = n => String(n).padStart(2,"0");
+    return baseEventId(ev.id) + ":" + d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate());
+  };
+  const dismissImportant = (ev) => {
+    const k = dismissImportantKey(ev);
+    setDismissedImportantEvents(prev => { const n = new Set(prev); n.add(k); return n; });
+  };
   const [dayNotes, setDayNotes] = useState(() => _ls?.dayNotes ?? {});
   const [editingNoteKey, setEditingNoteKey] = useState(null);
   const [hiddenDayExpanded, setHiddenDayExpanded] = useState(false);
@@ -986,6 +1017,7 @@ export default function App() {
   const openEvent = (ev) => { setActiveEvent(ev); setSheet("eventDetail"); };
   const openEditEvent = (ev) => { setActiveEvent(ev); setSheet("editEvent"); };
   const openNewEvent = () => setSheet("newEvent");
+  const openNewImportantEvent = () => setSheet("newImportantEvent");
   // Double-tap/click on a calendar cell opens a small chooser — event vs major event
   const openAddChooser = (date) => { setSelectedDate(date); setSheet("addChooser"); };
   const openEditGroup = (g) => { setActiveGroup(g); setSheet("editGroup"); };
@@ -1015,6 +1047,7 @@ export default function App() {
     setFriends([]);
     setActivityFeed([]);
     setPinnedEvents(new Set());
+    setDismissedImportantEvents(new Set());
     setHiddenCalendars(new Set());
     setHiddenGroups(new Set());
     setDayNotes({});
@@ -1041,12 +1074,13 @@ export default function App() {
     setActivityFeed([]);
     setFeedSeenAt(new Date());
     setPinnedEvents(new Set());
+    setDismissedImportantEvents(new Set());
     setHiddenCalendars(new Set());
     setHiddenGroups(new Set());
     setHolidayCountries(new Set(["us"]));
     setDayNotes({});
     setShiftOverrides(new Set());
-    setHomeOrder(["shiftstatus","status","pinned","nextup","major","freetime"]);
+    setHomeOrder(["shiftstatus","status","important","pinned","nextup","major","freetime"]);
     setThemeMode("auto");
     setUserProfile({ name: "Alex Morgan", email: "", handle: "", defaultCalendar: "c1", defaultReminder: "15", avatar: null, badges: { friendRequests: true, feed: true, todayEvents: true } });
     // Trigger onboarding to run fresh
@@ -1078,6 +1112,7 @@ export default function App() {
         customColorRecents,
         customColorFavorites,
         pinnedEvents:     [...pinnedEvents],
+        dismissedImportantEvents: [...dismissedImportantEvents],
         hiddenCalendars:  [...hiddenCalendars],
         hiddenGroups:     [...hiddenGroups],
         holidayCountries: [...holidayCountries],
@@ -1092,7 +1127,7 @@ export default function App() {
   }, [events, calendars, groups, groupMembers, shifts, majorEvents, friends,
       activityFeed, feedSeenAt, onboardingActive, onboardingCompletedAt,
       customColorRecents, customColorFavorites,
-      pinnedEvents, hiddenCalendars, hiddenGroups, holidayCountries,
+      pinnedEvents, dismissedImportantEvents, hiddenCalendars, hiddenGroups, holidayCountries,
       dayNotes, homeOrder, themeMode, weekLayout, textSize, highContrast, viewMode, mapProvider, recentSearches, userProfile, shiftTimeOverrides, shiftNoticeDismissed, timeFormat, dismissedPlaceholders]);
   const openNewCalendar  = () => { setActiveCalendar(null); setSheet("editCalendar"); };
   const openEditCalendar = (cal) => { setActiveCalendar(cal); setSheet("editCalendar"); };
@@ -1106,7 +1141,9 @@ export default function App() {
   };
 
   const addEvent = (ev) => {
-    setEvents(prev => [...prev, { ...ev, id: "e" + uid() }]);
+    const newId = "e" + uid();
+    setEvents(prev => [...prev, { ...ev, id: newId }]);
+    if (ev.important) setPinnedEvents(prev => { const n = new Set(prev); n.add(newId); return n; });
     (ev.groupIds||[]).forEach(gid => addActivity(gid, "added", ev.title, ev.start));
     closeSheet();
     showToast("Event created");
@@ -1139,6 +1176,17 @@ export default function App() {
   };
   const updateEvent = (ev, opts = {}) => {
     const base = baseEventId(ev.id);
+    // Sync pin state when the important flag flips. ON → auto-pin; OFF after
+    // being ON → auto-unpin. Manual pins on non-important events are preserved.
+    const wasImportant = !!events.find(e => e.id === base)?.important;
+    const nowImportant = !!ev.important;
+    if (wasImportant !== nowImportant) {
+      setPinnedEvents(prev => {
+        const n = new Set(prev);
+        if (nowImportant) n.add(base); else n.delete(base);
+        return n;
+      });
+    }
     // Scope: "instance" writes an override for a single occurrence; "series" (default) updates the whole event.
     if (opts.scope === "instance" && opts.dateKey) {
       // Series-level fields (frequency, monthDays, overrides, id) must not leak into a per-date override.
@@ -2160,7 +2208,8 @@ export default function App() {
                         <div className="event-dot" style={{ background: calForCalendar(ev.calendarId).color || "#888" }} />
                         <div className="event-pill-info">
                           <div className="event-pill-title">
-                            {ev.pinned && <span style={{ display:"inline-flex", width:11, height:11, color:"#f59e0b", marginRight:4, verticalAlign:"middle" }}>{Icon.pin2}</span>}
+                            {ev.important && <ImportantBadge size={15} color={calForCalendar(ev.calendarId).color} style={{ marginRight:4 }} />}
+                            {ev.pinned && !ev.important && <span style={{ display:"inline-flex", width:11, height:11, color:"#f59e0b", marginRight:4, verticalAlign:"middle" }}>{Icon.pin2}</span>}
                             {ev.title}
                           </div>
                           <div className="event-pill-time">Event · {fmtDate(ev.start)} · {ev.allDay ? "All day" : fmtTime(ev.start)}</div>
@@ -2573,8 +2622,103 @@ export default function App() {
                 );
               }
 
+              if (id === "important") {
+                // Auto-hide once the event's day has passed; dismissal via X is per-occurrence.
+                const startOfToday = new Date(); startOfToday.setHours(0,0,0,0);
+                const important = visibleEvents.filter(e => {
+                  if (!e.important) return false;
+                  if (dismissedImportantEvents.has(dismissImportantKey(e))) return false;
+                  const lastDay = new Date(e.allDay ? e.end : e.start); lastDay.setHours(0,0,0,0);
+                  return lastDay >= startOfToday;
+                }).sort((a,b)=>a.start-b.start);
+                if (important.length === 0) return null;
+                const COLLAPSE_THRESHOLD = 2;
+                const canCollapse = important.length > COLLAPSE_THRESHOLD;
+                const shown = canCollapse && !importantExpanded ? important.slice(0, COLLAPSE_THRESHOLD) : important;
+                const peek = canCollapse && !importantExpanded ? important.slice(COLLAPSE_THRESHOLD, COLLAPSE_THRESHOLD + 2) : [];
+                const hiddenCount = important.length - shown.length;
+                return (
+                  <div key="important" style={{ marginBottom:4 }}>
+                    <div className="section-label" style={{ display:"flex", alignItems:"center", gap:6 }}>
+                      <ImportantBadge size={12} /> Important
+                    </div>
+                    {shown.map(ev => {
+                      const cal = calForCalendar(ev.calendarId);
+                      const col = cal?.color || "#f59e0b";
+                      const isMultiDay = ev.allDay && !sameDay(ev.start, ev.end);
+                      return (
+                        <div key={ev.id} onClick={() => openEvent(ev)}
+                          style={{
+                            position:"relative",
+                            display:"flex", alignItems:"stretch", gap:10,
+                            background: col+"18",
+                            border: "1px solid "+col+"55",
+                            borderLeft: "4px solid "+col,
+                            borderRadius:10, padding:"10px 12px", marginBottom:8,
+                            cursor:"pointer",
+                          }}>
+                          <button onClick={(e) => { e.stopPropagation(); dismissImportant(ev); }}
+                            aria-label="Dismiss reminder"
+                            style={{ position:"absolute", top:6, right:6,
+                              width:22, height:22,
+                              background:"transparent", border:"none",
+                              color: col, cursor:"pointer", padding:0,
+                              display:"flex", alignItems:"center", justifyContent:"center" }}>
+                            <span style={{ display:"flex", width:13, height:13 }}>{Icon.close}</span>
+                          </button>
+                          <div style={{ display:"flex", alignItems:"center" }}>
+                            <ImportantBadge size={16} color={col} />
+                          </div>
+                          <div style={{ flex:1, minWidth:0, paddingRight:26 }}>
+                            <div style={{ fontSize:"0.875rem", fontWeight:700, color:col,
+                              whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                              {ev.title}
+                            </div>
+                            <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:2, fontFamily:"var(--mono)" }}>
+                              {fmtDate(ev.start)} · {ev.allDay ? (isMultiDay ? fmtDateShort(ev.start)+" – "+fmtDateShort(ev.end) : "All day") : fmtTime(ev.start)+" – "+fmtTime(ev.end)}
+                              {ev.location && ev.location.trim() ? " · " + ev.location.slice(0,24) + (ev.location.length>24?"…":"") : ""}
+                            </div>
+                          </div>
+                          <div style={{ display:"flex", alignItems:"center", fontSize:"0.6875rem", color:col, fontWeight:600, paddingRight:26 }}>
+                            {cal?.name}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {peek.length > 0 && (
+                      <div style={{ position:"relative", height: peek.length * 8 + 4, marginTop: -6, marginBottom: 10 }}>
+                        {peek.map((pev, pi) => {
+                          const pc = calForCalendar(pev.calendarId)?.color || "#f59e0b";
+                          return (
+                            <div key={pev.id+"-peek"} onClick={() => setImportantExpanded(true)}
+                              style={{ position:"absolute", top: pi*6, left:(pi+1)*8, right:(pi+1)*8,
+                                height: 10, borderRadius: 8, cursor:"pointer",
+                                background: pc+"33",
+                                border:"1px solid "+pc+"55" }} />
+                          );
+                        })}
+                      </div>
+                    )}
+                    {canCollapse && (
+                      <button onClick={() => setImportantExpanded(v => !v)}
+                        style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"center",
+                          gap:6, padding:"8px 12px", marginBottom:12,
+                          background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10,
+                          color:"var(--muted)", fontFamily:"var(--font)", fontSize:"0.75rem", fontWeight:600,
+                          cursor:"pointer" }}>
+                        {importantExpanded ? "Show less" : `Show ${hiddenCount} more`}
+                        <span style={{ display:"inline-flex", width:14, height:14,
+                          transform: importantExpanded ? "rotate(-90deg)" : "rotate(90deg)", transition:"transform .15s" }}>
+                          {Icon.chevR}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                );
+              }
               if (id === "pinned") {
-                const pinned = visibleEvents.filter(e => pinnedEvents.has(baseEventId(e.id))).sort((a,b)=>a.start-b.start);
+                // Exclude important events — they live in their own section now.
+                const pinned = visibleEvents.filter(e => pinnedEvents.has(baseEventId(e.id)) && !e.important).sort((a,b)=>a.start-b.start);
                 if (pinned.length === 0) return null;
                 return (
                   <div key="pinned" style={{ marginBottom:4 }}>
@@ -2665,6 +2809,7 @@ export default function App() {
                               <div style={{ fontSize:"0.875rem", fontWeight:600, whiteSpace:"nowrap",
                                 overflow:"hidden", textOverflow:"ellipsis", flex:1, minWidth:0,
                                 textDecoration: isPast ? "line-through" : "none" }}>
+                                {ev.important && <ImportantBadge size={15} color={cal.color} style={{ marginRight:5 }} />}
                                 {ev.title}
                               </div>
                               <div style={{ fontSize:"0.6875rem", fontWeight:700,
@@ -4142,7 +4287,7 @@ export default function App() {
                   <div style={{ fontSize:"0.75rem", color:"var(--muted)", margin:"12px 0" }}>Tap an item to select it, then tap another to swap positions.</div>
                   <TapSwapList
                     items={homeOrder}
-                    labels={{ shiftstatus:"Shifts on/off", major:"Major Events", pinned:"Pinned", nextup:"Later Today", status:"Now", freetime:"Free Slots" }}
+                    labels={{ shiftstatus:"Shifts on/off", major:"Major Events", important:"Important", pinned:"Pinned", nextup:"Later Today", status:"Now", freetime:"Free Slots" }}
                     onReorder={setHomeOrder}
                   />
                 </div>
@@ -4309,9 +4454,14 @@ export default function App() {
               right: isSplit ? "auto" : isDesktop ? (typeof window !== "undefined" && window.innerWidth >= 1200 ? "calc(50% - 600px + 40px)" : 40) : "calc(50% - 210px + 16px)",
               display:"flex", flexDirection:"column", gap:10, alignItems: isSplit ? "flex-start" : "flex-end", zIndex:98 }}>
               <div onClick={() => { setFabOpen(false); openNewMajorEvent(); }}
-                style={{ display:"flex", alignItems:"center", gap:10, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"10px 16px", cursor:"pointer", boxShadow:"0 4px 20px rgba(0,0,0,0.3)", animation:"fadeSlideUp .15s ease" }}>
+                style={{ display:"flex", alignItems:"center", gap:10, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"10px 16px", cursor:"pointer", boxShadow:"0 4px 20px rgba(0,0,0,0.3)", animation:"fadeSlideUp .1s ease" }}>
                 <span style={{ fontSize:"0.8125rem", fontWeight:700, color:"var(--text)", whiteSpace:"nowrap" }}>Major Event</span>
-                <div style={{ width:10, height:10, borderRadius:"50%", background:"#f59e0b", flexShrink:0 }} />
+                <span style={{ display:"flex", width:14, height:14, color:"#f59e0b", flexShrink:0 }}>{Icon.star}</span>
+              </div>
+              <div onClick={() => { setFabOpen(false); openNewImportantEvent(); }}
+                style={{ display:"flex", alignItems:"center", gap:10, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"10px 16px", cursor:"pointer", boxShadow:"0 4px 20px rgba(0,0,0,0.3)", animation:"fadeSlideUp .15s ease" }}>
+                <span style={{ fontSize:"0.8125rem", fontWeight:700, color:"var(--text)", whiteSpace:"nowrap" }}>Important Event</span>
+                <ImportantBadge size={14} />
               </div>
               <div onClick={() => { setFabOpen(false); openNewEvent(); }}
                 style={{ display:"flex", alignItems:"center", gap:10, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"10px 16px", cursor:"pointer", boxShadow:"0 4px 20px rgba(0,0,0,0.3)", animation:"fadeSlideUp .2s ease" }}>
@@ -4379,6 +4529,11 @@ export default function App() {
                 <span style={{ display:"flex", width:16, height:16 }}>{Icon.calendar}</span>
                 Add event
               </button>
+              <button className="btn btn-secondary" onClick={() => setSheet("newImportantEvent")}
+                style={{ width:"100%", marginTop:8, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                <ImportantBadge size={16} />
+                Add important event
+              </button>
               <button className="btn btn-secondary" onClick={() => setSheet("newMajorEvent")}
                 style={{ width:"100%", marginTop:8, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
                 <span style={{ display:"flex", width:16, height:16 }}>{Icon.star}</span>
@@ -4404,6 +4559,7 @@ export default function App() {
         {sheet === "majorEventDetail" && activeMajorEvent && <MajorEventDetailSheet me={activeMajorEvent} groups={groups} onEdit={() => openEditMajorEvent(activeMajorEvent)} onDelete={deleteMajorEvent} onDuplicate={duplicateMajorEvent} onPin={toggleMajorPin} onClose={closeSheet} mapProvider={mapProvider} />}
         {sheet === "editMajorEvent" && activeMajorEvent && <MajorEventSheet existing={activeMajorEvent} onPreview={setPreviewMajor} groups={groups} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateMajorEvent} onDelete={deleteMajorEvent} onClose={() => { setPreviewMajor(null); closeSheet(); }} />}
         {sheet === "newEvent" && <NewEventSheet onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} defaultCalendar={userProfile.defaultCalendar} defaultReminder={userProfile.defaultReminder} />}
+        {sheet === "newImportantEvent" && <NewEventSheet onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} defaultCalendar={userProfile.defaultCalendar} defaultReminder={userProfile.defaultReminder} defaultImportant={true} />}
         {sheet === "editEvent" && activeEvent && <NewEventSheet existing={activeEvent} onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateEvent} onDelete={deleteEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} />}
         {sheet === "eventDetail" && activeEvent && <EventDetailSheet ev={activeEvent} cal={calForCalendar(activeEvent.calendarId)} groups={groups} onDelete={deleteEvent} onEdit={() => openEditEvent(activeEvent)} onClose={closeSheet} onDuplicate={duplicateEvent} onPin={togglePin} isPinned={pinnedEvents.has(baseEventId(activeEvent.id))} mapProvider={mapProvider} />}
         {sheet === "newGroup" && <NewGroupSheet onSave={addGroup} onClose={closeSheet} />}
@@ -4536,7 +4692,10 @@ function DayView({ date, events, calendars, onEventClick, majorEvents=[], holida
                 <div key={ev.id} onClick={() => onEventClick(ev)}
                   style={{ background:col+"22", borderLeft:"3px solid "+col, borderRadius:6,
                     padding:"6px 10px", cursor:"pointer", minWidth:80 }}>
-                  <div style={{ fontSize:"0.75rem", fontWeight:700, color:col }}>{ev.title}</div>
+                  <div style={{ fontSize:"0.75rem", fontWeight:700, color:col, display:"flex", alignItems:"center", gap:5 }}>
+                    {ev.important && <ImportantBadge size={14} color={cal.color} />}
+                    <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{ev.title}</span>
+                  </div>
                 </div>
               );
             })}
@@ -4768,6 +4927,7 @@ function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverride
                       overflow:"hidden", textOverflow:"ellipsis" }}>
                       {timeLabel}
                     </div>
+                    {ev.important && <ImportantBadge size={12} color={cal.color} style={{ marginRight:3 }} />}
                     {ev.title}
                   </div>
                 );
@@ -4906,6 +5066,7 @@ function WeekView({ weekDays, events, calendars, selectedDate, onSelect, onQuick
                     style={{ background:col+"25", borderLeft:"2px solid "+col, borderRadius:3,
                       fontSize:"0.6875rem", fontWeight:700, color:col, padding:"2px 3px", marginBottom:2,
                       cursor:"pointer", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                    {ev.important && <ImportantBadge size={11} color={cal.color} style={{ marginRight:3 }} />}
                     {ev.title}
                   </div>
                 );
@@ -4959,7 +5120,10 @@ function WeekView({ weekDays, events, calendars, selectedDate, onSelect, onQuick
                     style={{ position:"absolute", top:topPx, left:2, right:2, height:heightPx,
                       borderRadius:6, background:col+"22", borderLeft:"3px solid "+col,
                       padding:"3px 5px", cursor:"pointer", pointerEvents:"all", overflow:"hidden" }}>
-                    <div style={{ fontSize:"0.6875rem", fontWeight:700, color:col, lineHeight:1.3, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{ev.title}</div>
+                    <div style={{ fontSize:"0.6875rem", fontWeight:700, color:col, lineHeight:1.3, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                      {ev.important && <ImportantBadge size={12} color={cal.color} style={{ marginRight:3 }} />}
+                      {ev.title}
+                    </div>
                     {heightPx > 30 && <div style={{ fontSize:"0.6875rem", color:col+"bb", marginTop:1, fontFamily:"var(--mono)" }}>{fmtTime(ev.start)}</div>}
                   </div>
                 );
@@ -5070,7 +5234,10 @@ function EventPill({ ev, cal, onClick, showDate, onDelete }) {
         )}
       <div className="event-dot" style={{ background: ev.color || cal.color || "#888" }} />
       <div className="event-pill-info">
-        <div className="event-pill-title">{ev.title}</div>
+        <div className="event-pill-title">
+          {ev.important && <ImportantBadge size={15} color={cal.color} style={{ marginRight:5 }} />}
+          {ev.title}
+        </div>
         <div className="event-pill-time">
           {ev.frequency && ev.frequency !== "none" && <span style={{ display:"inline-flex", width:11, height:11, color:"var(--accent2)", marginRight:4, verticalAlign:"middle" }}>{Icon.repeat}</span>}
           {showDate && <>{fmtDate(ev.start)} · </>}
@@ -5185,6 +5352,9 @@ function MonthGrid({ year, month, events, calendars, shifts, shiftOverrides, onL
         const dayFrom = new Date(date); dayFrom.setHours(0,0,0,0);
         const dayTo = new Date(date); dayTo.setHours(23,59,59,999);
         const dayEvs = expandEvents(events, dayFrom, dayTo).filter(e => sameDay(e.start, date) || (e.allDay && e.start <= dayTo && e.end >= dayFrom));
+        const firstImportant = dayEvs.find(e => e.important);
+        const hasImportant = !!firstImportant;
+        const importantColor = firstImportant ? (calendars.find(cc => cc.id===firstImportant.calendarId)?.color || "#f59e0b") : "#f59e0b";
         const dots = dayEvs.slice(0,3).map(e => { const cal = calendars.find(cc => cc.id===e.calendarId); return e.color || cal?.color||"#888"; });
         const extraEventCount = Math.max(0, dayEvs.length - 3);
         const hasHideOverride = c.curr && shifts && shifts.some(p => { const oKey = p.id+":"+date.getFullYear()+"-"+date.getMonth()+"-"+date.getDate(); return shiftOverrides && shiftOverrides.has(oKey); });
@@ -5253,10 +5423,19 @@ function MonthGrid({ year, month, events, calendars, shifts, shiftOverrides, onL
               <div style={{ position:"absolute", top:3, left:"50%", transform:"translateX(-50%)", width:8, height:3, borderRadius:2, background:majorColor, pointerEvents:"none", zIndex:4 }} />
             )}
             <div className="cal-day-num">{c.day}</div>
-            {dots.length > 0 && (
+            {dayEvs.length > 0 && (
               <div className="cal-dots">
-                {dots.map((color,di) => <div key={di} className="cal-dot" style={{ background:color }} />)}
-                {extraEventCount > 0 && <span className="cal-dot-more">+{extraEventCount}</span>}
+                {hasImportant ? (
+                  <>
+                    <ImportantBadge size={14} color={importantColor} />
+                    {dayEvs.length - 1 > 0 && <span className="cal-dot-more">+{dayEvs.length - 1}</span>}
+                  </>
+                ) : (
+                  <>
+                    {dots.map((color,di) => <div key={di} className="cal-dot" style={{ background:color }} />)}
+                    {extraEventCount > 0 && <span className="cal-dot-more">+{extraEventCount}</span>}
+                  </>
+                )}
               </div>
             )}
             {c.curr && (() => { const nk=date.getFullYear()+"-"+date.getMonth()+"-"+date.getDate(); return dayNotes[nk] ? <div style={{ width:4, height:4, borderRadius:"50%", background:"var(--accent2)", marginTop:1 }} /> : null; })()}
@@ -5834,7 +6013,7 @@ function CustomColorPopup({ current, recents, favorites, onPick, onToggleFavorit
   );
 }
 
-function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors, onSave, onDelete, onClose, defaultDate, defaultCalendar, defaultReminder, onPreview }) {
+function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors, onSave, onDelete, onClose, defaultDate, defaultCalendar, defaultReminder, defaultImportant=false, onPreview }) {
   const isEdit = !!existing;
   const pad = n => String(n).padStart(2,"0");
   const defaultStart = new Date(defaultDate); defaultStart.setHours(9,0);
@@ -5856,6 +6035,7 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
   const [attendeeInput, setAttendeeInput] = useState("");
   const [attendees, setAttendees] = useState(existing?.attendees??[]);
   const [eventColor, setEventColor] = useState(existing?.color??null);
+  const important = existing?.important ?? defaultImportant;
   const [showMore, setShowMore] = useState(isEdit); // show advanced fields when editing
 
   // Scope toggle for recurring-event occurrences: default to instance so an edit lands on
@@ -5873,7 +6053,7 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
     const [eh,emin] = endTime.split(":").map(Number);
     const start = new Date(sy,sm-1,sd, allDay?0:sh, allDay?0:smin);
     const end = new Date(ey,em-1,ed, allDay?23:eh, allDay?59:emin);
-    const saved = { title, calendarId:calId, start, end, allDay, notes, visibility, groupIds:selGroups, frequency, reminder, location, color:eventColor, url, attendees };
+    const saved = { title, calendarId:calId, start, end, allDay, notes, visibility, groupIds:selGroups, frequency, reminder, location, color:eventColor, url, attendees, important };
     if (frequency === "specific") saved.monthDays = monthDays;
     if (isEdit) {
       saved.id = existing.id;
@@ -5992,7 +6172,10 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
         <div className="sheet-handle" />
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
           <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0, flex:1 }}>
-            <div style={{ fontSize:"1rem", fontWeight:700, flexShrink:0 }}>{isEdit?"Edit Event":"New Event"}</div>
+            <div style={{ fontSize:"1rem", fontWeight:700, flexShrink:0, display:"flex", alignItems:"center", gap:6 }}>
+              {important && <ImportantBadge size={14} color={calColor} />}
+              {important ? (isEdit ? "Edit Important Event" : "New Important Event") : (isEdit ? "Edit Event" : "New Event")}
+            </div>
             <div style={{ fontSize:"0.8125rem", color:"var(--muted)", flexShrink:0 }}>→</div>
             {(() => {
               const activeCal = calendars.find(c => c.id === calId) || calendars[0];
@@ -7203,7 +7386,9 @@ function DayTimeline({ events, now, calendars, conflicts, onEventClick }) {
             return (
               <div key={ev.id} onClick={() => onEventClick(ev)}
                 style={{ background:col+"22", border:"1px solid "+col+"55", borderRadius:8,
-                  padding:"5px 10px", cursor:"pointer", fontSize:"0.75rem", fontWeight:600, color:col }}>
+                  padding:"5px 10px", cursor:"pointer", fontSize:"0.75rem", fontWeight:600, color:col,
+                  display:"inline-flex", alignItems:"center", gap:5 }}>
+                {ev.important && <ImportantBadge size={14} color={cal.color} />}
                 {ev.title}
               </div>
             );
@@ -7600,13 +7785,18 @@ function PreviewDoubleTap() {
             animation: "guideDoubleTap 2.4s ease-out infinite" }} />
         </div>
         <span style={{ fontSize: "1.25rem", color: "var(--muted)" }}>→</span>
-        <div style={{ width: 110, padding: "8px 10px", borderRadius: 10,
+        <div style={{ width: 120, padding: "8px 10px", borderRadius: 10,
           background: "var(--surface)", border: "1px solid var(--border)",
           animation: "guideSlideIn 2.4s ease-out infinite" }}>
           <div style={{ fontSize: "0.625rem", fontWeight: 700, color: "var(--text)", marginBottom: 5 }}>Add to Oct 12</div>
           <div style={{ height: 18, borderRadius: 5, background: "rgba(124,106,247,0.28)",
             display: "flex", alignItems: "center", paddingLeft: 6,
             fontSize: "0.5625rem", color: "var(--accent2)", fontWeight: 600, marginBottom: 3 }}>+ Event</div>
+          <div style={{ height: 18, borderRadius: 5, background: "var(--surface2)",
+            display: "flex", alignItems: "center", gap: 5, paddingLeft: 6,
+            fontSize: "0.5625rem", color: "var(--muted)", fontWeight: 600, marginBottom: 3 }}>
+            <ImportantBadge size={9} />Important event
+          </div>
           <div style={{ height: 18, borderRadius: 5, background: "var(--surface2)",
             display: "flex", alignItems: "center", paddingLeft: 6,
             fontSize: "0.5625rem", color: "var(--muted)", fontWeight: 600 }}>★ Major event</div>
@@ -8040,18 +8230,21 @@ function PreviewSkipAdd() {
 }
 
 function PreviewFab() {
-  // Mirrors the real FAB: 52×52 accent button with border-radius 16, plus icon,
-  // and a two-row menu stacked above (Major Event on top with orange dot,
-  // Event below with accent dot — label on the left, dot on the right).
   return (
-    <PreviewFrame height={150}>
-      <div style={{ position:"relative", width:200, height:125, display:"flex",
-        flexDirection:"column", alignItems:"flex-end", justifyContent:"flex-end", gap:8, paddingRight:6 }}>
+    <PreviewFrame height={175}>
+      <div style={{ position:"relative", width:210, height:155, display:"flex",
+        flexDirection:"column", alignItems:"flex-end", justifyContent:"flex-end", gap:6, paddingRight:6 }}>
         <div style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 12px",
           background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12,
           boxShadow:"0 4px 20px rgba(0,0,0,0.3)", animation:"guideSlideIn 2.4s ease-out infinite" }}>
           <span style={{ fontSize:"0.625rem", fontWeight:700, color:"var(--text)" }}>Major Event</span>
-          <div style={{ width:8, height:8, borderRadius:"50%", background:"#f59e0b" }} />
+          <span style={{ display:"flex", width:10, height:10, color:"#f59e0b" }}>{Icon.star}</span>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 12px",
+          background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12,
+          boxShadow:"0 4px 20px rgba(0,0,0,0.3)", animation:"guideSlideIn 2.4s ease-out infinite" }}>
+          <span style={{ fontSize:"0.625rem", fontWeight:700, color:"var(--text)" }}>Important Event</span>
+          <ImportantBadge size={10} />
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 12px",
           background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12,
@@ -8063,6 +8256,62 @@ function PreviewFab() {
           display:"flex", alignItems:"center", justifyContent:"center", color:"#fff",
           boxShadow:"0 4px 20px rgba(124,106,247,0.55)", transform:"rotate(45deg)" }}>
           <span style={{ display:"flex", width:20, height:20 }}>{Icon.plus}</span>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewImportantCard() {
+  const cal = "#ec4899";
+  return (
+    <PreviewFrame height={145}>
+      <div style={{ display:"flex", flexDirection:"column", gap:6, width:260 }}>
+        <div style={{ position:"relative", display:"flex", alignItems:"center", gap:8,
+          background: cal+"18", border:"1px solid "+cal+"55", borderLeft:"4px solid "+cal,
+          borderRadius:10, padding:"9px 10px" }}>
+          <span style={{ position:"absolute", top:4, right:6, display:"flex", width:10, height:10, color:cal }}>{Icon.close}</span>
+          <ImportantBadge size={14} color={cal} />
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:"0.75rem", fontWeight:700, color:cal }}>Doctor appointment</div>
+            <div style={{ fontSize:"0.625rem", color:"var(--muted)", marginTop:1, fontFamily:"var(--mono)" }}>Today · 2:00 – 3:00 PM</div>
+          </div>
+          <div style={{ fontSize:"0.625rem", color:cal, fontWeight:600, paddingRight:14 }}>Personal</div>
+        </div>
+        <div style={{ position:"relative", height:14, marginTop:-4 }}>
+          <div style={{ position:"absolute", top:0, left:8, right:8, height:10, borderRadius:8,
+            background:"#6366f133", border:"1px solid #6366f155" }} />
+          <div style={{ position:"absolute", top:5, left:16, right:16, height:9, borderRadius:7,
+            background:"#22c55e33", border:"1px solid #22c55e55" }} />
+        </div>
+        <div style={{ fontSize:"0.625rem", color:"var(--muted)", textAlign:"center", marginTop:2 }}>Show 2 more</div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewImportantForm() {
+  const cal = "#6366f1";
+  return (
+    <PreviewFrame height={120}>
+      <div style={{ width:260, display:"flex", flexDirection:"column", gap:8 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <ImportantBadge size={12} color={cal} />
+          <span style={{ fontSize:"0.8125rem", fontWeight:700, color:"var(--text)" }}>New Important Event</span>
+          <span style={{ fontSize:"0.75rem", color:"var(--muted)" }}>→</span>
+          <div style={{ display:"flex", alignItems:"center", gap:4, padding:"2px 7px", borderRadius:12,
+            background:cal+"22", border:`1px solid ${cal}55` }}>
+            <div style={{ width:5, height:5, borderRadius:"50%", background:cal }} />
+            <span style={{ fontSize:"0.625rem", fontWeight:600, color:cal }}>Personal</span>
+          </div>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8,
+          background:"var(--surface3)", borderRadius:8, padding:"7px 9px" }}>
+          <div style={{ width:3, alignSelf:"stretch", borderRadius:2, background:cal }} />
+          <span style={{ fontSize:"0.75rem", color:"var(--muted)" }}>What's happening?</span>
+        </div>
+        <div style={{ fontSize:"0.625rem", color:"var(--muted)", lineHeight:1.4 }}>
+          Same fields as a regular event — title, time, reminder, notes. The "!" is automatic.
         </div>
       </div>
     </PreviewFrame>
@@ -8560,6 +8809,8 @@ const GUIDE_PREVIEWS = {
   templates:       PreviewTemplates,
   skipAdd:         PreviewSkipAdd,
   fab:             PreviewFab,
+  importantCard:   PreviewImportantCard,
+  importantForm:   PreviewImportantForm,
   recurrence:      PreviewRecurrence,
   editRecurring:   PreviewEditRecurring,
   locationLink:    PreviewLocationLink,
@@ -8607,7 +8858,8 @@ function GuideSheet({ onClose, onStartTour }) {
       { title: "Today at a glance", body: "The top card shows what's happening now, what's up next, and any all-day items for today. It refreshes live.", preview: "todayCard" },
       { title: "Shift status banner", body: "When you're on shift or about to start one, Daytu surfaces it here with the shift name and time window. Dismissible for the day.", preview: "shiftBanner" },
       { title: "Major events countdown", body: "Upcoming big days — vacations, weddings, birthdays — stack here with a live countdown. Pin the most important to keep it on top.", preview: "countdown" },
-      { title: "Pinned events", body: "Events you've pinned sit at the top of each day so they don't get lost in a busy schedule.", preview: "pinned" },
+      { title: "Important events", body: "Appointments you can't afford to miss get their own section at the top of Home with an \"!\" badge in the calendar's color. Tap × to dismiss a reminder early; otherwise it auto-clears once the day ends. When you have more than two, the rest stack under a \"Show N more\" control.", preview: "importantCard" },
+      { title: "Pinned events", body: "Events you've pinned sit at the top of each day so they don't get lost in a busy schedule. Important events auto-pin — the Pinned section shows anything you've pinned manually outside of that.", preview: "pinned" },
       { title: "Free-time finder", body: "Tap the search icon and ask in plain English — \"free this weekend,\" \"next 2 hours,\" \"free Friday afternoon.\" It finds real gaps around your events, shifts, and major events.", preview: "freeTime" },
       { title: "Reorder cards", body: "Open Settings → Advanced → Home screen order. Tap a card to select it, then tap another to swap their positions — put what matters most to you first.", preview: "tapSwap" },
       { title: "Empty-state hints", body: "Before you've added a shift, major event, or pinned anything, a small prompt card offers to help you start. Each is dismissible independently.", preview: "emptyHint" },
@@ -8616,7 +8868,7 @@ function GuideSheet({ onClose, onStartTour }) {
     calendar: [
       { title: "Three views", body: "Day, Week, and Month. Tap any cell to preview the day below without leaving the current view.", preview: "threeViews" },
       { title: "Week has two layouts", body: "Columns — the whole week at a glance with an all-day strip across the top. Grid — precise time blocks for detailed planning. Switch with the toggle in the week header.", preview: "weekLayouts" },
-      { title: "Double-tap to add", body: "Double-tap any day cell to open the \"Add event / Add major event\" chooser, pre-filled with that date.", preview: "doubleTap" },
+      { title: "Double-tap to add", body: "Double-tap any day cell to open the Event / Important Event / Major Event chooser, pre-filled with that date.", preview: "doubleTap" },
       { title: "Long-press to tweak a shift day", body: "Long-press a cell to toggle a shift off for that day, override its hours just for that one date, or add an extra shift on a normally-off day.", preview: "longPress" },
       { title: "Diagonal stripes = major events", body: "Cells covered by a major event show a colored diagonal stripe so trips and multi-day events are obvious at a glance.", preview: "stripes" },
       { title: "Shift rings", body: "Concentric rings around a day number show which shifts apply, colored to match each shift pattern.", preview: "rings" },
@@ -8635,8 +8887,9 @@ function GuideSheet({ onClose, onStartTour }) {
       { title: "Free-time respects shifts", body: "\"When am I free?\" subtracts your working hours so you don't get false-positive openings during your pattern.", preview: "freeTime" },
     ],
     adding: [
-      { title: "+ floating button", body: "Bottom-right of the app. Opens a mini menu with Event and Major Event — the primary way to create anything.", preview: "fab" },
-      { title: "Double-tap a day", body: "Same chooser as the + button, but pre-filled with that specific date.", preview: "doubleTap" },
+      { title: "+ floating button", body: "Bottom-right of the app. Opens a mini menu with Event, Important Event, and Major Event — the primary way to create anything.", preview: "fab" },
+      { title: "Double-tap a day", body: "Same three-option chooser as the + button (Event, Important Event, Major Event), but pre-filled with that specific date.", preview: "doubleTap" },
+      { title: "Important events", body: "Pick \"Important Event\" from the + menu or double-tap chooser. The form is identical to a regular event — same title, time, reminder, notes — but the header reads \"New Important Event\" and the event is automatically pinned, flagged with a calendar-colored \"!\" on the calendar cell, and surfaced in the Important section on Home.", preview: "importantForm" },
       { title: "Title autocomplete", body: "Start typing a repeated event title and Daytu suggests it with the last-used calendar and color pre-filled. One tap fills everything.", preview: "autocomplete" },
       { title: "Pin an event", body: "From the event detail sheet. Pinned events stick to the top of the day's list and surface on Home.", preview: "pinned" },
       { title: "Recurrence", body: "None, daily, weekly, monthly, yearly — plus \"Specific days\" which lets you pick exact calendar dates per month for irregular schedules.", preview: "recurrence" },
