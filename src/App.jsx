@@ -5823,6 +5823,46 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
     });
   }, [startDate, startTime, endDate, endTime, allDay, allEvents, isEdit, existing]);
 
+  // Title autocomplete — group past events by normalized title so repeats
+  // remember the last-used calendar + color. Freq count breaks ties so
+  // "Morning Run" (used 20×) ranks above "Morning planning" (used once).
+  const titleHistory = useMemo(() => {
+    if (isEdit) return [];
+    const byTitle = new Map();
+    for (const ev of allEvents) {
+      const key = (ev.title || "").trim().toLowerCase();
+      if (!key) continue;
+      const t = ev.start instanceof Date ? ev.start.getTime() : 0;
+      const prior = byTitle.get(key);
+      if (!prior) {
+        byTitle.set(key, { title: ev.title.trim(), calendarId: ev.calendarId, color: ev.color || null, time: t, count: 1 });
+      } else {
+        prior.count += 1;
+        if (t > prior.time) { prior.time = t; prior.calendarId = ev.calendarId; prior.color = ev.color || null; prior.title = ev.title.trim(); }
+      }
+    }
+    return Array.from(byTitle.values()).sort((a, b) => b.count - a.count || b.time - a.time);
+  }, [allEvents, isEdit]);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(true);
+  const matchingSuggestions = useMemo(() => {
+    const q = title.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const out = [];
+    for (const h of titleHistory) {
+      const t = h.title.toLowerCase();
+      if (t === q) continue; // exact match already picked
+      if (t.startsWith(q) || t.includes(q)) out.push(h);
+      if (out.length >= 5) break;
+    }
+    return out;
+  }, [title, titleHistory]);
+  const applySuggestion = (s) => {
+    setTitle(s.title);
+    if (s.calendarId && calendars.find(c => c.id === s.calendarId)) setCalId(s.calendarId);
+    setEventColor(s.color);
+    setSuggestionsOpen(false);
+  };
+
   return (
     <div className="sheet-overlay" onClick={e => e.target===e.currentTarget&&onClose()}>
       <div className="sheet">
@@ -5871,10 +5911,31 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
         )}
 
         {/* Title */}
-        <div style={{ display:"flex", alignItems:"center", gap:8, background:"var(--surface2)", borderRadius:10, padding:"10px 12px", marginBottom:8 }}>
-          <div style={{ width:3, alignSelf:"stretch", borderRadius:2, background:eventColor||calColor, flexShrink:0 }} />
-          <input autoFocus placeholder="What's happening?" value={title} onChange={e=>setTitle(e.target.value)}
-            style={{ background:"none", border:"none", padding:0, fontSize:"0.9375rem", fontWeight:600, flex:1, color:"var(--text)", fontFamily:"var(--font)", outline:"none" }} />
+        <div style={{ marginBottom:8 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, background:"var(--surface2)", borderRadius:10, padding:"10px 12px" }}>
+            <div style={{ width:3, alignSelf:"stretch", borderRadius:2, background:eventColor||calColor, flexShrink:0 }} />
+            <input autoFocus placeholder="What's happening?" value={title}
+              onChange={e => { setTitle(e.target.value); setSuggestionsOpen(true); }}
+              style={{ background:"none", border:"none", padding:0, fontSize:"0.9375rem", fontWeight:600, flex:1, color:"var(--text)", fontFamily:"var(--font)", outline:"none" }} />
+          </div>
+          {suggestionsOpen && matchingSuggestions.length > 0 && (
+            <div style={{ marginTop:6, background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10, overflow:"hidden" }}>
+              {matchingSuggestions.map((s, i) => {
+                const cal = calendars.find(c => c.id === s.calendarId);
+                const dot = s.color || cal?.color || "var(--accent)";
+                return (
+                  <div key={i} onMouseDown={e => e.preventDefault()} onClick={() => applySuggestion(s)}
+                    style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 12px", cursor:"pointer",
+                      borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
+                    <div style={{ width:10, height:10, borderRadius:"50%", background:dot, flexShrink:0 }} />
+                    <div style={{ fontSize:"0.8125rem", fontWeight:600, color:"var(--text)", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{s.title}</div>
+                    {cal && <div style={{ fontSize:"0.6875rem", color:"var(--muted)", flexShrink:0 }}>{cal.name}</div>}
+                    {s.count > 1 && <div style={{ fontSize:"0.6875rem", color:"var(--muted)", flexShrink:0 }}>×{s.count}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Calendar chips — right below title for fast switching */}
