@@ -5863,6 +5863,21 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
     setSuggestionsOpen(false);
   };
 
+  // React's autoFocus can lose the race with the sheet's slideUp animation
+  // on iPad Safari + hardware-keyboard setups, so re-focus after the anim
+  // settles. Cursor at end so edit-mode edits append instead of overwriting.
+  const titleInputRef = React.useRef(null);
+  React.useEffect(() => {
+    const id = setTimeout(() => {
+      const el = titleInputRef.current;
+      if (!el) return;
+      el.focus();
+      const len = el.value.length;
+      try { el.setSelectionRange(len, len); } catch {}
+    }, 80);
+    return () => clearTimeout(id);
+  }, []);
+
   return (
     <div className="sheet-overlay" onClick={e => e.target===e.currentTarget&&onClose()}>
       <div className="sheet">
@@ -5914,7 +5929,7 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
         <div style={{ marginBottom:8 }}>
           <div style={{ display:"flex", alignItems:"center", gap:8, background:"var(--surface2)", borderRadius:10, padding:"10px 12px" }}>
             <div style={{ width:3, alignSelf:"stretch", borderRadius:2, background:eventColor||calColor, flexShrink:0 }} />
-            <input autoFocus placeholder="What's happening?" value={title}
+            <input ref={titleInputRef} placeholder="What's happening?" value={title}
               onChange={e => { setTitle(e.target.value); setSuggestionsOpen(true); }}
               style={{ background:"none", border:"none", padding:0, fontSize:"0.9375rem", fontWeight:600, flex:1, color:"var(--text)", fontFamily:"var(--font)", outline:"none" }} />
           </div>
@@ -6545,6 +6560,20 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
   const end = endDate ? parseLocal(endDate) : new Date();
   const totalDays = Math.max(1, Math.round((end - start) / 86400000) + 1);
 
+  // Re-focus title after the sheet's slideUp animation — autoFocus alone
+  // isn't reliable on iPad Safari with a hardware keyboard attached.
+  const titleInputRef = React.useRef(null);
+  React.useEffect(() => {
+    const id = setTimeout(() => {
+      const el = titleInputRef.current;
+      if (!el) return;
+      el.focus();
+      const len = el.value.length;
+      try { el.setSelectionRange(len, len); } catch {}
+    }, 80);
+    return () => clearTimeout(id);
+  }, []);
+
   return (
     <div className="sheet-overlay" onClick={e => e.target===e.currentTarget&&onClose()}>
       <div className="sheet">
@@ -6569,7 +6598,7 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
         <div style={{ display:"flex", alignItems:"center", gap:8, background:"var(--surface2)", borderRadius:10,
           padding:"12px 14px", marginBottom:10, border:"1px solid var(--border)" }}>
           <div style={{ width:3, alignSelf:"stretch", borderRadius:2, background:color, flexShrink:0 }} />
-          <input autoFocus placeholder="Trip, event, or milestone name..." value={title} onChange={e=>setTitle(e.target.value)}
+          <input ref={titleInputRef} placeholder="Trip, event, or milestone name..." value={title} onChange={e=>setTitle(e.target.value)}
             style={{ background:"none", border:"none", padding:0, fontSize:"0.9375rem", fontWeight:600,
               flex:1, color:"var(--text)", fontFamily:"var(--font)", outline:"none" }} />
         </div>
@@ -6823,6 +6852,21 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
     if (isEdit) saved.id=existing.id;
     onSave(saved);
   };
+  // Focus the Name input once the form is visible (past the template picker).
+  // autoFocus misses on iPad with a hardware keyboard because the sheet's
+  // slideUp animation steals the focus; re-do it after the anim settles.
+  const nameInputRef = React.useRef(null);
+  React.useEffect(() => {
+    if (showTemplates) return;
+    const id = setTimeout(() => {
+      const el = nameInputRef.current;
+      if (!el) return;
+      el.focus();
+      const len = el.value.length;
+      try { el.setSelectionRange(len, len); } catch {}
+    }, 80);
+    return () => clearTimeout(id);
+  }, [showTemplates]);
   return (
     <div className="sheet-overlay" onClick={e => e.target===e.currentTarget&&onClose()}>
       <div className="sheet">
@@ -6872,7 +6916,7 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
                 ← Back to templates
               </button>
             )}
-        <div className="form-group"><label className="form-label">Name</label><input autoFocus className="form-input" placeholder="e.g. Firefighter Shift" value={name} onChange={e=>setName(e.target.value)} /></div>
+        <div className="form-group"><label className="form-label">Name</label><input ref={nameInputRef} className="form-input" placeholder="e.g. Firefighter Shift" value={name} onChange={e=>setName(e.target.value)} /></div>
         <div className="form-group">
           <label className="form-label">Type</label>
           <div className="chip-row">{[{v:"rotation",l:"Custom rotation"},{v:"weekly",l:"Weekly days"},{v:"monthly",l:"Specific Days"}].map(t=><div key={t.v} className={"chip"+(type===t.v?" active":"")} onClick={()=>setType(t.v)}>{t.l}</div>)}</div>
