@@ -147,7 +147,20 @@ const seed = {
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-const fmtTime = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// User's time-format preference: undefined = locale default, true = 12-hour, false = 24-hour.
+// Updated synchronously from App() during render when the setting changes so child
+// renders in the same pass pick up the new value.
+let _timeHour12 = undefined;
+const setTimeHour12Pref = (v) => { _timeHour12 = v; };
+const fmtTime = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: _timeHour12 });
+// Format an "HH:MM" string using the same preference as fmtTime.
+const fmtClock = (s) => {
+  if (!s) return "";
+  const [h, m] = s.split(":").map(Number);
+  if (isNaN(h)) return s;
+  const d = new Date(); d.setHours(h, m || 0, 0, 0);
+  return fmtTime(d);
+};
 const fmtDate = (d) => `${MONTHS[d.getMonth()]} ${d.getDate()}`;
 const fmtDateShort = (d) => `${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`;
 const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -307,7 +320,7 @@ function shiftTimeLabel(config) {
   const [sh, sm] = st.start.split(":").map(Number);
   const [eh, em] = st.end.split(":").map(Number);
   const isOvernight = (eh * 60 + em) <= (sh * 60 + sm);
-  return st.start + " - " + st.end + (isOvernight ? " (overnight)" : "");
+  return fmtClock(st.start) + " - " + fmtClock(st.end) + (isOvernight ? " (overnight)" : "");
 }
 
 const visibilityIcon = (v) => {
@@ -665,6 +678,14 @@ export default function App() {
   const [weekAnchor, setWeekAnchor] = useState(() => { const d = new Date(TODAY); d.setDate(d.getDate() - d.getDay()); return d; });
   const [calShiftFilter, setCalShiftFilter] = useState(null);
   const [shiftOverrides, setShiftOverrides] = useState(new Set());
+  // Per-date time overrides for individual shifts, e.g. "half day this Thursday".
+  // Keyed by `${shiftId}:${y}-${m}-${d}`, value `{ start: "HH:MM", end: "HH:MM" }`.
+  const [shiftTimeOverrides, setShiftTimeOverrides] = useState(() => _ls?.shiftTimeOverrides ?? {});
+  // UI state for the inline time editor inside dayPopup.
+  const [editingShiftTime, setEditingShiftTime] = useState(null); // { shiftId, start, end } | null
+  // Tracks which day's "different schedule today" home banner the user has dismissed.
+  // Stored as a YMD string so the banner auto-returns when a new day begins.
+  const [shiftNoticeDismissed, setShiftNoticeDismissed] = useState(() => _ls?.shiftNoticeDismissed ?? null);
   const [majorEvents, setMajorEvents] = useState(() => _ls?.majorEvents ?? seed.majorEvents);
   const [friends, setFriends] = useState(() => _ls?.friends ?? seed.friends);
   const [friendSearch, setFriendSearch] = useState("");
@@ -701,6 +722,12 @@ export default function App() {
   const [highContrast, setHighContrast] = useState(() => _ls?.highContrast ?? false);
   // Preferred map provider for opening locations (auto | apple | google | waze)
   const [mapProvider, setMapProvider] = useState(() => _ls?.mapProvider ?? "auto");
+  // Clock format preference (auto | 12 | 24). Applied synchronously below so
+  // children render with the right format in the same pass.
+  const [timeFormat, setTimeFormat] = useState(() => _ls?.timeFormat ?? "auto");
+  if (timeFormat === "12") setTimeHour12Pref(true);
+  else if (timeFormat === "24") setTimeHour12Pref(false);
+  else setTimeHour12Pref(undefined);
   // View mode: "auto" (width-based) | "mobile" (force phone layout) | "desktop" (force sidebar layout)
   const [viewMode, setViewMode] = useState(() => _ls?.viewMode ?? "auto");
   // Live-preview state for real-time calendar reactions in split mode
@@ -754,6 +781,7 @@ export default function App() {
     typeof Notification !== "undefined" ? Notification.permission : "unsupported"
   );
   const notifTimers = React.useRef({});
+  const shiftNotifTimers = React.useRef({});
 
   const requestNotifPermission = async () => {
     if (typeof Notification === "undefined") return;
@@ -789,6 +817,40 @@ export default function App() {
     });
     return () => Object.values(notifTimers.current).forEach(clearTimeout);
   }, [events, notifPermission]);
+
+  // Schedule a one-off notification at the start of a shift that has a time
+  // override for today, so the user gets a heads-up of the adjusted hours.
+  React.useEffect(() => {
+    if (notifPermission !== "granted") return;
+    Object.values(shiftNotifTimers.current).forEach(clearTimeout);
+    shiftNotifTimers.current = {};
+    const today = new Date();
+    const ymdKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+    shifts.forEach(p => {
+      const key = p.id+":"+ymdKey;
+      if (!shiftTimeOverrides[key]) return;
+      const isNatural = p.type === "rotation" ? getRotationStatus(p, today) === "work"
+        : p.type === "monthly" ? isMonthlyWorkDay(p, today)
+        : (p.config?.days ?? []).includes(today.getDay());
+      const isHidden = shiftOverrides.has(key);
+      const isExtra = shiftOverrides.has("extra:" + key);
+      const isWorkToday = (isNatural && !isHidden) || (!isNatural && isExtra);
+      if (!isWorkToday) return;
+      const eff = shiftTimeOverrides[key];
+      const [sh, sm] = eff.start.split(":").map(Number);
+      const fireAt = new Date(today); fireAt.setHours(sh, sm, 0, 0);
+      const delay = fireAt.getTime() - Date.now();
+      if (delay < 0) return;
+      shiftNotifTimers.current[p.id] = setTimeout(() => {
+        new Notification(p.name + " starts now", {
+          body: `Today's shift: ${fmtClock(eff.start)} – ${fmtClock(eff.end)}. You're off at ${fmtClock(eff.end)}.`,
+          icon: "/favicon.ico",
+          tag: "shift-override-"+p.id+"-"+ymdKey,
+        });
+      }, delay);
+    });
+    return () => Object.values(shiftNotifTimers.current).forEach(clearTimeout);
+  }, [shifts, shiftOverrides, shiftTimeOverrides, notifPermission]);
 
   // Keep darkMode in sync with themeMode on every change:
   //   "dark"  → always dark
@@ -890,6 +952,23 @@ export default function App() {
     setShiftOverrides(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   };
   const isOverridden = (shiftId, date) => shiftOverrides.has(overrideKey(shiftId, date));
+  // Returns the effective shiftTime (override beats base config) for a given date.
+  const getEffectiveShiftTime = (shift, date) => {
+    const ov = shiftTimeOverrides[overrideKey(shift.id, date)];
+    if (ov) return { enabled: true, start: ov.start, end: ov.end };
+    return shift.config?.shiftTime || null;
+  };
+  const setShiftTimeForDate = (shiftId, date, start, end) => {
+    setShiftTimeOverrides(prev => ({ ...prev, [overrideKey(shiftId, date)]: { start, end } }));
+  };
+  const clearShiftTimeForDate = (shiftId, date) => {
+    setShiftTimeOverrides(prev => {
+      const next = { ...prev };
+      delete next[overrideKey(shiftId, date)];
+      return next;
+    });
+  };
+  const hasShiftTimeOverride = (shiftId, date) => !!shiftTimeOverrides[overrideKey(shiftId, date)];
 
   const closeSheet = () => { setSheet(null); setActiveEvent(null); setActiveShift(null); setActiveGroup(null); setActiveMajorEvent(null); setPreviewEvent(null); setPreviewShift(null); setPreviewMajor(null); };
   const openEvent = (ev) => { setActiveEvent(ev); setSheet("eventDetail"); };
@@ -993,7 +1072,7 @@ export default function App() {
         dayNotes,
         homeOrder,
         themeMode, weekLayout, textSize, highContrast, viewMode, mapProvider, recentSearches,
-        userProfile,
+        userProfile, shiftTimeOverrides, shiftNoticeDismissed, timeFormat,
       });
     }, 300);
     return () => clearTimeout(saveHandle);
@@ -1001,7 +1080,7 @@ export default function App() {
       activityFeed, feedSeenAt, onboardingActive, onboardingCompletedAt,
       customColorRecents, customColorFavorites,
       pinnedEvents, hiddenCalendars, hiddenGroups, holidayCountries,
-      dayNotes, homeOrder, themeMode, weekLayout, textSize, highContrast, viewMode, mapProvider, recentSearches, userProfile]);
+      dayNotes, homeOrder, themeMode, weekLayout, textSize, highContrast, viewMode, mapProvider, recentSearches, userProfile, shiftTimeOverrides, shiftNoticeDismissed, timeFormat]);
   const openNewCalendar  = () => { setActiveCalendar(null); setSheet("editCalendar"); };
   const openEditCalendar = (cal) => { setActiveCalendar(cal); setSheet("editCalendar"); };
   const openNewMajorEvent = () => setSheet("newMajorEvent");
@@ -1389,7 +1468,9 @@ export default function App() {
       .map(ev => [Math.max(ev.start.getTime(), fromMs),
                   Math.min(ev.end.getTime(), winEndMs)]);
     for (var pi = 0; pi < shifts.length; pi++) {
-      const p = shifts[pi]; var st = p.config?.shiftTime;
+      const p = shifts[pi];
+      // Use per-day override when present so half-days etc. reflect correctly.
+      var st = getEffectiveShiftTime(p, dayStart);
       if (!st?.enabled) continue;
       const oKey = p.id+":"+dayStart.getFullYear()+"-"+dayStart.getMonth()+"-"+dayStart.getDate();
       if (shiftOverrides.has(oKey)) continue;
@@ -2134,6 +2215,57 @@ export default function App() {
               </div>
             </div>
 
+            {/* Shift time-override banner — a dismissible reminder that today's
+                hours differ from the usual schedule. Comes back tomorrow. */}
+            {(() => {
+              const today = new Date();
+              const ymdKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+              if (shiftNoticeDismissed === ymdKey) return null;
+              const affected = shifts.filter(p => {
+                const key = p.id+":"+ymdKey;
+                if (!shiftTimeOverrides[key]) return false;
+                const isNatural = p.type === "rotation" ? getRotationStatus(p, today) === "work"
+                  : p.type === "monthly" ? isMonthlyWorkDay(p, today)
+                  : (p.config?.days ?? []).includes(today.getDay());
+                const isHidden = shiftOverrides.has(key);
+                const isExtra = shiftOverrides.has("extra:" + key);
+                return (isNatural && !isHidden) || (!isNatural && isExtra);
+              });
+              if (affected.length === 0) return null;
+              return (
+                <div style={{ background:"rgba(245,158,11,0.08)", border:"1px solid rgba(245,158,11,0.35)",
+                  borderRadius:12, padding:"12px 14px", marginBottom:16,
+                  display:"flex", alignItems:"flex-start", gap:10 }}>
+                  <span style={{ display:"flex", width:18, height:18, color:"#f59e0b", flexShrink:0, marginTop:1 }}>{Icon.bell}</span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:"0.8125rem", fontWeight:700, color:"var(--text)", marginBottom:4 }}>
+                      Different schedule today
+                    </div>
+                    {affected.map(p => {
+                      const ov = shiftTimeOverrides[p.id+":"+ymdKey];
+                      const base = p.config?.shiftTime;
+                      return (
+                        <div key={p.id} style={{ fontSize:"0.75rem", color:"var(--muted)", lineHeight:1.5 }}>
+                          <span style={{ color: p.color || "var(--accent)", fontWeight:700 }}>{p.name}</span>
+                          <span style={{ fontFamily:"var(--mono)" }}> · {fmtClock(ov.start)} – {fmtClock(ov.end)}</span>
+                          {base?.enabled && (base.start !== ov.start || base.end !== ov.end) && (
+                            <span> (usually {fmtClock(base.start)} – {fmtClock(base.end)})</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <button onClick={() => setShiftNoticeDismissed(ymdKey)}
+                    title="Dismiss for today"
+                    style={{ background:"none", border:"none", cursor:"pointer", color:"var(--muted)",
+                      display:"flex", alignItems:"center", justifyContent:"center", width:24, height:24,
+                      padding:0, flexShrink:0 }}>
+                    <span style={{ display:"flex", width:14, height:14 }}>{Icon.close}</span>
+                  </button>
+                </div>
+              );
+            })()}
+
             {/* Selected day preview — shows when user clicked a non-today date on the persistent calendar in split mode */}
             {isSplit && !sameDay(selectedDate, TODAY) && (() => {
               const dayEvs = visibleEvents.filter(e => sameDay(e.start, selectedDate)).sort((a,b) => a.start - b.start);
@@ -2427,12 +2559,7 @@ export default function App() {
                 const oKeyOf = (pid) => pid + ":" + todayY + "-" + todayM + "-" + todayD;
                 const minsNow = now2.getHours() * 60 + now2.getMinutes();
                 const parseHM = (s) => { const [h,m] = s.split(":").map(Number); return h*60 + m; };
-                const fmtHM = (s) => {
-                  const [h,m] = s.split(":").map(Number);
-                  const ampm = h >= 12 ? "pm" : "am";
-                  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-                  return m === 0 ? h12 + ampm : h12 + ":" + String(m).padStart(2,"0") + ampm;
-                };
+                const fmtHM = (s) => fmtClock(s);
                 const rows = shifts.map(p => {
                   const isNatural = p.type === "rotation" ? getRotationStatus(p, TODAY) === "work"
                     : p.type === "monthly" ? isMonthlyWorkDay(p, TODAY)
@@ -2440,7 +2567,7 @@ export default function App() {
                   const isHidden = shiftOverrides.has(oKeyOf(p.id));
                   const isExtra = shiftOverrides.has("extra:" + oKeyOf(p.id));
                   const isWorkToday = (isNatural && !isHidden) || (!isNatural && isExtra);
-                  const st = p.config?.shiftTime;
+                  const st = getEffectiveShiftTime(p, TODAY);
                   if (!isWorkToday) return { p, state:"off", sub:"off today" };
                   if (!st?.enabled) return { p, state:"on-allday", sub:"all day" };
                   const startM = parseHM(st.start), endM = parseHM(st.end);
@@ -2840,25 +2967,95 @@ export default function App() {
               });
               const inactiveForDay = shifts.filter(p => !activeForDay.includes(p));
               return (
-                <div className="sheet-overlay" onClick={() => setDayPopup(null)}>
+                <div className="sheet-overlay" onClick={() => { setDayPopup(null); setEditingShiftTime(null); }}>
                   <div className="sheet" onClick={e => e.stopPropagation()}>
                     <div className="sheet-handle" />
                     <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16 }}>
                       <div style={{ fontSize:"1.0625rem", fontWeight:700 }}>{fmtDate(dayPopup.date)}</div>
-                      <button className="btn-icon" style={{ background:"var(--surface3)" }} onClick={() => setDayPopup(null)}>{Icon.close}</button>
+                      <button className="btn-icon" style={{ background:"var(--surface3)" }} onClick={() => { setDayPopup(null); setEditingShiftTime(null); }}>{Icon.close}</button>
                     </div>
                     {activeForDay.length > 0 && <div className="section-label" style={{ marginBottom:8 }}>Active shifts</div>}
                     {activeForDay.map(p => {
                       const hidden = isOverridden(p.id, dayPopup.date);
+                      const effTime = getEffectiveShiftTime(p, dayPopup.date);
+                      const hasOverride = hasShiftTimeOverride(p.id, dayPopup.date);
+                      const isEditing = editingShiftTime?.shiftId === p.id;
                       return (
-                        <div key={p.id} onClick={() => toggleShiftOverride(p.id, dayPopup.date)}
-                          style={{ display:"flex", alignItems:"center", gap:10, padding:"12px", borderRadius:10, marginBottom:6, cursor:"pointer",
-                            background: hidden ? "var(--surface2)" : p.color+"22",
-                            border:"1px solid "+(hidden ? "var(--border)" : p.color+"55"),
-                            opacity: hidden ? 0.6 : 1, transition:"all .15s" }}>
-                          <div style={{ width:10, height:10, borderRadius:3, flexShrink:0, background: hidden ? "transparent" : p.color, border:"2px solid "+p.color }} />
-                          <div style={{ fontSize:"0.875rem", fontWeight:500, flex:1, color: hidden ? "var(--muted)" : "var(--text)", textDecoration: hidden ? "line-through" : "none" }}>{p.name}</div>
-                          <div style={{ fontSize:"0.75rem", fontWeight:600, color: hidden ? "#f87171" : "#34d399" }}>{hidden ? "Hidden" : "Visible"}</div>
+                        <div key={p.id} style={{ marginBottom:6 }}>
+                          <div onClick={() => toggleShiftOverride(p.id, dayPopup.date)}
+                            style={{ display:"flex", alignItems:"center", gap:10, padding:"12px", borderRadius:10, cursor:"pointer",
+                              background: hidden ? "var(--surface2)" : p.color+"22",
+                              border:"1px solid "+(hidden ? "var(--border)" : p.color+"55"),
+                              opacity: hidden ? 0.6 : 1, transition:"all .15s" }}>
+                            <div style={{ width:10, height:10, borderRadius:3, flexShrink:0, background: hidden ? "transparent" : p.color, border:"2px solid "+p.color }} />
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <div style={{ fontSize:"0.875rem", fontWeight:500, color: hidden ? "var(--muted)" : "var(--text)", textDecoration: hidden ? "line-through" : "none" }}>{p.name}</div>
+                              {effTime?.enabled && (
+                                <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontFamily:"var(--mono)", marginTop:2 }}>
+                                  {fmtClock(effTime.start)} – {fmtClock(effTime.end)}{hasOverride ? " · custom" : ""}
+                                </div>
+                              )}
+                            </div>
+                            {!hidden && (
+                              <button onClick={e => {
+                                  e.stopPropagation();
+                                  if (isEditing) { setEditingShiftTime(null); return; }
+                                  setEditingShiftTime({
+                                    shiftId: p.id,
+                                    start: effTime?.start || "09:00",
+                                    end: effTime?.end || "17:00",
+                                  });
+                                }}
+                                title="Edit time for this day"
+                                style={{ display:"flex", alignItems:"center", justifyContent:"center",
+                                  width:28, height:28, borderRadius:8, padding:0, flexShrink:0,
+                                  background: isEditing ? p.color+"33" : "transparent",
+                                  border:"1px solid "+(isEditing ? p.color+"66" : "var(--border)"),
+                                  color: isEditing ? p.color : "var(--muted)", cursor:"pointer" }}>
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+                                </svg>
+                              </button>
+                            )}
+                            <div style={{ fontSize:"0.75rem", fontWeight:600, color: hidden ? "#f87171" : "#34d399" }}>{hidden ? "Hidden" : "Visible"}</div>
+                          </div>
+                          {isEditing && (
+                            <div style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10, padding:"10px 12px", marginTop:4 }}>
+                              <div style={{ fontSize:"0.6875rem", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.6px", color:"var(--muted)", marginBottom:8 }}>
+                                Time for {fmtDate(dayPopup.date)}
+                              </div>
+                              <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:10 }}>
+                                <input type="time" value={editingShiftTime.start}
+                                  onChange={e => setEditingShiftTime(v => ({ ...v, start: e.target.value }))}
+                                  style={{ flex:1, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8,
+                                    padding:"8px 10px", fontFamily:"var(--font)", fontSize:"0.875rem", color:"var(--text)" }} />
+                                <span style={{ color:"var(--muted)" }}>–</span>
+                                <input type="time" value={editingShiftTime.end}
+                                  onChange={e => setEditingShiftTime(v => ({ ...v, end: e.target.value }))}
+                                  style={{ flex:1, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8,
+                                    padding:"8px 10px", fontFamily:"var(--font)", fontSize:"0.875rem", color:"var(--text)" }} />
+                              </div>
+                              <div style={{ display:"flex", gap:8 }}>
+                                {hasOverride && (
+                                  <button onClick={() => { clearShiftTimeForDate(p.id, dayPopup.date); setEditingShiftTime(null); }}
+                                    style={{ flex:1, padding:"8px", borderRadius:8, background:"var(--surface)",
+                                      border:"1px solid var(--border)", fontSize:"0.8125rem", fontWeight:600,
+                                      color:"var(--muted)", cursor:"pointer", fontFamily:"var(--font)" }}>
+                                    Reset to default
+                                  </button>
+                                )}
+                                <button onClick={() => {
+                                    setShiftTimeForDate(p.id, dayPopup.date, editingShiftTime.start, editingShiftTime.end);
+                                    setEditingShiftTime(null);
+                                  }}
+                                  style={{ flex:1, padding:"8px", borderRadius:8, background: p.color,
+                                    border:"none", fontSize:"0.8125rem", fontWeight:700, color:"#fff",
+                                    cursor:"pointer", fontFamily:"var(--font)" }}>
+                                  Save
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -3315,6 +3512,8 @@ export default function App() {
             {[...shifts].sort((a,b) => (a.priority??99)-(b.priority??99)).map(p => (
               <ShiftCard key={p.id} shift={p} onEdit={() => openEditShift(p)}
                 shiftOverrides={shiftOverrides}
+                effectiveTimeToday={getEffectiveShiftTime(p, TODAY)}
+                hasTimeOverrideToday={hasShiftTimeOverride(p.id, TODAY)}
                 onAddManualDay={(shiftId, date) => {
                   const key = "extra:" + shiftId + ":" + date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
                   setShiftOverrides(prev => { const next = new Set(prev); next.add(key); return next; });
@@ -3452,6 +3651,27 @@ export default function App() {
                 </div>
                 <button className={"toggle "+(highContrast?"on":"")}
                   onClick={() => setHighContrast(v => !v)} />
+              </div>
+            </div>
+
+            {/* Clock format — 12h / 24h / auto */}
+            <div className="card" style={{ marginBottom:16 }}>
+              <div style={{ fontSize:"0.875rem", fontWeight:500, color:"var(--text)", marginBottom:10 }}>Clock format</div>
+              <div style={{ display:"flex", gap:3, background:"var(--surface2)", borderRadius:10, padding:3, marginBottom:10 }}>
+                {[["auto","Auto"],["12","12-hour"],["24","24-hour"]].map(([v,l]) => (
+                  <button key={v} onClick={() => setTimeFormat(v)} style={{
+                    flex:1, padding:"6px 0", borderRadius:7, border:"none", cursor:"pointer",
+                    fontFamily:"var(--font)", fontSize:"0.75rem", fontWeight:600, transition:"all .15s",
+                    background: timeFormat===v ? "var(--surface)" : "none",
+                    color: timeFormat===v ? "var(--text)" : "var(--muted)",
+                    boxShadow: timeFormat===v ? "0 1px 3px rgba(0,0,0,0.15)" : "none"
+                  }}>{l}</button>
+                ))}
+              </div>
+              <div style={{ fontSize:"0.6875rem", color:"var(--muted)", lineHeight:1.4 }}>
+                {timeFormat === "auto" ? "Matches your device's locale (e.g. 1:00 PM in the US, 13:00 in many other regions)." :
+                 timeFormat === "12" ? "Always display times in 12-hour format with AM/PM." :
+                 "Always display times in 24-hour format."}
               </div>
             </div>
 
@@ -4159,6 +4379,9 @@ function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverride
 
   const fmtEvTime = (d) => {
     const h = d.getHours(), m = d.getMinutes();
+    // In explicit 24-hour mode use a compact HH:MM; otherwise the compact
+    // 12-hour form (e.g. "7a" / "1:30p") stays readable in narrow columns.
+    if (_timeHour12 === false) return String(h).padStart(2,"0") + ":" + String(m).padStart(2,"0");
     const ampm = h >= 12 ? "p" : "a";
     const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
     return m === 0 ? h12 + ampm : h12 + ":" + String(m).padStart(2,"0") + ampm;
@@ -4881,7 +5104,7 @@ function MonthlySpecificDays({ shift, col, onToggleDay }) {
 }
 
 // ── PATTERN CARD ──────────────────────────────────────────
-function ShiftCard({ shift, onEdit, shiftOverrides, onToggleDay, onAddManualDay, onToggleMonthDay }) {
+function ShiftCard({ shift, onEdit, shiftOverrides, onToggleDay, onAddManualDay, onToggleMonthDay, effectiveTimeToday, hasTimeOverrideToday }) {
   const [expanded, setExpanded] = React.useState(false);
   const [showMonth, setShowMonth] = React.useState(false);
   const [previewMonth, setPreviewMonth] = React.useState({ year: TODAY.getFullYear(), month: TODAY.getMonth() });
@@ -4972,7 +5195,7 @@ function ShiftCard({ shift, onEdit, shiftOverrides, onToggleDay, onAddManualDay,
         background: todayIsWork?col+"20":"var(--surface2)", border:"1px solid "+(todayIsWork?col+"44":"var(--border)") }}>
         <div style={{ width:8, height:8, borderRadius:"50%", background:todayIsWork?col:"var(--muted)", flexShrink:0 }} />
         <div style={{ fontSize:"0.8125rem", fontWeight:600, flex:1, color:todayIsWork?"var(--text)":"var(--muted)" }}>
-          Today: {todayIsWork?"Work Day":"Day Off"}{shift.config?.shiftTime?.enabled&&todayIsWork?" · "+shiftTimeLabel(shift.config):""}
+          Today: {todayIsWork?"Work Day":"Day Off"}{effectiveTimeToday?.enabled&&todayIsWork?" · "+shiftTimeLabel({ shiftTime: effectiveTimeToday })+(hasTimeOverrideToday?" (today only)":""):""}
         </div>
         {shift.type==="rotation"&&cycleDay&&cycleLen&&<div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontFamily:"var(--mono)" }}>Day {cycleDay}/{cycleLen}</div>}
       </div>
@@ -6330,13 +6553,7 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
     if (isOvernight) endMin += 24 * 60;
     return { isOvernight, durationHours: ((endMin - startMin) / 60).toFixed(1) };
   }, [shiftEnabled, shiftStart, shiftEnd]);
-  const formatTime12h = (t) => {
-    const [h, m] = t.split(":").map(Number);
-    if (isNaN(h)) return t;
-    const ampm = h >= 12 ? "PM" : "AM";
-    const hh = h === 0 ? 12 : h > 12 ? h - 12 : h;
-    return hh + ":" + String(m).padStart(2,"0") + " " + ampm;
-  };
+  const formatTime12h = (t) => fmtClock(t);
   // Live preview: whenever any relevant state changes, report up to the parent
   // so the persistent calendar (in split mode) can visualize the in-progress shift.
   React.useEffect(() => {
