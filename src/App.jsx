@@ -313,14 +313,21 @@ function getConflicts(events) {
   return conflicts;
 }
 
+// Overnight when the user explicitly flagged "ends next day", OR legacy
+// auto-detect: end-of-day is at or before start-of-day. The flag lets the user
+// express a 1 AM → 5 AM *next day* shift, which auto-detect alone can't.
+function isShiftOvernight(st) {
+  if (!st || !st.start || !st.end) return false;
+  if (st.endsNextDay) return true;
+  const [sh, sm] = st.start.split(":").map(Number);
+  const [eh, em] = st.end.split(":").map(Number);
+  return (eh * 60 + em) <= (sh * 60 + sm);
+}
+
 function shiftTimeLabel(config) {
   const st = config?.shiftTime;
   if (!st?.enabled) return null;
-  // Detect overnight (end is earlier than or equal to start)
-  const [sh, sm] = st.start.split(":").map(Number);
-  const [eh, em] = st.end.split(":").map(Number);
-  const isOvernight = (eh * 60 + em) <= (sh * 60 + sm);
-  return fmtClock(st.start) + " - " + fmtClock(st.end) + (isOvernight ? " (overnight)" : "");
+  return fmtClock(st.start) + " - " + fmtClock(st.end) + (isShiftOvernight(st) ? " (overnight)" : "");
 }
 
 const visibilityIcon = (v) => {
@@ -1485,7 +1492,7 @@ export default function App() {
       const shP=st.start.split(":").map(Number), enP=st.end.split(":").map(Number);
       const shMs=new Date(dayStart).setHours(shP[0],shP[1],0,0);
       let enMs=new Date(dayStart).setHours(enP[0],enP[1],0,0);
-      if (enMs<=shMs) enMs+=86400000;
+      if (isShiftOvernight(st)) enMs+=86400000;
       rawBusy.push([shMs, enMs]);
     }
     rawBusy.sort((a,b)=>a[0]-b[0]);
@@ -1531,14 +1538,17 @@ export default function App() {
           : (p.config?.days ?? []).includes(day.getDay());
         if (!isNatural && !isExtra) return;
         const ov = shiftTimeOverrides[key];
-        const eff = ov ? { enabled: true, start: ov.start, end: ov.end } : (p.config?.shiftTime || null);
+        // Overrides inherit the base shift's "ends next day" flag so a 1 AM–5 AM
+        // override on a genuinely-overnight shift keeps crossing midnight.
+        const eff = ov ? { enabled: true, start: ov.start, end: ov.end, endsNextDay: p.config?.shiftTime?.endsNextDay }
+                       : (p.config?.shiftTime || null);
         const color = p.color || "#6366f1";
         if (eff?.enabled) {
           const [sh, sm] = eff.start.split(":").map(Number);
           const [eh, em] = eff.end.split(":").map(Number);
           const startMs = new Date(day).setHours(sh, sm, 0, 0);
           let endMs = new Date(day).setHours(eh, em, 0, 0);
-          if (endMs <= startMs) endMs += 86400000; // overnight
+          if (isShiftOvernight(eff)) endMs += 86400000;
           items.push({ kind:"shift", title: p.name, color, startMs, endMs, allDay: false });
         } else {
           items.push({ kind:"shift", title: p.name, color, allDay: true });
@@ -2710,9 +2720,61 @@ export default function App() {
                 if (!shifts || shifts.length === 0) return null;
                 const todayY = TODAY.getFullYear(), todayM = TODAY.getMonth(), todayD = TODAY.getDate();
                 const oKeyOf = (pid) => pid + ":" + todayY + "-" + todayM + "-" + todayD;
+                const yesterday = new Date(TODAY); yesterday.setDate(yesterday.getDate() - 1);
+                const yKeyOf = (pid) => pid + ":" + yesterday.getFullYear() + "-" + yesterday.getMonth() + "-" + yesterday.getDate();
                 const minsNow = now2.getHours() * 60 + now2.getMinutes();
                 const parseHM = (s) => { const [h,m] = s.split(":").map(Number); return h*60 + m; };
                 const fmtHM = (s) => fmtClock(s);
+                // Find any shift work-block that starts exactly at `startMs` on `dayStart`.
+                // Used to walk forward through chained back-to-back shifts (e.g. a
+                // 24h day ends at 0600 and the next day another shift starts at 0600).
+                const findShiftStartingAt = (dayStart, startMs) => {
+                  for (const p of shifts) {
+                    const oKey = p.id + ":" + dayStart.getFullYear() + "-" + dayStart.getMonth() + "-" + dayStart.getDate();
+                    const isNat = p.type === "rotation" ? getRotationStatus(p, dayStart) === "work"
+                                : p.type === "monthly" ? isMonthlyWorkDay(p, dayStart)
+                                : (p.config?.days ?? []).includes(dayStart.getDay());
+                    const isHid = shiftOverrides.has(oKey);
+                    const isExt = shiftOverrides.has("extra:" + oKey);
+                    const isWork = (isNat && !isHid) || (!isNat && isExt);
+                    if (!isWork) continue;
+                    const ov = shiftTimeOverrides[oKey];
+                    const eff = ov ? { enabled:true, start:ov.start, end:ov.end, endsNextDay:p.config?.shiftTime?.endsNextDay }
+                                   : p.config?.shiftTime;
+                    if (!eff?.enabled) continue;
+                    const [sh, sm] = eff.start.split(":").map(Number);
+                    const [eh, em] = eff.end.split(":").map(Number);
+                    const bStart = new Date(dayStart).setHours(sh, sm, 0, 0);
+                    if (bStart !== startMs) continue;
+                    let bEnd = new Date(dayStart).setHours(eh, em, 0, 0);
+                    if (isShiftOvernight(eff)) bEnd += 86400000;
+                    return bEnd;
+                  }
+                  return null;
+                };
+                // Walk the chain forward from `endMs`. Cap at 14 iterations as a safety.
+                const extendShiftChain = (endMs) => {
+                  let e = endMs;
+                  for (let i = 0; i < 14; i++) {
+                    const d = new Date(e); d.setHours(0, 0, 0, 0);
+                    const nextEnd = findShiftStartingAt(d, e);
+                    if (nextEnd == null || nextEnd <= e) break;
+                    e = nextEnd;
+                  }
+                  return e;
+                };
+                // Formats the chained end as "0600", "0600 tomorrow", or "0600 5/28"
+                // depending on how many calendar days away it is.
+                const pad2 = n => String(n).padStart(2, "0");
+                const formatChainEnd = (chainEndMs) => {
+                  const d = new Date(chainEndMs);
+                  const timeStr = fmtClock(pad2(d.getHours()) + ":" + pad2(d.getMinutes()));
+                  const todayMid = new Date(TODAY); todayMid.setHours(0, 0, 0, 0);
+                  const diffDays = Math.floor((d.getTime() - todayMid.getTime()) / 86400000);
+                  if (diffDays <= 0) return timeStr;
+                  if (diffDays === 1) return timeStr + " tomorrow";
+                  return timeStr + " " + (d.getMonth() + 1) + "/" + d.getDate();
+                };
                 const rows = shifts.map(p => {
                   const isNatural = p.type === "rotation" ? getRotationStatus(p, TODAY) === "work"
                     : p.type === "monthly" ? isMonthlyWorkDay(p, TODAY)
@@ -2720,17 +2782,44 @@ export default function App() {
                   const isHidden = shiftOverrides.has(oKeyOf(p.id));
                   const isExtra = shiftOverrides.has("extra:" + oKeyOf(p.id));
                   const isWorkToday = (isNatural && !isHidden) || (!isNatural && isExtra);
+                  // Did yesterday's instance run? Needed to tell whether a post-midnight
+                  // "active" window is actually yesterday's overnight shift still going,
+                  // versus today's shift that hasn't started yet.
+                  const yNatural = p.type === "rotation" ? getRotationStatus(p, yesterday) === "work"
+                    : p.type === "monthly" ? isMonthlyWorkDay(p, yesterday)
+                    : (p.config?.days ?? []).includes(yesterday.getDay());
+                  const yesterdayWorked = (yNatural && !shiftOverrides.has(yKeyOf(p.id))) ||
+                                          (!yNatural && shiftOverrides.has("extra:" + yKeyOf(p.id)));
                   const st = getEffectiveShiftTime(p, TODAY);
                   if (!isWorkToday) return { p, state:"off", sub:"off today" };
                   if (!st?.enabled) return { p, state:"on-allday", sub:"all day" };
                   const startM = parseHM(st.start), endM = parseHM(st.end);
-                  const overnight = endM <= startM;
-                  let active;
-                  if (overnight) active = minsNow >= startM || minsNow < endM;
-                  else active = minsNow >= startM && minsNow < endM;
-                  if (active) return { p, state:"on", sub:"until " + fmtHM(st.end) };
-                  if (!overnight && minsNow < startM) return { p, state:"upcoming", sub:"starts " + fmtHM(st.start) };
-                  return { p, state:"ended", sub:"ended " + fmtHM(st.end) };
+                  const overnight = isShiftOvernight(st);
+                  // Two ways to be "active" on an overnight shift:
+                  //   - We're in the portion of yesterday's shift that spills into today
+                  //     (only counts if yesterday was actually a work day).
+                  //   - We're past today's start time; the shift runs until tomorrow's endM.
+                  const inYesterdaysTail = overnight && yesterdayWorked && minsNow < endM;
+                  const inTodaysShift    = overnight ? minsNow >= startM
+                                                     : (minsNow >= startM && minsNow < endM);
+                  const active = inYesterdaysTail || inTodaysShift;
+                  // End lands tomorrow only when the active window is today's instance
+                  // of an overnight shift.
+                  const endIsTomorrow = inTodaysShift && overnight;
+                  if (active) {
+                    // This shift instance's end timestamp: today's endM, or tomorrow's
+                    // endM if we're in the overnight tail that spills into today.
+                    const [eh, em] = st.end.split(":").map(Number);
+                    let endMs = new Date(TODAY).setHours(eh, em, 0, 0);
+                    if (endIsTomorrow) endMs += 86400000;
+                    // Walk forward through any chained back-to-back shifts.
+                    const chainEndMs = extendShiftChain(endMs);
+                    return { p, state:"on", sub:"until " + formatChainEnd(chainEndMs) };
+                  }
+                  // Otherwise: before today's shift starts (highlighted "starts at …")
+                  // or after it ended ("off shift").
+                  if (minsNow < startM) return { p, state:"upcoming", sub:"starts at " + fmtHM(st.start) };
+                  return { p, state:"ended", sub:"off shift" };
                 });
                 rows.sort((a,b) => {
                   const rank = { on:0, "on-allday":1, upcoming:2, ended:3, off:4 };
@@ -2743,16 +2832,18 @@ export default function App() {
                     <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:4, WebkitOverflowScrolling:"touch" }}>
                       {rows.map(({ p, state, sub }) => {
                         const c = p.color || "#6366f1";
-                        const isOn = state === "on" || state === "on-allday";
+                        // Highlighted states get the shift color treatment — including
+                        // "upcoming" so a shift starting later today reads as imminent.
+                        const isHighlighted = state === "on" || state === "on-allday" || state === "upcoming";
                         const bg = state === "on" ? c + "26"
+                          : state === "upcoming" ? c + "1a"
                           : state === "on-allday" ? c + "1a"
-                          : state === "upcoming" ? "transparent"
                           : "var(--surface2)";
                         const border = state === "on" ? "1.5px solid " + c
+                          : state === "upcoming" ? "1.5px solid " + c
                           : state === "on-allday" ? "1px solid " + c + "55"
-                          : state === "upcoming" ? "1px dashed " + c + "88"
                           : "1px solid var(--border)";
-                        const textColor = isOn ? "var(--text)" : "var(--muted)";
+                        const textColor = isHighlighted ? "var(--text)" : "var(--muted)";
                         const dotColor = state === "off" ? "var(--muted)"
                           : state === "ended" ? c + "66"
                           : c;
@@ -3202,7 +3293,13 @@ export default function App() {
                                 </svg>
                               </button>
                             )}
-                            <div style={{ fontSize:"0.75rem", fontWeight:600, color: hidden ? "#f87171" : "#34d399" }}>{hidden ? "Hidden" : "Visible"}</div>
+                            <div style={{
+                              padding:"3px 9px", borderRadius:999,
+                              fontSize:"0.6875rem", fontWeight:700,
+                              background: hidden ? "rgba(248,113,113,0.15)" : "rgba(52,211,153,0.15)",
+                              border: "1px solid " + (hidden ? "rgba(248,113,113,0.4)" : "rgba(52,211,153,0.4)"),
+                              color: hidden ? "#f87171" : "#34d399",
+                              whiteSpace:"nowrap" }}>{hidden ? "Skipped" : "On shift"}</div>
                           </div>
                           {isEditing && (
                             <div style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10, padding:"10px 12px", marginTop:4 }}>
@@ -6814,6 +6911,9 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
   const [shiftEnabled, setShiftEnabled] = useState(existing?.config?.shiftTime?.enabled??false);
   const [shiftStart, setShiftStart] = useState(existing?.config?.shiftTime?.start??"09:00");
   const [shiftEnd, setShiftEnd] = useState(existing?.config?.shiftTime?.end??"17:00");
+  // Explicit "ends next day" lets a user say 1 AM → 5 AM crosses midnight,
+  // which auto-detect (end ≤ start) can't express on its own.
+  const [shiftEndsNextDay, setShiftEndsNextDay] = useState(existing?.config?.shiftTime?.endsNextDay??false);
   // Apply a template preset — fills in name, type, sequence/days
   const applyTemplate = (tpl) => {
     if (tpl.id === "blank") {
@@ -6827,7 +6927,8 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
     if (tpl.config?.days) setWeekDays(tpl.config.days);
     setShowTemplates(false);
   };
-  // Overnight shift math — if end is at or before start, treat as crossing midnight
+  // Overnight math: overnight when either the user toggled "ends next day" OR
+  // the legacy auto-detect kicks in (end ≤ start).
   const shiftMetrics = React.useMemo(() => {
     if (!shiftEnabled) return { isOvernight: false, durationHours: null };
     const [sh, sm] = shiftStart.split(":").map(Number);
@@ -6835,10 +6936,10 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
     if (isNaN(sh) || isNaN(eh)) return { isOvernight: false, durationHours: null };
     const startMin = sh * 60 + sm;
     let endMin = eh * 60 + em;
-    const isOvernight = endMin <= startMin;
+    const isOvernight = shiftEndsNextDay || endMin <= startMin;
     if (isOvernight) endMin += 24 * 60;
     return { isOvernight, durationHours: ((endMin - startMin) / 60).toFixed(1) };
-  }, [shiftEnabled, shiftStart, shiftEnd]);
+  }, [shiftEnabled, shiftStart, shiftEnd, shiftEndsNextDay]);
   const formatTime12h = (t) => fmtClock(t);
   // Live preview: whenever any relevant state changes, report up to the parent
   // so the persistent calendar (in split mode) can visualize the in-progress shift.
@@ -6857,7 +6958,7 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
   const handleSave = () => {
     if (!name.trim()) return;
     const parseLocal = s => { const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d); };
-    const shiftTime={enabled:shiftEnabled,start:shiftStart,end:shiftEnd};
+    const shiftTime={enabled:shiftEnabled,start:shiftStart,end:shiftEnd,endsNextDay:shiftEndsNextDay};
     const config=type==="rotation"?{sequence,startDate:parseLocal(cycleStart).toISOString(),shiftTime}:type==="monthly"?{months:{},shiftTime}:{days:weekDays,shiftTime};
     const saved={name,type,color,config};
     if (isEdit) saved.id=existing.id;
@@ -6989,11 +7090,24 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
                     fontFamily:"var(--font)", fontSize:"0.875rem", outline:"none", textAlign:"right" }} />
               </div>
               <div style={{ display:"flex", alignItems:"center", padding:"0 14px",
-                borderBottom: type==="rotation" ? "1px solid var(--border)" : "none" }}>
+                borderBottom: "1px solid var(--border)" }}>
                 <span style={{ fontSize:"0.8125rem", color:"var(--muted)", fontWeight:500, width:90, flexShrink:0 }}>End</span>
                 <input type="time" value={shiftEnd} onChange={e=>setShiftEnd(e.target.value)}
                   style={{ flex:1, background:"none", border:"none", padding:"12px 0", color:"var(--text)",
                     fontFamily:"var(--font)", fontSize:"0.875rem", outline:"none", textAlign:"right" }} />
+              </div>
+              {/* Ends next day — explicit overnight flag for cases like 1 AM → 5 AM
+                  where the end time by itself can't tell us it crosses midnight. */}
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
+                padding:"10px 14px",
+                borderBottom: type==="rotation" ? "1px solid var(--border)" : "none" }}>
+                <div style={{ flex:1, minWidth:0, paddingRight:12 }}>
+                  <div style={{ fontSize:"0.8125rem", color:"var(--text)", fontWeight:500 }}>Ends next day</div>
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:2, lineHeight:1.4 }}>
+                    Turn on for shifts that cross midnight — e.g. 1 AM today to 5 AM tomorrow.
+                  </div>
+                </div>
+                <button className={"toggle"+(shiftEndsNextDay?" on":"")} onClick={()=>setShiftEndsNextDay(v=>!v)} />
               </div>
             </>
           )}
@@ -7020,7 +7134,7 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
           }}>
             <span style={{ color:"var(--accent2)", display:"flex", marginTop:2, width:14, height:14 }}>{Icon.moon}</span>
             <div style={{ flex:1 }}>
-              <div style={{ fontSize:"0.8125rem", fontWeight:600, color:"var(--accent2)", marginBottom:2 }}>Overnight shift detected</div>
+              <div style={{ fontSize:"0.8125rem", fontWeight:600, color:"var(--accent2)", marginBottom:2 }}>Overnight shift</div>
               <div style={{ fontSize:"0.75rem", color:"var(--muted)", lineHeight:1.5 }}>
                 {formatTime12h(shiftStart)} &rarr; {formatTime12h(shiftEnd)} the next day &middot; {shiftMetrics.durationHours} hours total. Busy time will be blocked across midnight correctly.
               </div>
@@ -7678,20 +7792,797 @@ function PreviewOvernight() {
   );
 }
 
+function PreviewTodayCard() {
+  return (
+    <PreviewFrame height={140}>
+      <div style={{ width:240, padding:10, borderRadius:10, background:"var(--surface3)", border:"1px solid var(--border)" }}>
+        <div style={{ fontSize:"0.5625rem", fontWeight:700, color:"var(--muted)", textTransform:"uppercase", letterSpacing:"0.4px", marginBottom:6 }}>Today</div>
+        <div style={{ display:"flex", alignItems:"center", gap:6, padding:"5px 7px", borderRadius:6, background:"rgba(124,106,247,0.22)", marginBottom:4 }}>
+          <div style={{ width:6, height:6, borderRadius:"50%", background:"#7c6af7", animation:"ghostPulse 1.5s ease-in-out infinite" }} />
+          <span style={{ fontSize:"0.6875rem", color:"var(--text)", flex:1, fontWeight:700 }}>Team standup</span>
+          <span style={{ fontSize:"0.5625rem", color:"var(--accent2)", fontWeight:700 }}>now</span>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:6, padding:"5px 7px", opacity:0.75 }}>
+          <div style={{ width:6, height:6, borderRadius:"50%", background:"#ec4899" }} />
+          <span style={{ fontSize:"0.6875rem", color:"var(--text)", flex:1 }}>Lunch with Sam</span>
+          <span style={{ fontSize:"0.5625rem", color:"var(--muted)" }}>in 2h</span>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewShiftBanner() {
+  const color = "#10b981";
+  return (
+    <PreviewFrame>
+      <div style={{ width:260, borderRadius:10, padding:"10px 14px", display:"flex", alignItems:"center", gap:10,
+        background:`linear-gradient(135deg, ${color}26, ${color}11)`, border:`1px solid ${color}44`, borderLeft:`4px solid ${color}` }}>
+        <div style={{ width:28, height:28, borderRadius:6, background:`${color}33`, display:"flex", alignItems:"center", justifyContent:"center", color }}>
+          <span style={{ display:"flex", width:14, height:14 }}>{Icon.repeat}</span>
+        </div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:"0.5625rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.4px" }}>On shift now</div>
+          <div style={{ fontSize:"0.75rem", color:"var(--text)", fontWeight:700 }}>Day shift · 7a – 7p</div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewTapSwap() {
+  return (
+    <PreviewFrame height={140}>
+      <div style={{ width:220, display:"flex", flexDirection:"column", gap:5 }}>
+        {[
+          { t:"Major Events", sel:true, n:1 },
+          { t:"Pinned",       sel:false, n:2 },
+          { t:"Now",          sel:false, n:3 },
+        ].map((r, i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", borderRadius:8,
+            background: r.sel ? "rgba(124,106,247,0.18)" : "var(--surface3)",
+            border: "1.5px solid " + (r.sel ? "var(--accent)" : "var(--border)") }}>
+            <span style={{ fontSize:"0.6875rem", color: r.sel ? "var(--accent2)" : "var(--text)", flex:1, fontWeight:600 }}>{r.t}</span>
+            <span style={{ fontSize:"0.5625rem", color: r.sel ? "var(--accent)" : "var(--muted)", fontFamily:"var(--mono)", fontWeight:700 }}>#{r.n}</span>
+          </div>
+        ))}
+        <div style={{ fontSize:"0.5625rem", color:"var(--accent2)", textAlign:"center", marginTop:3, fontWeight:600 }}>
+          Tap another to swap
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewEmptyHint() {
+  return (
+    <PreviewFrame>
+      <div style={{ width:240, padding:"9px 11px", borderRadius:10, background:"rgba(124,106,247,0.1)",
+        border:"1px dashed rgba(124,106,247,0.45)", display:"flex", alignItems:"center", gap:10 }}>
+        <div style={{ width:22, height:22, borderRadius:6, background:"rgba(124,106,247,0.22)",
+          display:"flex", alignItems:"center", justifyContent:"center", color:"var(--accent2)" }}>
+          <span style={{ display:"flex", width:12, height:12 }}>{Icon.plus}</span>
+        </div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:"0.6875rem", fontWeight:700, color:"var(--text)" }}>Add your first shift</div>
+          <div style={{ fontSize:"0.5625rem", color:"var(--muted)", marginTop:1 }}>Let Daytu handle rotations.</div>
+        </div>
+        <div style={{ display:"flex", width:11, height:11, color:"var(--muted)" }}>{Icon.close}</div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewHelpIcon() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+        <div style={{ width:36, height:36, borderRadius:"50%", background:"rgba(124,106,247,0.15)",
+          border:"1px solid rgba(124,106,247,0.35)", display:"flex", alignItems:"center", justifyContent:"center",
+          color:"var(--accent2)", animation:"guideFadeIn 2.4s ease-out infinite" }}>
+          <span style={{ display:"flex", width:18, height:18 }}>{Icon.help}</span>
+        </div>
+        <span style={{ fontSize:"1.125rem", color:"var(--muted)" }}>→</span>
+        <div style={{ width:80, padding:6, borderRadius:8, background:"var(--surface3)", border:"1px solid var(--border)",
+          display:"flex", flexDirection:"column", gap:3 }}>
+          <div style={{ fontSize:"0.5rem", color:"var(--accent2)", fontWeight:800 }}>Guide</div>
+          <div style={{ height:3, borderRadius:1, background:"var(--border)", width:"80%" }} />
+          <div style={{ height:3, borderRadius:1, background:"var(--border)", width:"55%" }} />
+          <div style={{ height:3, borderRadius:1, background:"var(--border)", width:"70%" }} />
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewThreeViews() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", gap:6 }}>
+        {["Day", "Week", "Month"].map((v, i) => (
+          <div key={v} style={{ padding:"6px 14px", borderRadius:20, fontSize:"0.6875rem", fontWeight:700,
+            border: "1.5px solid " + (i===1 ? "var(--accent)" : "var(--border)"),
+            background: i===1 ? "rgba(124,106,247,0.22)" : "var(--surface3)",
+            color: i===1 ? "var(--accent2)" : "var(--muted)" }}>{v}</div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewWeekLayouts() {
+  return (
+    <PreviewFrame height={140}>
+      <div style={{ display:"flex", gap:14 }}>
+        <div>
+          <div style={{ fontSize:"0.5rem", fontWeight:700, color:"var(--muted)", marginBottom:4, textAlign:"center", letterSpacing:"0.4px" }}>COLUMNS</div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(5,14px)", gap:2 }}>
+            {Array.from({length:5}).map((_, i) => (
+              <div key={i} style={{ display:"flex", flexDirection:"column", gap:2 }}>
+                <div style={{ height:26, borderRadius:2, background: i%2 ? "rgba(99,102,241,0.45)" : "rgba(16,185,129,0.4)" }} />
+                <div style={{ height:14, borderRadius:2, background:"var(--surface3)" }} />
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize:"0.5rem", fontWeight:700, color:"var(--muted)", marginBottom:4, textAlign:"center", letterSpacing:"0.4px" }}>GRID</div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(5,14px)", gridTemplateRows:"repeat(4,10px)", gap:1, padding:1, borderRadius:3, background:"var(--border)" }}>
+            {Array.from({length:20}).map((_, i) => (
+              <div key={i} style={{ background: [4,8,13].includes(i) ? "#7c6af7cc" : "var(--surface3)" }} />
+            ))}
+          </div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewLegend() {
+  return (
+    <PreviewFrame>
+      <div style={{ width:240, padding:"8px 10px", borderRadius:8, background:"var(--surface3)", border:"1px solid var(--border)",
+        display:"flex", flexDirection:"column", gap:5 }}>
+        {[
+          { c:"#6366f1", t:"Day shift" },
+          { c:"#10b981", t:"Night shift" },
+          { c:"#f59e0b", t:"Hawaii trip", stripe:true },
+        ].map((r, i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:8 }}>
+            {r.stripe ? (
+              <div style={{ width:16, height:10, borderRadius:2,
+                background:`repeating-linear-gradient(45deg, ${r.c} 0px, ${r.c} 2px, transparent 2px, transparent 5px)`,
+                border:`1px solid ${r.c}88` }} />
+            ) : (
+              <div style={{ width:16, height:10, borderRadius:2, background:r.c }} />
+            )}
+            <span style={{ fontSize:"0.625rem", color:"var(--text)" }}>{r.t}</span>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewShiftTypes() {
+  // Mirrors the real "type" chip row in the shift-edit form:
+  // Custom rotation · Weekly days · Specific Days
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", gap:6, flexWrap:"wrap", justifyContent:"center", maxWidth:260 }}>
+        {[
+          { t:"Custom rotation", sel:true,  sub:"4 on · 4 off" },
+          { t:"Weekly days",     sel:false, sub:"Mon · Wed · Fri" },
+          { t:"Specific Days",   sel:false, sub:"1st & 15th" },
+        ].map(p => (
+          <div key={p.t} style={{ padding:"6px 10px", borderRadius:16,
+            background: p.sel ? "rgba(124,106,247,0.22)" : "var(--surface3)",
+            border: "1.5px solid " + (p.sel ? "var(--accent)" : "var(--border)"),
+            textAlign:"center" }}>
+            <div style={{ fontSize:"0.625rem", fontWeight:700, color: p.sel ? "var(--accent2)" : "var(--text)" }}>{p.t}</div>
+            <div style={{ fontSize:"0.5rem", color:"var(--muted)", marginTop:2, fontFamily:"var(--mono)" }}>{p.sub}</div>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewTemplates() {
+  // Mirrors the real PATTERN_TEMPLATES list shown when creating a new shift.
+  return (
+    <PreviewFrame>
+      <div style={{ width:250, display:"flex", flexWrap:"wrap", gap:4, justifyContent:"center" }}>
+        {["Kelly", "48/96", "Alternating Week", "Mon/Wed/Fri", "1 On / 2 Off"].map(t => (
+          <div key={t} style={{ padding:"4px 9px", borderRadius:12, background:"var(--surface3)",
+            border:"1px solid var(--border)", fontSize:"0.5625rem", color:"var(--text)", fontWeight:600 }}>{t}</div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewSkipAdd() {
+  // Mirrors the real long-press day popup: "Active shifts" rows with an
+  // On-shift/Skipped indicator, and an "Add extra shift" row below for
+  // scheduled days-off.
+  const a = "#6366f1", b = "#10b981";
+  return (
+    <PreviewFrame height={150}>
+      <div style={{ width:240, padding:10, borderRadius:10, background:"var(--surface3)", border:"1px solid var(--border)" }}>
+        <div style={{ fontSize:"0.5625rem", color:"var(--muted)", fontWeight:700, marginBottom:5, letterSpacing:"0.4px" }}>ACTIVE SHIFTS</div>
+        <div style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 8px", borderRadius:7,
+          background:`${a}22`, border:`1px solid ${a}55`, marginBottom:4 }}>
+          <div style={{ width:8, height:8, borderRadius:2, background:a, border:`2px solid ${a}` }} />
+          <span style={{ fontSize:"0.625rem", color:"var(--text)", flex:1, fontWeight:600 }}>Day shift</span>
+          <span style={{ padding:"2px 7px", borderRadius:999, fontSize:"0.5625rem", fontWeight:700,
+            background:"rgba(52,211,153,0.15)", border:"1px solid rgba(52,211,153,0.4)",
+            color:"#34d399" }}>On shift</span>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 8px", borderRadius:7,
+          background:"var(--surface2)", border:"1px solid var(--border)", opacity:0.7 }}>
+          <div style={{ width:8, height:8, borderRadius:2, border:`2px solid ${b}` }} />
+          <span style={{ fontSize:"0.625rem", color:"var(--muted)", flex:1, textDecoration:"line-through" }}>Night shift</span>
+          <span style={{ padding:"2px 7px", borderRadius:999, fontSize:"0.5625rem", fontWeight:700,
+            background:"rgba(248,113,113,0.15)", border:"1px solid rgba(248,113,113,0.4)",
+            color:"#f87171" }}>Skipped</span>
+        </div>
+        <div style={{ fontSize:"0.5625rem", color:"var(--muted)", fontWeight:700, margin:"8px 0 5px", letterSpacing:"0.4px" }}>ADD EXTRA SHIFT</div>
+        <div style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 8px", borderRadius:7,
+          background:"var(--surface2)", border:"1px solid var(--border)" }}>
+          <div style={{ width:8, height:8, borderRadius:2, border:"2px solid #f59e0b" }} />
+          <span style={{ fontSize:"0.625rem", color:"var(--text)", flex:1, fontWeight:600 }}>On-call</span>
+          <span style={{ fontSize:"0.5625rem", color:"var(--muted)", fontWeight:700 }}>+ Add</span>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewFab() {
+  // Mirrors the real FAB: 52×52 accent button with border-radius 16, plus icon,
+  // and a two-row menu stacked above (Major Event on top with orange dot,
+  // Event below with accent dot — label on the left, dot on the right).
+  return (
+    <PreviewFrame height={150}>
+      <div style={{ position:"relative", width:200, height:125, display:"flex",
+        flexDirection:"column", alignItems:"flex-end", justifyContent:"flex-end", gap:8, paddingRight:6 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 12px",
+          background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12,
+          boxShadow:"0 4px 20px rgba(0,0,0,0.3)", animation:"guideSlideIn 2.4s ease-out infinite" }}>
+          <span style={{ fontSize:"0.625rem", fontWeight:700, color:"var(--text)" }}>Major Event</span>
+          <div style={{ width:8, height:8, borderRadius:"50%", background:"#f59e0b" }} />
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 12px",
+          background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12,
+          boxShadow:"0 4px 20px rgba(0,0,0,0.3)", animation:"guideSlideIn 2.4s ease-out infinite" }}>
+          <span style={{ fontSize:"0.625rem", fontWeight:700, color:"var(--text)" }}>Event</span>
+          <div style={{ width:8, height:8, borderRadius:"50%", background:"var(--accent)" }} />
+        </div>
+        <div style={{ width:40, height:40, borderRadius:12, background:"var(--accent)",
+          display:"flex", alignItems:"center", justifyContent:"center", color:"#fff",
+          boxShadow:"0 4px 20px rgba(124,106,247,0.55)", transform:"rotate(45deg)" }}>
+          <span style={{ display:"flex", width:20, height:20 }}>{Icon.plus}</span>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewRecurrence() {
+  return (
+    <PreviewFrame height={140}>
+      <div style={{ width:200, display:"flex", flexDirection:"column", gap:2 }}>
+        {["None", "Daily", "Weekly", "Monthly", "Yearly", "Specific days"].map((r, i) => (
+          <div key={r} style={{ display:"flex", alignItems:"center", gap:7, padding:"3px 8px", borderRadius:5,
+            background: i===2 ? "rgba(124,106,247,0.2)" : "transparent",
+            border: "1px solid " + (i===2 ? "var(--accent)" : "transparent") }}>
+            <div style={{ width:9, height:9, borderRadius:"50%",
+              border: "1.5px solid " + (i===2 ? "var(--accent)" : "var(--border)"),
+              background: i===2 ? "var(--accent)" : "transparent" }} />
+            <span style={{ fontSize:"0.6875rem", color: i===2 ? "var(--accent2)" : "var(--text)", fontWeight: i===2 ? 700 : 500 }}>{r}</span>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewEditRecurring() {
+  return (
+    <PreviewFrame>
+      <div style={{ width:220, padding:10, borderRadius:10, background:"var(--surface3)", border:"1px solid var(--border)" }}>
+        <div style={{ fontSize:"0.625rem", color:"var(--text)", fontWeight:700, marginBottom:8 }}>Save changes to:</div>
+        <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+          <div style={{ padding:"6px 10px", borderRadius:7, background:"rgba(124,106,247,0.22)",
+            border:"1px solid rgba(124,106,247,0.45)", fontSize:"0.625rem", color:"var(--accent2)", fontWeight:700 }}>This date only</div>
+          <div style={{ padding:"6px 10px", borderRadius:7, background:"var(--surface)",
+            border:"1px solid var(--border)", fontSize:"0.625rem", color:"var(--text)", fontWeight:600 }}>All dates</div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewLocationLink() {
+  return (
+    <PreviewFrame>
+      <div style={{ width:240, display:"flex", flexDirection:"column", gap:5 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", borderRadius:8,
+          background:"var(--surface3)", border:"1px solid var(--border)" }}>
+          <span style={{ display:"flex", width:12, height:12, color:"var(--accent2)" }}>{Icon.mapPin}</span>
+          <span style={{ fontSize:"0.625rem", color:"var(--text)", flex:1 }}>450 Market St, San Francisco</span>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", borderRadius:8,
+          background:"var(--surface3)", border:"1px solid var(--border)" }}>
+          <span style={{ display:"flex", width:12, height:12, color:"var(--accent2)" }}>{Icon.link}</span>
+          <span style={{ fontSize:"0.625rem", color:"#a78bfa", flex:1, textDecoration:"underline" }}>meet.google.com/abc-def-ghi</span>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewNotesReminders() {
+  return (
+    <PreviewFrame height={140}>
+      <div style={{ width:240, display:"flex", flexDirection:"column", gap:5 }}>
+        <div style={{ padding:"7px 10px", borderRadius:8, background:"var(--surface3)",
+          border:"1px solid var(--border)" }}>
+          <div style={{ fontSize:"0.5rem", color:"var(--muted)", fontWeight:700, marginBottom:3, letterSpacing:"0.4px" }}>NOTES</div>
+          <div style={{ fontSize:"0.625rem", color:"var(--text)", lineHeight:1.4 }}>Bring the blue folder and ID.</div>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 10px", borderRadius:8,
+          background:"var(--surface3)", border:"1px solid var(--border)" }}>
+          <span style={{ display:"flex", width:11, height:11, color:"var(--muted)" }}>{Icon.bell}</span>
+          <span style={{ fontSize:"0.5rem", color:"var(--muted)", fontWeight:700, letterSpacing:"0.4px" }}>REMIND</span>
+          <div style={{ padding:"2px 7px", borderRadius:10, background:"rgba(124,106,247,0.22)",
+            fontSize:"0.5625rem", color:"var(--accent2)", fontWeight:700, marginLeft:"auto" }}>30 min before</div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewProfile() {
+  const color = "#6366f1";
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", borderRadius:10,
+        background:"var(--surface3)", border:"1px solid var(--border)", width:220 }}>
+        <div style={{ width:32, height:32, borderRadius:"50%", background:color, display:"flex",
+          alignItems:"center", justifyContent:"center", color:"#fff", fontSize:"0.875rem", fontWeight:800 }}>A</div>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:"0.75rem", color:"var(--text)", fontWeight:700 }}>Alex</div>
+          <div style={{ fontSize:"0.5625rem", color:"var(--muted)" }}>Your default color</div>
+        </div>
+        <div style={{ width:14, height:14, borderRadius:4, background:color, border:"1.5px solid var(--border)" }} />
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewDefaults() {
+  return (
+    <PreviewFrame>
+      <div style={{ width:220, display:"flex", flexDirection:"column", gap:5 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 10px", borderRadius:8,
+          background:"var(--surface3)", border:"1px solid var(--border)" }}>
+          <span style={{ fontSize:"0.5rem", color:"var(--muted)", fontWeight:700, flex:1, letterSpacing:"0.4px" }}>DEFAULT CAL</span>
+          <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+            <div style={{ width:8, height:8, borderRadius:"50%", background:"#6366f1" }} />
+            <span style={{ fontSize:"0.625rem", color:"var(--text)", fontWeight:600 }}>Personal</span>
+          </div>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 10px", borderRadius:8,
+          background:"var(--surface3)", border:"1px solid var(--border)" }}>
+          <span style={{ fontSize:"0.5rem", color:"var(--muted)", fontWeight:700, flex:1, letterSpacing:"0.4px" }}>REMIND</span>
+          <span style={{ fontSize:"0.625rem", color:"var(--text)", fontWeight:600 }}>15 min before</span>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewCalendars() {
+  const cals = [
+    { t:"Personal", c:"#6366f1", hidden:false },
+    { t:"Work",     c:"#ec4899", hidden:false },
+    { t:"Family",   c:"#10b981", hidden:true  },
+  ];
+  return (
+    <PreviewFrame>
+      <div style={{ width:220, display:"flex", flexDirection:"column", gap:4 }}>
+        {cals.map((c, i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 10px", borderRadius:7,
+            background:"var(--surface3)", border:"1px solid var(--border)", opacity: c.hidden ? 0.55 : 1 }}>
+            <div style={{ width:9, height:9, borderRadius:3, background:c.c }} />
+            <span style={{ fontSize:"0.625rem", color:"var(--text)", flex:1, fontWeight:600,
+              textDecoration: c.hidden ? "line-through" : "none" }}>{c.t}</span>
+            <div style={{ width:20, height:11, borderRadius:6,
+              background: c.hidden ? "var(--border)" : "var(--accent)", position:"relative" }}>
+              <div style={{ position:"absolute", top:1, left: c.hidden ? 1 : 10, width:9, height:9,
+                borderRadius:"50%", background:"#fff" }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewTheme() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", gap:8 }}>
+        {[
+          { t:"Dark",  bg:"#12101e", fg:"#e5e5e5", sel:true },
+          { t:"Light", bg:"#f5f5f7", fg:"#1a1a1a" },
+          { t:"Auto",  bg:"linear-gradient(135deg,#12101e 50%,#f5f5f7 50%)", fg:"#888" },
+        ].map(th => (
+          <div key={th.t} style={{ width:54, height:58, borderRadius:8, background:th.bg,
+            border: "1.5px solid " + (th.sel ? "var(--accent)" : "var(--border)"),
+            display:"flex", alignItems:"flex-end", justifyContent:"center", paddingBottom:5 }}>
+            <span style={{ fontSize:"0.5625rem", color:th.fg, fontWeight:700 }}>{th.t}</span>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewHighContrast() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", gap:14 }}>
+        <div>
+          <div style={{ fontSize:"0.5rem", color:"var(--muted)", fontWeight:700, marginBottom:4, textAlign:"center", letterSpacing:"0.4px" }}>OFF</div>
+          <div style={{ width:70, height:44, borderRadius:8, padding:6, background:"var(--surface3)",
+            border:"1px solid var(--border)", display:"flex", flexDirection:"column", gap:3 }}>
+            <div style={{ height:4, borderRadius:2, background:"rgba(255,255,255,0.22)", width:"80%" }} />
+            <div style={{ height:3, borderRadius:2, background:"rgba(255,255,255,0.14)", width:"60%" }} />
+            <div style={{ height:3, borderRadius:2, background:"rgba(255,255,255,0.14)", width:"50%" }} />
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize:"0.5rem", color:"var(--accent2)", fontWeight:700, marginBottom:4, textAlign:"center", letterSpacing:"0.4px" }}>ON</div>
+          <div style={{ width:70, height:44, borderRadius:8, padding:6, background:"var(--surface3)",
+            border:"2px solid var(--text)", display:"flex", flexDirection:"column", gap:3 }}>
+            <div style={{ height:5, borderRadius:2, background:"var(--text)", width:"80%" }} />
+            <div style={{ height:4, borderRadius:2, background:"var(--text)", width:"60%" }} />
+            <div style={{ height:4, borderRadius:2, background:"var(--text)", width:"50%" }} />
+          </div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewTextSize() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", gap:6, alignItems:"flex-end" }}>
+        {[
+          { v:1.0,  sel:true  },
+          { v:1.15, sel:false },
+          { v:1.3,  sel:false },
+          { v:1.5,  sel:false },
+        ].map(({ v, sel }, i) => (
+          <div key={i} style={{ width:34, padding:"8px 4px", borderRadius:7,
+            background: sel ? "rgba(124,106,247,0.22)" : "var(--surface3)",
+            border: "1.5px solid " + (sel ? "var(--accent)" : "var(--border)"),
+            textAlign:"center" }}>
+            <div style={{ fontSize: `${v * 0.875}rem`, fontWeight:800,
+              color: sel ? "var(--accent2)" : "var(--text)", lineHeight:1 }}>Aa</div>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewLayoutMode() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+        <div style={{ width:28, height:50, borderRadius:4, background:"var(--surface3)", border:"1.5px solid var(--border)",
+          padding:3, display:"flex", flexDirection:"column", gap:2 }}>
+          <div style={{ height:6, borderRadius:1, background:"var(--border)" }} />
+          <div style={{ flex:1, borderRadius:1, background:"var(--surface2)" }} />
+        </div>
+        <div style={{ width:42, height:50, borderRadius:4, background:"var(--surface3)", border:"1.5px solid var(--border)",
+          padding:3, display:"flex", gap:2 }}>
+          <div style={{ width:8, borderRadius:1, background:"var(--border)" }} />
+          <div style={{ flex:1, borderRadius:1, background:"var(--surface2)" }} />
+        </div>
+        <div style={{ width:62, height:50, borderRadius:4, background:"var(--surface3)", border:"1.5px solid var(--accent)",
+          padding:3, display:"flex", gap:2 }}>
+          <div style={{ width:10, borderRadius:1, background:"var(--border)" }} />
+          <div style={{ flex:1, borderRadius:1, background:"rgba(124,106,247,0.3)" }} />
+          <div style={{ flex:1, borderRadius:1, background:"var(--surface2)" }} />
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewClockFormat() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", gap:16 }}>
+        <div style={{ textAlign:"center" }}>
+          <div style={{ fontSize:"1.125rem", fontWeight:800, color:"var(--accent2)", fontFamily:"var(--mono)", letterSpacing:"-0.02em" }}>3:45 PM</div>
+          <div style={{ fontSize:"0.5rem", color:"var(--muted)", fontWeight:700, marginTop:3, letterSpacing:"0.4px" }}>12-HOUR</div>
+        </div>
+        <div style={{ width:1, background:"var(--border)" }} />
+        <div style={{ textAlign:"center" }}>
+          <div style={{ fontSize:"1.125rem", fontWeight:800, color:"var(--text)", fontFamily:"var(--mono)", letterSpacing:"-0.02em" }}>15:45</div>
+          <div style={{ fontSize:"0.5rem", color:"var(--muted)", fontWeight:700, marginTop:3, letterSpacing:"0.4px" }}>24-HOUR</div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewMapProvider() {
+  // Mirrors the real Settings segmented control: Auto / Apple / Google
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", gap:3, background:"var(--surface2)", borderRadius:10, padding:3, width:220 }}>
+        {[
+          { t:"Auto",   sel:false },
+          { t:"Apple",  sel:true  },
+          { t:"Google", sel:false },
+        ].map(m => (
+          <div key={m.t} style={{ flex:1, padding:"6px 0", borderRadius:7, textAlign:"center",
+            background: m.sel ? "var(--surface)" : "transparent",
+            color: m.sel ? "var(--text)" : "var(--muted)",
+            boxShadow: m.sel ? "0 1px 3px rgba(0,0,0,0.15)" : "none",
+            fontSize:"0.6875rem", fontWeight:700 }}>{m.t}</div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewExportICS() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+        <div style={{ width:42, height:52, borderRadius:5, background:"var(--surface3)",
+          border:"1.5px solid var(--border)", position:"relative", display:"flex", alignItems:"flex-end",
+          justifyContent:"center", padding:4 }}>
+          <div style={{ position:"absolute", top:0, right:0, width:11, height:11, background:"var(--bg)",
+            borderLeft:"1.5px solid var(--border)", borderBottom:"1.5px solid var(--border)" }} />
+          <div style={{ fontSize:"0.5rem", color:"var(--accent2)", fontWeight:800, letterSpacing:"0.4px" }}>.ics</div>
+        </div>
+        <span style={{ fontSize:"1rem", color:"var(--muted)" }}>→</span>
+        <div style={{ display:"flex", flexDirection:"column", gap:3, fontSize:"0.5625rem", color:"var(--text)", fontWeight:600 }}>
+          <span>Apple Calendar</span>
+          <span>Google Calendar</span>
+          <span>Outlook</span>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewBadges() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", gap:18, padding:"12px 16px", borderRadius:10, background:"var(--surface3)",
+        border:"1px solid var(--border)" }}>
+        {[
+          { icon: Icon.home,     dot:"#7c6af7" },
+          { icon: Icon.calendar, dot:null      },
+          { icon: Icon.repeat,   dot:"#ef4444" },
+          { icon: Icon.settings, dot:null      },
+        ].map((n, i) => (
+          <div key={i} style={{ position:"relative", width:18, height:18, color:"var(--muted)" }}>
+            <span style={{ display:"flex", width:18, height:18 }}>{n.icon}</span>
+            {n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:6, height:6, borderRadius:"50%",
+              background:n.dot, border:"1.5px solid var(--surface3)" }} />}
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewResetCard({ danger = false }) {
+  const c = danger ? "#ef4444" : "#f59e0b";
+  return (
+    <PreviewFrame>
+      <div style={{ width:220, padding:10, borderRadius:10,
+        background:`${c}14`, border:`1.5px solid ${c}55` }}>
+        <div style={{ display:"flex", alignItems:"center", gap:7, marginBottom:5 }}>
+          <div style={{ width:16, height:16, borderRadius:4, background:`${c}33`,
+            display:"flex", alignItems:"center", justifyContent:"center", color:c }}>
+            <span style={{ display:"flex", width:10, height:10 }}>{Icon.trash}</span>
+          </div>
+          <span style={{ fontSize:"0.6875rem", fontWeight:800, color:c }}>
+            {danger ? "Full reset" : "Soft reset"}
+          </span>
+        </div>
+        <div style={{ fontSize:"0.5625rem", color:"var(--text)", lineHeight:1.4 }}>
+          {danger ? "Deletes everything — including onboarding." : "Keeps profile, theme, and onboarding."}
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewSoftReset() { return <PreviewResetCard danger={false} />; }
+function PreviewFullReset() { return <PreviewResetCard danger={true}  />; }
+
+function PreviewTourReplay() {
+  return (
+    <PreviewFrame>
+      <div style={{ position:"relative", width:140, height:70, borderRadius:8, background:"rgba(0,0,0,0.5)",
+        display:"flex", alignItems:"center", justifyContent:"center" }}>
+        <div style={{ width:36, height:36, borderRadius:"50%", background:"var(--surface3)",
+          border:"2px solid var(--accent)", boxShadow:"0 0 0 2px var(--accent), 0 0 24px rgba(124,106,247,0.6)",
+          display:"flex", alignItems:"center", justifyContent:"center", color:"var(--accent2)",
+          animation:"guideFadeIn 2.4s ease-out infinite" }}>
+          <span style={{ display:"flex", width:16, height:16 }}>{Icon.help}</span>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewOnDevice() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+        <div style={{ width:44, height:60, borderRadius:8, background:"var(--surface3)",
+          border:"2px solid var(--border)", padding:4, display:"flex", flexDirection:"column", gap:3 }}>
+          <div style={{ height:3, borderRadius:1, background:"var(--border)", margin:"0 auto", width:"45%" }} />
+          <div style={{ flex:1, borderRadius:4, background:"rgba(124,106,247,0.22)", display:"flex",
+            alignItems:"center", justifyContent:"center", color:"var(--accent2)" }}>
+            <span style={{ display:"flex", width:14, height:14 }}>{Icon.calendar}</span>
+          </div>
+        </div>
+        <div style={{ fontSize:"0.625rem", color:"var(--text)", maxWidth:120, lineHeight:1.4 }}>
+          Your data never leaves this device.
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewInstallApp() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", gap:8, padding:10, borderRadius:10, background:"var(--surface3)",
+        border:"1px solid var(--border)" }}>
+        {[0,1,2].map(i => (
+          <div key={i} style={{ width:34, height:34, borderRadius:8,
+            background: i===2 ? "linear-gradient(135deg,#7c6af7,#a78bfa)" : "var(--surface2)",
+            border: i===2 ? "none" : "1px dashed var(--border)",
+            display:"flex", alignItems:"center", justifyContent:"center",
+            color: i===2 ? "#fff" : "var(--muted)",
+            animation: i===2 ? "guideFadeIn 2.4s ease-out infinite" : "none" }}>
+            {i===2 ? <span style={{ fontSize:"0.8125rem", fontWeight:800 }}>D</span>
+                   : <span style={{ display:"flex", width:12, height:12 }}>{Icon.plus}</span>}
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewKeyboard() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", flexDirection:"column", gap:7, alignItems:"center" }}>
+        <div style={{ width:210, padding:"7px 10px", borderRadius:7, background:"var(--surface3)",
+          border:"1.5px solid var(--accent)", display:"flex", alignItems:"center" }}>
+          <span style={{ fontSize:"0.625rem", color:"var(--text)" }}>Meeting with the team</span>
+          <span style={{ width:1.5, height:11, background:"var(--text)",
+            animation:"guideCaret 1s step-end infinite", marginLeft:2 }} />
+        </div>
+        <div style={{ display:"flex", gap:2 }}>
+          {Array.from({length:9}).map((_, i) => (
+            <div key={i} style={{ width:18, height:14, borderRadius:3, background:"var(--surface3)",
+              border:"1px solid var(--border)" }} />
+          ))}
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewHideCal() {
+  return (
+    <PreviewFrame>
+      <div style={{ width:220, display:"flex", flexDirection:"column", gap:4 }}>
+        {[
+          { t:"Personal", c:"#6366f1", on:true  },
+          { t:"Work",     c:"#ec4899", on:false },
+          { t:"Family",   c:"#10b981", on:true  },
+        ].map((cal, i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:7, padding:"4px 9px", borderRadius:6,
+            background:"var(--surface3)", border:"1px solid var(--border)", opacity: cal.on ? 1 : 0.45 }}>
+            <div style={{ width:8, height:8, borderRadius:2, background:cal.c }} />
+            <span style={{ fontSize:"0.625rem", color:"var(--text)", flex:1,
+              textDecoration: cal.on ? "none" : "line-through" }}>{cal.t}</span>
+            <span style={{ fontSize:"0.5rem", color:"var(--muted)", fontWeight:700, letterSpacing:"0.3px" }}>{cal.on ? "ON" : "HIDDEN"}</span>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewColorFallback() {
+  const color = "#6366f1";
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+        <div style={{ padding:"5px 9px", borderRadius:6, background:`${color}22`,
+          border:`1px solid ${color}55`, borderLeft:`3px solid ${color}`,
+          fontSize:"0.625rem", color:"var(--text)", fontWeight:600 }}>Morning run</div>
+        <span style={{ fontSize:"1rem", color:"var(--muted)" }}>→</span>
+        <div style={{ display:"flex", alignItems:"center", gap:5, padding:"5px 9px", borderRadius:6,
+          background:"var(--surface3)", border:"1px solid var(--border)" }}>
+          <div style={{ width:8, height:8, borderRadius:2, background:color }} />
+          <span style={{ fontSize:"0.625rem", color:"var(--text)" }}>Personal</span>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
 // Registry keyed by string so CONTENT rows stay declarative and easy to edit.
 const GUIDE_PREVIEWS = {
-  stripes:       PreviewStripes,
-  rings:         PreviewRings,
-  holidayH:      PreviewHolidayH,
-  conflict:      PreviewConflict,
-  ghost:         PreviewGhost,
-  doubleTap:     PreviewDoubleTap,
-  longPress:     PreviewLongPress,
-  countdown:     PreviewCountdown,
-  pinned:        PreviewPinned,
-  freeTime:      PreviewFreeTime,
-  autocomplete:  PreviewAutocomplete,
-  overnight:     PreviewOvernight,
+  stripes:         PreviewStripes,
+  rings:           PreviewRings,
+  holidayH:        PreviewHolidayH,
+  conflict:        PreviewConflict,
+  ghost:           PreviewGhost,
+  doubleTap:       PreviewDoubleTap,
+  longPress:       PreviewLongPress,
+  countdown:       PreviewCountdown,
+  pinned:          PreviewPinned,
+  freeTime:        PreviewFreeTime,
+  autocomplete:    PreviewAutocomplete,
+  overnight:       PreviewOvernight,
+  todayCard:       PreviewTodayCard,
+  shiftBanner:     PreviewShiftBanner,
+  tapSwap:         PreviewTapSwap,
+  emptyHint:       PreviewEmptyHint,
+  helpIcon:        PreviewHelpIcon,
+  threeViews:      PreviewThreeViews,
+  weekLayouts:     PreviewWeekLayouts,
+  legend:          PreviewLegend,
+  shiftTypes:      PreviewShiftTypes,
+  templates:       PreviewTemplates,
+  skipAdd:         PreviewSkipAdd,
+  fab:             PreviewFab,
+  recurrence:      PreviewRecurrence,
+  editRecurring:   PreviewEditRecurring,
+  locationLink:    PreviewLocationLink,
+  notesReminders:  PreviewNotesReminders,
+  profile:         PreviewProfile,
+  defaults:        PreviewDefaults,
+  calendars:       PreviewCalendars,
+  theme:           PreviewTheme,
+  highContrast:    PreviewHighContrast,
+  textSize:        PreviewTextSize,
+  layoutMode:      PreviewLayoutMode,
+  clockFormat:     PreviewClockFormat,
+  mapProvider:     PreviewMapProvider,
+  exportICS:       PreviewExportICS,
+  badges:          PreviewBadges,
+  softReset:       PreviewSoftReset,
+  fullReset:       PreviewFullReset,
+  tourReplay:      PreviewTourReplay,
+  onDevice:        PreviewOnDevice,
+  installApp:      PreviewInstallApp,
+  keyboard:        PreviewKeyboard,
+  hideCal:         PreviewHideCal,
+  colorFallback:   PreviewColorFallback,
 };
 
 // ── GUIDE SHEET ───────────────────────────────────────────
@@ -7713,18 +8604,18 @@ function GuideSheet({ onClose, onStartTour }) {
   ];
   const CONTENT = {
     home: [
-      { title: "Today at a glance", body: "The top card shows what's happening now, what's up next, and any all-day items for today. It refreshes live." },
-      { title: "Shift status banner", body: "When you're on shift or about to start one, Daytu surfaces it here with the shift name and time window. Dismissible for the day." },
+      { title: "Today at a glance", body: "The top card shows what's happening now, what's up next, and any all-day items for today. It refreshes live.", preview: "todayCard" },
+      { title: "Shift status banner", body: "When you're on shift or about to start one, Daytu surfaces it here with the shift name and time window. Dismissible for the day.", preview: "shiftBanner" },
       { title: "Major events countdown", body: "Upcoming big days — vacations, weddings, birthdays — stack here with a live countdown. Pin the most important to keep it on top.", preview: "countdown" },
       { title: "Pinned events", body: "Events you've pinned sit at the top of each day so they don't get lost in a busy schedule.", preview: "pinned" },
       { title: "Free-time finder", body: "Tap the search icon and ask in plain English — \"free this weekend,\" \"next 2 hours,\" \"free Friday afternoon.\" It finds real gaps around your events, shifts, and major events.", preview: "freeTime" },
-      { title: "Reorder cards", body: "Open Settings → Advanced → Home screen order. Tap a card to select it, then tap another to swap their positions — put what matters most to you first." },
-      { title: "Empty-state hints", body: "Before you've added a shift, major event, or pinned anything, a small prompt card offers to help you start. Each is dismissible independently." },
-      { title: "The ? icon", body: "Opens this Guide anytime. Always available on Home." },
+      { title: "Reorder cards", body: "Open Settings → Advanced → Home screen order. Tap a card to select it, then tap another to swap their positions — put what matters most to you first.", preview: "tapSwap" },
+      { title: "Empty-state hints", body: "Before you've added a shift, major event, or pinned anything, a small prompt card offers to help you start. Each is dismissible independently.", preview: "emptyHint" },
+      { title: "The ? icon", body: "Opens this Guide anytime. Always available on Home.", preview: "helpIcon" },
     ],
     calendar: [
-      { title: "Three views", body: "Day, Week, and Month. Tap any cell to preview the day below without leaving the current view." },
-      { title: "Week has two layouts", body: "Columns — the whole week at a glance with an all-day strip across the top. Grid — precise time blocks for detailed planning. Switch with the toggle in the week header." },
+      { title: "Three views", body: "Day, Week, and Month. Tap any cell to preview the day below without leaving the current view.", preview: "threeViews" },
+      { title: "Week has two layouts", body: "Columns — the whole week at a glance with an all-day strip across the top. Grid — precise time blocks for detailed planning. Switch with the toggle in the week header.", preview: "weekLayouts" },
       { title: "Double-tap to add", body: "Double-tap any day cell to open the \"Add event / Add major event\" chooser, pre-filled with that date.", preview: "doubleTap" },
       { title: "Long-press to tweak a shift day", body: "Long-press a cell to toggle a shift off for that day, override its hours just for that one date, or add an extra shift on a normally-off day.", preview: "longPress" },
       { title: "Diagonal stripes = major events", body: "Cells covered by a major event show a colored diagonal stripe so trips and multi-day events are obvious at a glance.", preview: "stripes" },
@@ -7732,53 +8623,53 @@ function GuideSheet({ onClose, onStartTour }) {
       { title: "Holiday 'H' badge", body: "Public holidays appear as a small H in the cell corner. Enable the countries you care about in Settings.", preview: "holidayH" },
       { title: "Conflict dot", body: "Overlapping events get a red dot on the event pill so you catch double-bookings without doing the math.", preview: "conflict" },
       { title: "Ghost preview", body: "While an event sheet is open, the target day pulses on the calendar so you know exactly where it'll land before you save.", preview: "ghost" },
-      { title: "Legend", body: "Below the month, a small legend lists the shifts and major events visible this month with their colors." },
+      { title: "Legend", body: "Below the month, a small legend lists the shifts and major events visible this month with their colors.", preview: "legend" },
     ],
     shifts: [
-      { title: "Three pattern types", body: "Rotation (cycles like 4-on-4-off from a start date), Weekly (the same weekdays every week), Monthly (specific calendar days like the 1st and 15th)." },
-      { title: "Templates", body: "Start from a preset — firefighter rotation, nursing three-on, 9-to-5, custody weekends — and tweak from there. Beats building every pattern from scratch." },
+      { title: "Three shift types", body: "Custom rotation (cycles like 4-on-4-off from a start date), Weekly days (the same weekdays every week), and Specific Days (exact calendar days like the 1st and 15th).", preview: "shiftTypes" },
+      { title: "Templates", body: "Start from a preset — Kelly Schedule, 48/96, Alternating Week, Mon/Wed/Fri, 1 Week On / 2 Weeks Off — and tweak from there. Beats building every shift from scratch.", preview: "templates" },
       { title: "Per-day time override", body: "Need Monday's shift to end at 3 pm just this week? Long-press the day on the calendar, change the time — the rest of the pattern stays intact.", preview: "longPress" },
-      { title: "Skip or add a day", body: "The same long-press popup lets you cancel a shift day or add an extra one without changing the underlying pattern." },
-      { title: "Overnight shifts", body: "If the end time is at or before the start time, Daytu treats it as crossing midnight and counts hours correctly.", preview: "overnight" },
+      { title: "Skip or add a day", body: "Long-press a calendar day. In the popup, tap an active shift to flip it between On shift and Skipped, or tap one in \"Add extra shift\" to pick up a day that isn't in the pattern. Your underlying shift stays intact.", preview: "skipAdd" },
+      { title: "Overnight shifts", body: "Two ways to cross midnight: set an end time that's at or before the start (e.g. 9 PM → 5 AM auto-detects as overnight), or flip the \"Ends next day\" toggle — needed when both times look the same (e.g. 1 AM → 5 AM means ends tomorrow). Hours are counted correctly either way.", preview: "overnight" },
       { title: "Shift color everywhere", body: "Your shift color appears as rings on the calendar, in the month legend, in the Home shift banner, and when free-time says you're busy.", preview: "rings" },
-      { title: "Free-time respects shifts", body: "\"When am I free?\" subtracts your working hours so you don't get false-positive openings during your pattern." },
+      { title: "Free-time respects shifts", body: "\"When am I free?\" subtracts your working hours so you don't get false-positive openings during your pattern.", preview: "freeTime" },
     ],
     adding: [
-      { title: "+ floating button", body: "Bottom-right of the app. Opens a mini menu with Event and Major Event — the primary way to create anything." },
+      { title: "+ floating button", body: "Bottom-right of the app. Opens a mini menu with Event and Major Event — the primary way to create anything.", preview: "fab" },
       { title: "Double-tap a day", body: "Same chooser as the + button, but pre-filled with that specific date.", preview: "doubleTap" },
       { title: "Title autocomplete", body: "Start typing a repeated event title and Daytu suggests it with the last-used calendar and color pre-filled. One tap fills everything.", preview: "autocomplete" },
       { title: "Pin an event", body: "From the event detail sheet. Pinned events stick to the top of the day's list and surface on Home.", preview: "pinned" },
-      { title: "Recurrence", body: "None, daily, weekly, monthly, yearly — plus \"Specific days\" which lets you pick exact calendar dates per month for irregular schedules." },
-      { title: "Edit recurring events", body: "When saving, choose \"This date only\" (creates an exception) or \"All dates\" (modifies the whole series)." },
+      { title: "Recurrence", body: "None, daily, weekly, monthly, yearly — plus \"Specific days\" which lets you pick exact calendar dates per month for irregular schedules.", preview: "recurrence" },
+      { title: "Edit recurring events", body: "When saving, choose \"This date only\" (creates an exception) or \"All dates\" (modifies the whole series).", preview: "editRecurring" },
       { title: "Major events", body: "Multi-day spans — vacations, weddings, trips — with a live countdown on Home. They sit above regular events and stripe the covered days.", preview: "countdown" },
-      { title: "Location + meeting link", body: "Events support a location that opens in your preferred maps app, and a URL for joining remote meetings." },
-      { title: "Notes + reminders", body: "Every event has free-form notes and a per-event reminder that overrides the default." },
+      { title: "Location + meeting link", body: "Events support a location that opens in your preferred maps app, and a URL for joining remote meetings.", preview: "locationLink" },
+      { title: "Notes + reminders", body: "Every event has free-form notes and a per-event reminder that overrides the default.", preview: "notesReminders" },
     ],
     settings: [
-      { title: "Profile", body: "Your name and default color. The color is used wherever you haven't picked a specific one." },
-      { title: "Default calendar + reminder", body: "New events land on this calendar and use this reminder lead time unless you override per event." },
-      { title: "Calendars", body: "Create, rename, recolor, or hide calendars. Hiding keeps events stored but removes them from views — toggle back anytime." },
-      { title: "Theme", body: "Dark, Light, or Auto (follow system)." },
-      { title: "High contrast", body: "Boosts borders and text weight for readability." },
-      { title: "Text size", body: "Four steps; applies everywhere in the app." },
-      { title: "Layout mode", body: "Mobile (phone layout always), Compact (sidebar, no persistent calendar), Desktop (split layout with calendar panel), Auto (picks based on window width)." },
-      { title: "Clock format", body: "12-hour or 24-hour. Applies everywhere time is shown." },
+      { title: "Profile", body: "Your name and default color. The color is used wherever you haven't picked a specific one.", preview: "profile" },
+      { title: "Default calendar + reminder", body: "New events land on this calendar and use this reminder lead time unless you override per event.", preview: "defaults" },
+      { title: "Calendars", body: "Create, rename, recolor, or hide calendars. Hiding keeps events stored but removes them from views — toggle back anytime.", preview: "calendars" },
+      { title: "Theme", body: "Dark, Light, or Auto (follow system).", preview: "theme" },
+      { title: "High contrast", body: "Boosts borders and text weight for readability.", preview: "highContrast" },
+      { title: "Text size", body: "Four steps; applies everywhere in the app.", preview: "textSize" },
+      { title: "Layout mode", body: "Mobile (phone layout always), Compact (sidebar, no persistent calendar), Desktop (split layout with calendar panel), Auto (picks based on window width).", preview: "layoutMode" },
+      { title: "Clock format", body: "12-hour or 24-hour. Applies everywhere time is shown.", preview: "clockFormat" },
       { title: "Holidays", body: "Pick which countries' public holidays appear as H badges on the calendar.", preview: "holidayH" },
-      { title: "Map provider", body: "Event locations open in Apple Maps, Google Maps, or OpenStreetMap — your choice." },
-      { title: "Export", body: "Download a .ics file of everything. Import into Apple Calendar, Google Calendar, Outlook, or any other calendar app." },
-      { title: "In-app badges", body: "Toggle the small colored dots on nav icons (today has events, etc.)." },
-      { title: "Soft reset", body: "Clears events, shifts, and major events — keeps your profile, theme, and onboarding state." },
-      { title: "Full reset", body: "Deletes everything including onboarding. Starts the app completely fresh." },
-      { title: "Take a tour", body: "Replays the 60-second spotlight tour that highlights each tab's purpose." },
+      { title: "Map provider", body: "Event locations open in Apple Maps, Google Maps, or Auto (picks the right one for your device) — your choice.", preview: "mapProvider" },
+      { title: "Export", body: "Download a .ics file of everything. Import into Apple Calendar, Google Calendar, Outlook, or any other calendar app.", preview: "exportICS" },
+      { title: "In-app badges", body: "Toggle the small colored dots on nav icons (today has events, etc.).", preview: "badges" },
+      { title: "Soft reset", body: "Clears events, shifts, and major events — keeps your profile, theme, and onboarding state.", preview: "softReset" },
+      { title: "Full reset", body: "Deletes everything including onboarding. Starts the app completely fresh.", preview: "fullReset" },
+      { title: "Take a tour", body: "Replays the 60-second spotlight tour that highlights each tab's purpose.", preview: "tourReplay" },
     ],
     tips: [
-      { title: "Data stays on your device", body: "Everything lives in browser storage. A full reset is the only way to lose it; export first if you want a backup." },
-      { title: "Install as an app", body: "On iPhone/iPad: Safari share sheet → Add to Home Screen. On Chrome desktop: install prompt in the address bar. Runs full-screen with no browser chrome." },
+      { title: "Data stays on your device", body: "Everything lives in browser storage. A full reset is the only way to lose it; export first if you want a backup.", preview: "onDevice" },
+      { title: "Install as an app", body: "On iPhone/iPad: Safari share sheet → Add to Home Screen. On Chrome desktop: install prompt in the address bar. Runs full-screen with no browser chrome.", preview: "installApp" },
       { title: "Long-press is your friend", body: "Long-press a calendar cell to adjust shifts for that date. Long-press an event pill for quick actions.", preview: "longPress" },
-      { title: "Keyboard-friendly", body: "On iPad with a hardware keyboard, the title input auto-focuses when you open a sheet — start typing immediately." },
+      { title: "Keyboard-friendly", body: "On iPad with a hardware keyboard, the title input auto-focuses when you open a sheet — start typing immediately.", preview: "keyboard" },
       { title: "Conflicts are flagged", body: "Daytu marks overlapping events with a red dot on the event pill. Look for it when you're adding things in a busy week.", preview: "conflict" },
-      { title: "Hide calendars to focus", body: "In Settings → Calendars, toggle any calendar to Hidden. Its events stay stored but disappear from views until you re-enable." },
-      { title: "Color mattering", body: "Event color falls back to calendar color. Pick a per-event color only when it needs to stand out — otherwise the calendar grouping reads cleaner." },
+      { title: "Hide calendars to focus", body: "In Settings → Calendars, toggle any calendar to Hidden. Its events stay stored but disappear from views until you re-enable.", preview: "hideCal" },
+      { title: "Color mattering", body: "Event color falls back to calendar color. Pick a per-event color only when it needs to stand out — otherwise the calendar grouping reads cleaner.", preview: "colorFallback" },
     ],
   };
   const items = CONTENT[section] || [];
