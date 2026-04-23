@@ -5581,10 +5581,10 @@ function MonthlySpecificDays({ shift, col, onToggleDay }) {
 
 // ── PATTERN CARD ──────────────────────────────────────────
 function ShiftCard({ shift, onEdit, shiftOverrides, onToggleDay, onAddManualDay, onToggleMonthDay, effectiveTimeToday, hasTimeOverrideToday }) {
-  const [expanded, setExpanded] = React.useState(false);
   const [showMonth, setShowMonth] = React.useState(false);
   const [previewMonth, setPreviewMonth] = React.useState({ year: TODAY.getFullYear(), month: TODAY.getMonth() });
   const [showManualPicker, setShowManualPicker] = React.useState(false);
+  const [overrideListType, setOverrideListType] = React.useState(null); // null | "skipped" | "extra"
   const padD = n => String(n).padStart(2,"0");
   const todayStrD = () => { const d=new Date(); return d.getFullYear()+"-"+padD(d.getMonth()+1)+"-"+padD(d.getDate()); };
   const [manualDate, setManualDate] = React.useState(todayStrD());
@@ -5619,15 +5619,27 @@ function ShiftCard({ shift, onEdit, shiftOverrides, onToggleDay, onAddManualDay,
     return out;
   }, [shift]);
 
-  const overrides = useMemo(() => {
-    if (!shiftOverrides) return [];
-    const list = [];
+  const overrideInventory = useMemo(() => {
+    const empty = { hasHidden: false, hasExtra: false, yearSkipped: 0, yearExtra: 0, skippedDates: [], extraDates: [] };
+    if (!shiftOverrides) return empty;
+    const currentYear = TODAY.getFullYear();
     const pfx = shift.id+":"; const ePfx = "extra:"+shift.id+":";
+    let hasHidden = false, hasExtra = false;
+    const skippedDates = [], extraDates = [];
     shiftOverrides.forEach(key => {
-      if (key.startsWith(pfx)) { const parts=key.slice(pfx.length).split("-"); if (parts.length===3) { const d=new Date(Number(parts[0]),Number(parts[1]),Number(parts[2])); list.push({date:d,type:"hidden",key}); } }
-      else if (key.startsWith(ePfx)) { const parts=key.slice(ePfx.length).split("-"); if (parts.length===3) { const d=new Date(Number(parts[0]),Number(parts[1]),Number(parts[2])); list.push({date:d,type:"extra",key}); } }
+      let rest, isExtra;
+      if (key.startsWith(ePfx)) { rest = key.slice(ePfx.length); isExtra = true; }
+      else if (key.startsWith(pfx)) { rest = key.slice(pfx.length); isExtra = false; }
+      else return;
+      const parts = rest.split("-");
+      if (parts.length !== 3) return;
+      const [y, m, d] = parts.map(Number);
+      if (isExtra) { hasExtra = true; if (y === currentYear) extraDates.push(new Date(y, m, d)); }
+      else { hasHidden = true; if (y === currentYear) skippedDates.push(new Date(y, m, d)); }
     });
-    list.sort((a,b) => a.date-b.date); return list;
+    skippedDates.sort((a,b) => a-b);
+    extraDates.sort((a,b) => a-b);
+    return { hasHidden, hasExtra, yearSkipped: skippedDates.length, yearExtra: extraDates.length, skippedDates, extraDates };
   }, [shiftOverrides, shift.id]);
 
   const monthCells = useMemo(() => {
@@ -5658,9 +5670,22 @@ function ShiftCard({ shift, onEdit, shiftOverrides, onToggleDay, onAddManualDay,
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
         <div style={{ width:12, height:12, borderRadius:3, background:col, flexShrink:0 }} />
         <div style={{ fontWeight:700, fontSize:"1rem", flex:1, color:"var(--text)" }}>{shift.name}</div>
-        {overrides.length > 0 && (
-          <button onClick={() => setExpanded(v=>!v)} style={{ fontSize:"0.6875rem", background:"rgba(245,158,11,0.15)", border:"1px solid rgba(245,158,11,0.3)", color:"#f59e0b", borderRadius:20, padding:"2px 8px", cursor:"pointer", fontFamily:"var(--font)", fontWeight:600 }}>
-            {overrides.length} override{overrides.length!==1?"s":""}
+        {overrideInventory.yearSkipped > 0 && (
+          <button onClick={() => setOverrideListType("skipped")}
+            style={{ fontSize:"0.625rem", background:"rgba(248,113,113,0.15)",
+              border:"1px solid rgba(248,113,113,0.35)", color:"#f87171",
+              borderRadius:20, padding:"2px 8px", fontWeight:700, flexShrink:0,
+              cursor:"pointer", fontFamily:"var(--font)" }}>
+            taken off: {overrideInventory.yearSkipped}
+          </button>
+        )}
+        {overrideInventory.yearExtra > 0 && (
+          <button onClick={() => setOverrideListType("extra")}
+            style={{ fontSize:"0.625rem", background:"rgba(52,211,153,0.15)",
+              border:"1px solid rgba(52,211,153,0.35)", color:"#34d399",
+              borderRadius:20, padding:"2px 8px", fontWeight:700, flexShrink:0,
+              cursor:"pointer", fontFamily:"var(--font)" }}>
+            extra: {overrideInventory.yearExtra}
           </button>
         )}
         <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontFamily:"var(--mono)" }}>{shift.type==="rotation"?cycleLen+"-day":shift.type==="monthly"?"monthly":"weekly"}</div>
@@ -5725,28 +5750,16 @@ function ShiftCard({ shift, onEdit, shiftOverrides, onToggleDay, onAddManualDay,
       <div style={{ fontSize:"0.6875rem", color:"var(--muted)", textAlign:"center", marginBottom:8 }}>Next 7 days</div>
       </>}
 
-      {expanded && overrides.length > 0 && (
-        <div style={{ borderTop:"1px solid var(--border)", paddingTop:10, marginTop:2, marginBottom:8 }}>
-          <div style={{ fontSize:"0.6875rem", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.7px", color:"var(--muted)", marginBottom:8 }}>Manual overrides</div>
-          {overrides.map((o,i) => (
-            <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 0", borderBottom:i<overrides.length-1?"1px solid var(--border)":"none" }}>
-              <div style={{ width:6, height:6, borderRadius:"50%", background:o.type==="hidden"?"#f87171":"#34d399", flexShrink:0 }} />
-              <div style={{ fontSize:"0.8125rem", flex:1 }}>{fmtDate(o.date)}</div>
-              <div style={{ fontSize:"0.6875rem", color:o.type==="hidden"?"#f87171":"#34d399", fontWeight:500 }}>{o.type==="hidden"?"Hidden":"Extra shift"}</div>
-            </div>
-          ))}
-        </div>
-      )}
 
       {shift.type !== "monthly" && <div style={{ marginBottom:8 }}>
         {!showManualPicker ? (
           <button onClick={() => setShowManualPicker(true)}
             style={{ width:"100%", background:"none", border:"1px dashed "+col+"66", borderRadius:8, padding:"7px 0", cursor:"pointer", fontSize:"0.75rem", color:col, fontFamily:"var(--font)", fontWeight:600, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
-            <span style={{ fontSize:"0.9375rem", lineHeight:1 }}>+</span> Add one-off day
+            <span style={{ fontSize:"0.9375rem", lineHeight:1 }}>+</span> Add extra shift
           </button>
         ) : (
           <div style={{ background:col+"11", border:"1px solid "+col+"33", borderRadius:10, padding:12 }}>
-            <div style={{ fontSize:"0.6875rem", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.7px", color:col, marginBottom:8 }}>Add one-off day</div>
+            <div style={{ fontSize:"0.6875rem", fontWeight:700, textTransform:"uppercase", letterSpacing:"0.7px", color:col, marginBottom:8 }}>Add extra shift</div>
             <div style={{ display:"flex", gap:8, alignItems:"center" }}>
               <input type="date" className="form-input" value={manualDate} onChange={e => setManualDate(e.target.value)} style={{ flex:1, fontSize:"0.8125rem", padding:"8px 10px" }} />
               <button onClick={() => { if (manualDate) { const [y,m,d]=manualDate.split("-").map(Number); onAddManualDay&&onAddManualDay(shift.id,new Date(y,m-1,d)); setShowManualPicker(false); setManualDate(todayStrD()); } }}
@@ -5783,11 +5796,46 @@ function ShiftCard({ shift, onEdit, shiftOverrides, onToggleDay, onAddManualDay,
           </div>
           <div style={{ display:"flex", gap:12, marginTop:8, justifyContent:"center" }}>
             <div style={{ display:"flex", alignItems:"center", gap:4, fontSize:"0.6875rem", color:"var(--muted)" }}><div style={{ width:10, height:10, borderRadius:3, background:col+"33", border:"1px solid "+col+"44" }} /> Work day</div>
-            {overrides.some(o=>o.type==="hidden")&&<div style={{ display:"flex", alignItems:"center", gap:4, fontSize:"0.6875rem", color:"var(--muted)" }}><div style={{ width:6, height:6, borderRadius:"50%", background:"#f87171" }} /> Hidden</div>}
-            {overrides.some(o=>o.type==="extra")&&<div style={{ display:"flex", alignItems:"center", gap:4, fontSize:"0.6875rem", color:"var(--muted)" }}><div style={{ width:6, height:6, borderRadius:"50%", background:"#34d399" }} /> Extra</div>}
+            {overrideInventory.hasHidden && <div style={{ display:"flex", alignItems:"center", gap:4, fontSize:"0.6875rem", color:"var(--muted)" }}><div style={{ width:6, height:6, borderRadius:"50%", background:"#f87171" }} /> Hidden</div>}
+            {overrideInventory.hasExtra && <div style={{ display:"flex", alignItems:"center", gap:4, fontSize:"0.6875rem", color:"var(--muted)" }}><div style={{ width:6, height:6, borderRadius:"50%", background:"#34d399" }} /> Extra</div>}
           </div>
         </div>
       )}
+
+      {overrideListType && (() => {
+        const isSkipped = overrideListType === "skipped";
+        const dates = isSkipped ? overrideInventory.skippedDates : overrideInventory.extraDates;
+        const accent = isSkipped ? "#f87171" : "#34d399";
+        const title = isSkipped
+          ? `Days taken off · ${TODAY.getFullYear()}`
+          : `Extra shifts · ${TODAY.getFullYear()}`;
+        return (
+          <div className="sheet-overlay" onClick={e => e.target===e.currentTarget && setOverrideListType(null)}>
+            <div className="sheet">
+              <div className="sheet-handle" />
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0 }}>
+                  <div style={{ width:8, height:8, borderRadius:"50%", background:accent, flexShrink:0 }} />
+                  <div style={{ fontSize:"1rem", fontWeight:700, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{title}</div>
+                </div>
+                <button className="btn-icon" style={{ background:"var(--surface3)" }} onClick={() => setOverrideListType(null)}>{Icon.close}</button>
+              </div>
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginBottom:12 }}>
+                {shift.name} · {dates.length} {isSkipped ? "day" : "shift"}{dates.length !== 1 ? "s" : ""}
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:4, maxHeight:"50vh", overflowY:"auto" }}>
+                {dates.map((d, i) => (
+                  <div key={i} style={{ padding:"10px 12px", background:"var(--surface2)", border:"1px solid var(--border)",
+                    borderLeft:`3px solid ${accent}`, borderRadius:8,
+                    display:"flex", alignItems:"center", gap:10 }}>
+                    <div style={{ fontSize:"0.8125rem", fontWeight:600, color:"var(--text)" }}>{fmtDate(d)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
