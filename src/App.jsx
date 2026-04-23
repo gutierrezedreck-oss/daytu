@@ -935,8 +935,12 @@ export default function App() {
   // Is the first-time hint card still showing (dismissed on "Got it")
   // Show ? icon on home for 7 days after onboarding
   const showHomeHelp = onboardingCompletedAt && (Date.now() - onboardingCompletedAt) < 7 * 86400000;
-  // Brand-new user indicator: recently onboarded AND no content yet. Controls empty-state intro cards.
-  const isBrandNew = showHomeHelp && events.length === 0 && majorEvents.length === 0;
+  // Per-placeholder dismissal. Each home empty-state card is dismissible and
+  // its dismissal is remembered independently so adding a major event doesn't
+  // silently hide the "your events will appear here" hint, etc.
+  const [dismissedPlaceholders, setDismissedPlaceholders] = useState(() => new Set(_ls?.dismissedPlaceholders ?? []));
+  const dismissPlaceholder = (id) => setDismissedPlaceholders(prev => { const next = new Set(prev); next.add(id); return next; });
+  const canShowPlaceholder = (id) => showHomeHelp && !dismissedPlaceholders.has(id);
   const toggleCalendarVisibility = (id) => setHiddenCalendars(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
 
   React.useEffect(() => {
@@ -1073,6 +1077,7 @@ export default function App() {
         homeOrder,
         themeMode, weekLayout, textSize, highContrast, viewMode, mapProvider, recentSearches,
         userProfile, shiftTimeOverrides, shiftNoticeDismissed, timeFormat,
+        dismissedPlaceholders: [...dismissedPlaceholders],
       });
     }, 300);
     return () => clearTimeout(saveHandle);
@@ -1080,7 +1085,7 @@ export default function App() {
       activityFeed, feedSeenAt, onboardingActive, onboardingCompletedAt,
       customColorRecents, customColorFavorites,
       pinnedEvents, hiddenCalendars, hiddenGroups, holidayCountries,
-      dayNotes, homeOrder, themeMode, weekLayout, textSize, highContrast, viewMode, mapProvider, recentSearches, userProfile, shiftTimeOverrides, shiftNoticeDismissed, timeFormat]);
+      dayNotes, homeOrder, themeMode, weekLayout, textSize, highContrast, viewMode, mapProvider, recentSearches, userProfile, shiftTimeOverrides, shiftNoticeDismissed, timeFormat, dismissedPlaceholders]);
   const openNewCalendar  = () => { setActiveCalendar(null); setSheet("editCalendar"); };
   const openEditCalendar = (cal) => { setActiveCalendar(cal); setSheet("editCalendar"); };
   const openNewMajorEvent = () => setSheet("newMajorEvent");
@@ -2402,7 +2407,7 @@ export default function App() {
                     return new Date(a.startDate) - new Date(b.startDate);
                   });
                 if (visible.length === 0) {
-                  if (isBrandNew) {
+                  if (canShowPlaceholder("major") && majorEvents.length === 0) {
                     return (
                       <div key="major-empty" ref={setTourRef("major")}>
                         <EmptyStateCard
@@ -2411,6 +2416,7 @@ export default function App() {
                           body="Vacations, weddings, birthdays, trips home — major events live here with a live countdown. Add one to see how it looks."
                           cta="Add a major event"
                           onCta={() => openNewMajorEvent()}
+                          onDismiss={() => dismissPlaceholder("major")}
                         />
                       </div>
                     );
@@ -2572,14 +2578,32 @@ export default function App() {
               }
               if (id === "nextup") {
                 // Today's full schedule (upcoming first, then passed); fall back to tomorrow.
-                const todayAll = visibleEvents.filter(e => sameDay(e.start, TODAY)).sort((a,b) => a.start - b.start);
+                // Use expanded events so recurring occurrences show up — filtering
+                // against `visibleEvents` directly misses them because the base
+                // event's start date may be well in the past.
+                const todayAll = todayEvents;
                 const tomorrow = new Date(TODAY); tomorrow.setDate(tomorrow.getDate()+1);
-                const tomorrowEvs = visibleEvents.filter(e => sameDay(e.start, tomorrow)).sort((a,b) => a.start - b.start).slice(0,4);
-                const upNext = todayAll.length > 0 ? todayAll.slice(0,4) : tomorrowEvs;
+                const tomFrom = new Date(tomorrow); tomFrom.setHours(0,0,0,0);
+                const tomTo = new Date(tomorrow); tomTo.setHours(23,59,59,999);
+                const tomorrowEvs = expandEvents(visibleEvents, tomFrom, tomTo)
+                  .filter(e => sameDay(e.start, tomorrow))
+                  .sort((a,b) => a.start - b.start)
+                  .slice(0,4);
+                // In non-split views (mobile + compact) show past and upcoming
+                // events from today side-by-side — separate caps so earlier
+                // events don't crowd out what's coming up. In split mode the
+                // persistent calendar handles past visibility, so keep the
+                // tighter top-4 list there.
+                const upNext = (!isSplit && todayAll.length > 0)
+                  ? [
+                      ...todayAll.filter(e => e.end < now2).slice(-3),
+                      ...todayAll.filter(e => e.end >= now2).slice(0, 5),
+                    ]
+                  : (todayAll.length > 0 ? todayAll.slice(0,4) : tomorrowEvs);
                 const anyFutureToday = todayAll.some(e => e.start > now2);
                 const sectionLabel = todayAll.length > 0 ? (anyFutureToday ? "Today" : "Earlier today") : tomorrowEvs.length > 0 ? "Tomorrow" : null;
                 if (upNext.length === 0) {
-                  if (isBrandNew) {
+                  if (canShowPlaceholder("nextup") && events.length === 0) {
                     return (
                       <EmptyStateCard key="nextup-empty"
                         icon={Icon.plus}
@@ -2587,6 +2611,7 @@ export default function App() {
                         body="Tap the + button to create your first event. Daytu will show what's coming up today and tomorrow right here."
                         cta="Create an event"
                         onCta={() => openNewEvent()}
+                        onDismiss={() => dismissPlaceholder("nextup")}
                       />
                     );
                   }
@@ -2597,26 +2622,82 @@ export default function App() {
                     <div style={{ fontSize:"0.6875rem", fontWeight:700, textTransform:"uppercase", letterSpacing:"1px", color:"var(--muted)", marginBottom:10 }}>{sectionLabel}</div>
                     {upNext.map((ev, idx) => {
                       const isPast = ev.end < now2;
+                      const isNow = !isPast && ev.start <= now2;
                       const secUntil = Math.floor((ev.start - now2) / 1000);
                       const daysU = Math.floor(Math.abs(secUntil)/86400), hoursU = Math.floor((Math.abs(secUntil)%86400)/3600), minsU = Math.floor((Math.abs(secUntil)%3600)/60);
-                      const timeLabel = isPast ? "done"
-                        : secUntil <= 0 ? "now"
+                      const duration = isPast ? "done"
+                        : isNow ? "now"
                         : daysU > 0 ? `${daysU}d ${hoursU}h`
                         : hoursU > 0 ? `${hoursU}h ${minsU}m`
                         : `${minsU}m`;
+                      const countdownLabel = isPast || isNow ? duration : "Upcoming in " + duration;
                       const cal = calForCalendar(ev.calendarId);
                       const col = ev.color || cal.color || "var(--accent)";
+                      // Pretty URL → hostname (matches EventPill's fallback chain)
+                      const urlHost = (() => {
+                        const raw = ev.url && ev.url.trim();
+                        if (!raw) return null;
+                        try { return new URL(raw).hostname.replace(/^www\./, ""); } catch {}
+                        try { return new URL("https://"+raw).hostname.replace(/^www\./, ""); } catch {}
+                        return raw;
+                      })();
+                      const hasMeta = ev.location || ev.notes || urlHost;
                       return (
-                        <div key={ev.id} onClick={() => openEvent(ev)} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom: idx < upNext.length-1 ? "1px solid var(--border)" : "none", cursor:"pointer", opacity: isPast ? 0.5 : 1 }}>
-                          <div style={{ width:3, height:32, borderRadius:2, background:col, flexShrink:0 }} />
+                        <div key={ev.id} onClick={() => openEvent(ev)}
+                          style={{ display:"flex", alignItems:"stretch", gap:10, padding:"10px 0",
+                            borderBottom: idx < upNext.length-1 ? "1px solid var(--border)" : "none",
+                            cursor:"pointer", opacity: isPast ? 0.5 : 1 }}>
+                          <div style={{ width:3, alignSelf:"stretch", borderRadius:2, background:col, flexShrink:0 }} />
                           <div style={{ flex:1, minWidth:0 }}>
-                            <div style={{ fontSize:"0.875rem", fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", textDecoration: isPast ? "line-through" : "none" }}>{ev.title}</div>
-                            <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontFamily:"var(--mono)", marginTop:1 }}>
-                              {ev.allDay ? "All day" : fmtTime(ev.start)}
-                              {ev.location ? <span style={{ marginLeft:6, opacity:0.7 }}><span style={{ display:"inline-flex", width:10, height:10, marginRight:2, verticalAlign:"middle" }}>{Icon.mapPin}</span>{ev.location.slice(0,18)}</span> : null}
+                            {/* Title row + countdown */}
+                            <div style={{ display:"flex", alignItems:"baseline", gap:8 }}>
+                              <div style={{ fontSize:"0.875rem", fontWeight:600, whiteSpace:"nowrap",
+                                overflow:"hidden", textOverflow:"ellipsis", flex:1, minWidth:0,
+                                textDecoration: isPast ? "line-through" : "none" }}>
+                                {ev.title}
+                              </div>
+                              <div style={{ fontSize:"0.6875rem", fontWeight:700,
+                                color: isPast ? "var(--muted)" : col, fontFamily:"var(--mono)",
+                                flexShrink:0, whiteSpace:"nowrap" }}>
+                                {countdownLabel}
+                              </div>
                             </div>
+                            {/* Time range */}
+                            <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontFamily:"var(--mono)", marginTop:2 }}>
+                              {ev.allDay ? "All day" : fmtTime(ev.start) + " – " + fmtTime(ev.end)}
+                            </div>
+                            {/* Location / URL / Notes — compact inline pills so the card
+                                stays one scan-line. Each pill truncates on its own; the row
+                                wraps if there's not enough width. */}
+                            {hasMeta && (
+                              <div style={{ marginTop:5, display:"flex", flexWrap:"wrap", gap:4 }}>
+                                {ev.location && (
+                                  <span style={{ display:"inline-flex", alignItems:"center", gap:3,
+                                    background:"var(--surface2)", borderRadius:6, padding:"2px 7px",
+                                    fontSize:"0.625rem", color:"var(--muted)", maxWidth:160 }}>
+                                    <span style={{ display:"inline-flex", width:10, height:10, flexShrink:0 }}>{Icon.mapPin}</span>
+                                    <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>{ev.location}</span>
+                                  </span>
+                                )}
+                                {urlHost && (
+                                  <span style={{ display:"inline-flex", alignItems:"center", gap:3,
+                                    background:"rgba(96,165,250,0.14)", borderRadius:6, padding:"2px 7px",
+                                    fontSize:"0.625rem", color:"#60a5fa", maxWidth:160 }}>
+                                    <span style={{ fontWeight:700 }}>URL:</span>
+                                    <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>{urlHost}</span>
+                                  </span>
+                                )}
+                                {ev.notes && (
+                                  <span style={{ display:"inline-flex", alignItems:"center", gap:3,
+                                    background:"var(--surface2)", borderRadius:6, padding:"2px 7px",
+                                    fontSize:"0.625rem", color:"var(--muted)", maxWidth:180 }}>
+                                    <span style={{ fontWeight:700 }}>Notes:</span>
+                                    <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>{ev.notes}</span>
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          <div style={{ fontSize:"0.75rem", fontWeight:700, color: isPast ? "var(--muted)" : col, fontFamily:"var(--mono)", flexShrink:0 }}>{timeLabel}</div>
                         </div>
                       );
                     })}
@@ -7108,21 +7189,33 @@ function ICSPreviewSheet({ events, majorEvents, calendarName, onClose, onDownloa
 
 // ── ONBOARDING FLOW ──────────────────────────────────────
 // ── EMPTY STATE CARD — for new users, invites them to fill empty zones on home ──
-function EmptyStateCard({ icon, title, body, cta, onCta, accent="rgba(124,106,247,0.35)" }) {
+function EmptyStateCard({ icon, title, body, cta, onCta, accent="rgba(124,106,247,0.35)", onDismiss }) {
   return (
     <div style={{
+      position:"relative",
       background:"var(--surface)",
       border:`1px dashed ${accent}`,
       borderRadius:16, padding:16, marginBottom:16,
       display:"flex", gap:12, alignItems:"flex-start",
     }}>
+      {onDismiss && (
+        <button onClick={onDismiss}
+          title="Dismiss this hint"
+          style={{ position:"absolute", top:6, right:6,
+            width:26, height:26, borderRadius:"50%", padding:0,
+            background:"none", border:"none", cursor:"pointer",
+            display:"flex", alignItems:"center", justifyContent:"center",
+            color:"var(--muted)" }}>
+          <span style={{ display:"flex", width:14, height:14 }}>{Icon.close}</span>
+        </button>
+      )}
       <div style={{ width:40, height:40, borderRadius:10, flexShrink:0,
         background:"rgba(124,106,247,0.12)", border:"1px solid rgba(124,106,247,0.25)",
         display:"flex", alignItems:"center", justifyContent:"center",
         color:"var(--accent2)" }}>
         <span style={{ display:"flex", width:20, height:20 }}>{icon}</span>
       </div>
-      <div style={{ flex:1, minWidth:0 }}>
+      <div style={{ flex:1, minWidth:0, paddingRight: onDismiss ? 24 : 0 }}>
         <div style={{ fontSize:"0.875rem", fontWeight:700, color:"var(--text)", marginBottom:4 }}>{title}</div>
         <div style={{ fontSize:"0.75rem", color:"var(--muted)", lineHeight:1.5, marginBottom: cta ? 10 : 0 }}>{body}</div>
         {cta && onCta && (
