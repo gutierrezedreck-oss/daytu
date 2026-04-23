@@ -335,6 +335,7 @@ const reminderLabel = (r) => ({ "0":"At event time", "10":"10 min before", "15":
 
 const Icon = {
   home: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
+  star: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>,
   calendar: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>,
   groups: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
   shifts: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>,
@@ -2411,7 +2412,7 @@ export default function App() {
                     return (
                       <div key="major-empty" ref={setTourRef("major")}>
                         <EmptyStateCard
-                          icon={Icon.pin}
+                          icon={Icon.star}
                           title="Track the big days"
                           body="Vacations, weddings, birthdays, trips home — major events live here with a live countdown. Add one to see how it looks."
                           cta="Add a major event"
@@ -4273,7 +4274,7 @@ export default function App() {
               </button>
               <button className="btn btn-secondary" onClick={() => setSheet("newMajorEvent")}
                 style={{ width:"100%", marginTop:8, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
-                <span style={{ display:"flex", width:16, height:16 }}>{Icon.pin}</span>
+                <span style={{ display:"flex", width:16, height:16 }}>{Icon.star}</span>
                 Add major event
               </button>
               <button onClick={closeSheet}
@@ -7286,7 +7287,7 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
                 {[
                   { icon: Icon.repeat,  title: "Shifts",          body: "Handle rotations, weekly schedules, and recurring days that other calendars can't." },
                   { icon: Icon.search,  title: "Free-time finder",  body: "Ask \"when am I free?\" in plain English." },
-                  { icon: Icon.pin,     title: "Major events",      body: "Countdowns to big days that actually matter." },
+                  { icon: Icon.star,    title: "Major events",      body: "Countdowns to big days that actually matter." },
                 ].map((f, i) => (
                   <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:10 }}>
                     <div style={{ width:22, height:22, borderRadius:6, flexShrink:0,
