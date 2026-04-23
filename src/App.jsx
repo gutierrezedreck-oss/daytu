@@ -2628,7 +2628,7 @@ export default function App() {
                 const important = visibleEvents.filter(e => {
                   if (!e.important) return false;
                   if (dismissedImportantEvents.has(dismissImportantKey(e))) return false;
-                  const lastDay = new Date(e.allDay ? e.end : e.start); lastDay.setHours(0,0,0,0);
+                  const lastDay = new Date(e.end); lastDay.setHours(0,0,0,0);
                   return lastDay >= startOfToday;
                 }).sort((a,b)=>a.start-b.start);
                 if (important.length === 0) return null;
@@ -2873,8 +2873,12 @@ export default function App() {
                 // Find any shift work-block that starts exactly at `startMs` on `dayStart`.
                 // Used to walk forward through chained back-to-back shifts (e.g. a
                 // 24h day ends at 0600 and the next day another shift starts at 0600).
-                const findShiftStartingAt = (dayStart, startMs) => {
+                // Only extends the chain when the NEXT day's shift is the same
+                // shift id — otherwise B→C→B looks like one unbroken block when
+                // it's really three separate assignments back-to-back.
+                const findShiftStartingAt = (dayStart, startMs, shiftId) => {
                   for (const p of shifts) {
+                    if (p.id !== shiftId) continue;
                     const oKey = p.id + ":" + dayStart.getFullYear() + "-" + dayStart.getMonth() + "-" + dayStart.getDate();
                     const isNat = p.type === "rotation" ? getRotationStatus(p, dayStart) === "work"
                                 : p.type === "monthly" ? isMonthlyWorkDay(p, dayStart)
@@ -2898,11 +2902,11 @@ export default function App() {
                   return null;
                 };
                 // Walk the chain forward from `endMs`. Cap at 14 iterations as a safety.
-                const extendShiftChain = (endMs) => {
+                const extendShiftChain = (endMs, shiftId) => {
                   let e = endMs;
                   for (let i = 0; i < 14; i++) {
                     const d = new Date(e); d.setHours(0, 0, 0, 0);
-                    const nextEnd = findShiftStartingAt(d, e);
+                    const nextEnd = findShiftStartingAt(d, e, shiftId);
                     if (nextEnd == null || nextEnd <= e) break;
                     e = nextEnd;
                   }
@@ -2957,8 +2961,8 @@ export default function App() {
                     const [eh, em] = st.end.split(":").map(Number);
                     let endMs = new Date(TODAY).setHours(eh, em, 0, 0);
                     if (endIsTomorrow) endMs += 86400000;
-                    // Walk forward through any chained back-to-back shifts.
-                    const chainEndMs = extendShiftChain(endMs);
+                    // Walk forward through any chained back-to-back shifts of the same shift id.
+                    const chainEndMs = extendShiftChain(endMs, p.id);
                     return { p, state:"on", sub:"until " + formatChainEnd(chainEndMs) };
                   }
                   // Otherwise: before today's shift starts (highlighted "starts at …")
