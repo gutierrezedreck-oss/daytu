@@ -1935,7 +1935,7 @@ export default function App() {
             textSize={textSize}
             setTextSize={setTextSize}
             customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }}
-            onFinish={({ name, color, startTour }) => {
+            onFinish={({ name, color, startTour, startGuide }) => {
               setUserProfile(p => ({ ...p, name: name || "Friend" }));
               setCalendars(prev => {
                 const first = prev[0];
@@ -1958,6 +1958,7 @@ export default function App() {
               setOnboardingActive(false);
               setOnboardingCompletedAt(Date.now());
               if (startTour) { setTab("home"); setTourOpen(true); }
+              else if (startGuide) { setTab("home"); setSheet("guide"); }
             }}
           />
         </div>
@@ -4236,6 +4237,7 @@ export default function App() {
           <CoachmarkTour
             tourRefs={tourRefs}
             onClose={() => setTourOpen(false)}
+            onOpenGuide={() => { setTab("home"); setSheet("guide"); }}
           />
         )}
 
@@ -7716,7 +7718,7 @@ function GuideSheet({ onClose, onStartTour }) {
       { title: "Major events countdown", body: "Upcoming big days — vacations, weddings, birthdays — stack here with a live countdown. Pin the most important to keep it on top.", preview: "countdown" },
       { title: "Pinned events", body: "Events you've pinned sit at the top of each day so they don't get lost in a busy schedule.", preview: "pinned" },
       { title: "Free-time finder", body: "Tap the search icon and ask in plain English — \"free this weekend,\" \"next 2 hours,\" \"free Friday afternoon.\" It finds real gaps around your events, shifts, and major events.", preview: "freeTime" },
-      { title: "Reorder cards", body: "Long-press any home card and drag it to rearrange — put what matters most to you first." },
+      { title: "Reorder cards", body: "Open Settings → Advanced → Home screen order. Tap a card to select it, then tap another to swap their positions — put what matters most to you first." },
       { title: "Empty-state hints", body: "Before you've added a shift, major event, or pinned anything, a small prompt card offers to help you start. Each is dismissible independently." },
       { title: "The ? icon", body: "Opens this Guide anytime. Always available on Home." },
     ],
@@ -7772,7 +7774,7 @@ function GuideSheet({ onClose, onStartTour }) {
     tips: [
       { title: "Data stays on your device", body: "Everything lives in browser storage. A full reset is the only way to lose it; export first if you want a backup." },
       { title: "Install as an app", body: "On iPhone/iPad: Safari share sheet → Add to Home Screen. On Chrome desktop: install prompt in the address bar. Runs full-screen with no browser chrome." },
-      { title: "Long-press is your friend", body: "Long-press a calendar cell to adjust shifts for that date. Long-press a home card to reorder it. Long-press an event pill for quick actions.", preview: "longPress" },
+      { title: "Long-press is your friend", body: "Long-press a calendar cell to adjust shifts for that date. Long-press an event pill for quick actions.", preview: "longPress" },
       { title: "Keyboard-friendly", body: "On iPad with a hardware keyboard, the title input auto-focuses when you open a sheet — start typing immediately." },
       { title: "Conflicts are flagged", body: "Daytu marks overlapping events with a red dot on the event pill. Look for it when you're adding things in a busy week.", preview: "conflict" },
       { title: "Hide calendars to focus", body: "In Settings → Calendars, toggle any calendar to Hidden. Its events stay stored but disappear from views until you re-enable." },
@@ -7839,8 +7841,9 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
   const [name, setName] = useState(defaultName || "");
   const [color, setColor] = useState(defaultColor || "#6366f1");
 
-  const STEPS = 6; // Welcome → Install → Text size → Name → Color → Done
-  const handleFinish = (startTour) => onFinish({ name: name.trim(), color, startTour: !!startTour });
+  const STEPS = 7; // Welcome → Install → Text size → Name → Color → Tour → Guide
+  const handleFinish = ({ startTour = false, startGuide = false } = {}) =>
+    onFinish({ name: name.trim(), color, startTour: !!startTour, startGuide: !!startGuide });
 
   // Shared progress dots component
   const ProgressDots = () => (
@@ -8213,15 +8216,57 @@ function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, set
             </div>
             <div style={{ display:"flex", flexDirection:"column", gap:10, marginTop:"auto", paddingTop:12 }}>
               <div style={{ fontSize:"0.75rem", color:"var(--muted)", textAlign:"center", lineHeight:1.5, marginBottom:4 }}>
-                You can replay the tour anytime from the <span style={{ display:"inline-flex", width:12, height:12, color:"var(--accent2)", verticalAlign:"middle" }}>{Icon.help}</span> icon on your home screen or in Settings.
+                You can replay the tour anytime from Settings → Help → Take a tour.
               </div>
-              <button onClick={() => handleFinish(true)} className="btn btn-primary">
+              <button onClick={() => handleFinish({ startTour: true })} className="btn btn-primary">
                 Take the tour
               </button>
-              <button onClick={() => handleFinish(false)} className="btn btn-secondary">
-                Skip for now
+              <button onClick={() => setStep(6)} className="btn btn-secondary">
+                Skip the tour
               </button>
               <button onClick={() => setStep(4)}
+                style={{ background:"none", border:"none", color:"var(--muted)",
+                  fontSize:"0.8125rem", cursor:"pointer", padding:"6px", fontFamily:"var(--font)" }}>
+                ← Back
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* STEP 6 — POINT TO THE GUIDE */}
+        {step === 6 && (
+          <>
+            <div style={{ display:"flex", width:56, height:56, borderRadius:14,
+              background:"rgba(124,106,247,0.15)", border:"1px solid rgba(124,106,247,0.3)",
+              alignItems:"center", justifyContent:"center", color:"var(--accent2)" }}>
+              <span style={{ display:"flex", width:28, height:28 }}>{Icon.help}</span>
+            </div>
+            <div>
+              <div style={{ fontSize:"1.5rem", fontWeight:800, color:"var(--text)", marginBottom:6 }}>
+                One more thing
+              </div>
+              <div style={{ fontSize:"0.9375rem", color:"var(--muted)", lineHeight:1.6 }}>
+                The Guide covers every tab in detail — shifts, major events, the free-time finder, calendar gestures, and all the little things. Think of it as your reference for everything Daytu can do.
+              </div>
+            </div>
+            <div style={{ background:"var(--surface2)", border:"1px solid var(--border)",
+              borderRadius:12, padding:14, marginTop:8 }}>
+              <div style={{ fontSize:"0.75rem", fontWeight:700, color:"var(--accent2)",
+                textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:8 }}>
+                Where to find it later
+              </div>
+              <div style={{ fontSize:"0.8125rem", color:"var(--text)", lineHeight:1.6 }}>
+                Tap the <span style={{ display:"inline-flex", width:12, height:12, color:"var(--accent2)", verticalAlign:"middle" }}>{Icon.help}</span> icon on your home screen, or open Settings and scroll to Guide. It's always a tap away.
+              </div>
+            </div>
+            <div style={{ display:"flex", flexDirection:"column", gap:10, marginTop:"auto", paddingTop:12 }}>
+              <button onClick={() => handleFinish({ startGuide: true })} className="btn btn-primary">
+                Open the Guide
+              </button>
+              <button onClick={() => handleFinish()} className="btn btn-secondary">
+                I'll explore on my own
+              </button>
+              <button onClick={() => setStep(5)}
                 style={{ background:"none", border:"none", color:"var(--muted)",
                   fontSize:"0.8125rem", cursor:"pointer", padding:"6px", fontFamily:"var(--font)" }}>
                 ← Back
@@ -8292,6 +8337,14 @@ const TOUR_CARDS = [
     tag: "A private calendar by default — share only what you choose.",
     body: "Create groups for family, friends, or coworkers. Share specific events or trips with just them. Keep everything else to yourself.",
     requires: "groups", // hidden unless FEATURES.groups is true
+  },
+  // Outro — no spotlight, centered card that invites deeper learning via the Guide
+  {
+    outro: true,
+    icon: "help",
+    title: "Want to learn more?",
+    tag: "That's the quick tour — the basics in a minute.",
+    body: "The Guide covers every tab in detail: shifts, major events, calendar gestures, the free-time finder, and every setting. Jump in whenever you want more depth.",
   },
 ];
 // Filter tour cards by feature flag — keeps card definitions intact for when flags flip back on.
@@ -8371,7 +8424,7 @@ function CoachmarkCard({ targetRect, placement, DUR, EASE, children }) {
   );
 }
 
-function CoachmarkTour({ tourRefs, onClose }) {
+function CoachmarkTour({ tourRefs, onClose, onOpenGuide }) {
   const [idx, setIdx] = useState(0);
   const [rect, setRect] = useState(null);
   const [visible, setVisible] = useState(false);      // fade-in on mount
@@ -8395,7 +8448,9 @@ function CoachmarkTour({ tourRefs, onClose }) {
   // Measure target element whenever idx changes, on resize, on scroll.
   // If a target doesn't exist in the current layout (e.g. nav-calendar in split
   // mode), auto-advance rather than killing the tour.
+  // Outro cards have no target — skip measurement entirely.
   React.useEffect(() => {
+    if (t.outro) return;
     const measure = () => {
       const el = tourRefs.current[t.target];
       if (!el || el.getClientRects().length === 0) {
@@ -8415,7 +8470,70 @@ function CoachmarkTour({ tourRefs, onClose }) {
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);
     };
-  }, [idx, t.target, tourRefs, cards.length]);
+  }, [idx, t.target, t.outro, tourRefs, cards.length]);
+
+  // Outro card — centered modal, no spotlight, custom CTAs
+  if (t.outro) {
+    return (
+      <div style={{ position:"fixed", inset:0, zIndex:400,
+        opacity: (visible && !closing) ? 1 : 0,
+        transition: "opacity 260ms ease-out",
+        pointerEvents: closing ? "none" : "auto",
+        display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+        <div onClick={() => handleClose()}
+          style={{ position:"absolute", inset:0, background:"rgba(0,0,0,0.78)" }} />
+        <div style={{ position:"relative", background:"var(--surface2)",
+          border:"1px solid var(--border)", borderRadius:14, padding:18,
+          maxWidth:360, width:"100%",
+          boxShadow:"0 10px 40px rgba(0,0,0,0.4)" }}>
+          <div style={{ display:"flex", justifyContent:"space-between",
+            alignItems:"center", marginBottom:10 }}>
+            <div style={{ fontSize:"0.6875rem", fontWeight:700, color:"var(--muted)",
+              textTransform:"uppercase", letterSpacing:"0.5px" }}>
+              {idx+1} of {cards.length}
+            </div>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+            <div style={{ width:28, height:28, borderRadius:8,
+              background:"rgba(124,106,247,0.15)", border:"1px solid rgba(124,106,247,0.3)",
+              display:"flex", alignItems:"center", justifyContent:"center",
+              color:"var(--accent2)", flexShrink:0 }}>
+              <span style={{ display:"flex", width:16, height:16 }}>{Icon[t.icon]}</span>
+            </div>
+            <div style={{ fontSize:"1rem", fontWeight:800, color:"var(--text)" }}>{t.title}</div>
+          </div>
+          <div style={{ fontSize:"0.75rem", color:"var(--accent2)", fontStyle:"italic",
+            lineHeight:1.4, marginBottom:8 }}>{t.tag}</div>
+          <div style={{ fontSize:"0.8125rem", color:"var(--muted)",
+            lineHeight:1.5, marginBottom:14 }}>{t.body}</div>
+          <div style={{ display:"flex", gap:4, marginBottom:12 }}>
+            {cards.map((_, i) => (
+              <div key={i} onClick={() => setIdx(i)}
+                style={{ flex:1, height:3, borderRadius:2, cursor:"pointer",
+                  background: i === idx ? "var(--accent)" : "var(--border)" }} />
+            ))}
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            <button onClick={() => { handleClose(); onOpenGuide?.(); }}
+              className="btn btn-primary">
+              Open the Guide
+            </button>
+            <button onClick={() => handleClose()} className="btn btn-secondary">
+              End the tour
+            </button>
+            {idx > 0 && (
+              <button onClick={() => setIdx(idx-1)}
+                style={{ background:"none", border:"none", color:"var(--muted)",
+                  fontSize:"0.8125rem", cursor:"pointer", padding:"6px",
+                  fontFamily:"var(--font)" }}>
+                ← Back
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!rect) return null;
 
@@ -8436,7 +8554,7 @@ function CoachmarkTour({ tourRefs, onClose }) {
       pointerEvents: closing ? "none" : "auto" }}>
       {/* Dim backdrop with spotlight cut-out — rect transitions smoothly */}
       <svg width="100%" height="100%" style={{ position:"absolute", inset:0 }}
-        onClick={handleClose}>
+        onClick={() => handleClose()}>
         <defs>
           <mask id="coachmark-mask">
             <rect width="100%" height="100%" fill="white" />
@@ -8482,7 +8600,7 @@ function CoachmarkTour({ tourRefs, onClose }) {
             textTransform:"uppercase", letterSpacing:"0.5px" }}>
             {idx+1} of {cards.length}
           </div>
-          <button onClick={handleClose}
+          <button onClick={() => handleClose()}
             style={{ background:"none", border:"none", color:"var(--muted)",
               fontSize:"0.6875rem", fontWeight:600, cursor:"pointer", padding:0,
               fontFamily:"var(--font)" }}>
