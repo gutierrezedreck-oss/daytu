@@ -5688,7 +5688,7 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
         {/* Title */}
         <div style={{ display:"flex", alignItems:"center", gap:8, background:"var(--surface2)", borderRadius:10, padding:"10px 12px", marginBottom:8 }}>
           <div style={{ width:3, alignSelf:"stretch", borderRadius:2, background:eventColor||calColor, flexShrink:0 }} />
-          <input placeholder="What's happening?" value={title} onChange={e=>setTitle(e.target.value)}
+          <input autoFocus placeholder="What's happening?" value={title} onChange={e=>setTitle(e.target.value)}
             style={{ background:"none", border:"none", padding:0, fontSize:"0.9375rem", fontWeight:600, flex:1, color:"var(--text)", fontFamily:"var(--font)", outline:"none" }} />
         </div>
 
@@ -6323,7 +6323,7 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
         <div style={{ display:"flex", alignItems:"center", gap:8, background:"var(--surface2)", borderRadius:10,
           padding:"12px 14px", marginBottom:10, border:"1px solid var(--border)" }}>
           <div style={{ width:3, alignSelf:"stretch", borderRadius:2, background:color, flexShrink:0 }} />
-          <input placeholder="Trip, event, or milestone name..." value={title} onChange={e=>setTitle(e.target.value)}
+          <input autoFocus placeholder="Trip, event, or milestone name..." value={title} onChange={e=>setTitle(e.target.value)}
             style={{ background:"none", border:"none", padding:0, fontSize:"0.9375rem", fontWeight:600,
               flex:1, color:"var(--text)", fontFamily:"var(--font)", outline:"none" }} />
         </div>
@@ -6626,7 +6626,7 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
                 ← Back to templates
               </button>
             )}
-        <div className="form-group"><label className="form-label">Name</label><input className="form-input" placeholder="e.g. Firefighter Shift" value={name} onChange={e=>setName(e.target.value)} /></div>
+        <div className="form-group"><label className="form-label">Name</label><input autoFocus className="form-input" placeholder="e.g. Firefighter Shift" value={name} onChange={e=>setName(e.target.value)} /></div>
         <div className="form-group">
           <label className="form-label">Type</label>
           <div className="chip-row">{[{v:"rotation",l:"Custom rotation"},{v:"weekly",l:"Weekly days"},{v:"monthly",l:"Specific Days"}].map(t=><div key={t.v} className={"chip"+(type===t.v?" active":"")} onClick={()=>setType(t.v)}>{t.l}</div>)}</div>
