@@ -808,6 +808,8 @@ export default function App() {
     return stored.includes("shiftstatus") ? stored : ["shiftstatus", ...stored];
   });
   const [dayPopup, setDayPopup] = useState(null);
+  // Home page: collapse the major-events stack when there are more than a couple
+  const [majorExpanded, setMajorExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   // Recent searches: last 5 non-trivial queries (persisted to localStorage)
   const [recentSearches, setRecentSearches] = useState(() => _ls?.recentSearches ?? []);
@@ -1103,6 +1105,10 @@ export default function App() {
     (me.groupIds||[]).forEach(gid => addActivity(gid, "updated", me.title, startDate));
     closeSheet();
     showToast("Major event updated");
+  };
+  // Quick pin/unpin without opening the edit form — used by the detail sheet.
+  const toggleMajorPin = (id) => {
+    setMajorEvents(prev => prev.map(me => me.id === id ? { ...me, pinned: !me.pinned } : me));
   };
 
   const deleteMajorEvent = (id) => {
@@ -2183,7 +2189,15 @@ export default function App() {
             {homeOrder.map(id => {
               const now2 = new Date();
               if (id === "major") {
-                const visible = visibleMajorEvents.filter(me => { const e=new Date(me.endDate); e.setHours(23,59,59,999); return now2 <= e; });
+                const visible = visibleMajorEvents
+                  .filter(me => { const e=new Date(me.endDate); e.setHours(23,59,59,999); return now2 <= e; })
+                  .sort((a, b) => {
+                    // Pinned events first, then earliest start date (ongoing events
+                    // have start in the past, so they naturally sort above upcoming).
+                    const pinDelta = (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
+                    if (pinDelta !== 0) return pinDelta;
+                    return new Date(a.startDate) - new Date(b.startDate);
+                  });
                 if (visible.length === 0) {
                   if (isBrandNew) {
                     return (
@@ -2200,14 +2214,23 @@ export default function App() {
                   }
                   return null;
                 }
+                // Collapse the stack when there are more than a couple of cards —
+                // shows the first card with a "peek" hint of the rest behind it.
+                const COLLAPSE_THRESHOLD = 2;
+                const canCollapse = visible.length > COLLAPSE_THRESHOLD;
+                const shownCards = canCollapse && !majorExpanded ? visible.slice(0, 1) : visible;
+                const peekCards = canCollapse && !majorExpanded ? visible.slice(1, 3) : [];
+                const hiddenCount = visible.length - shownCards.length;
                 return (
                   <div key="major" ref={setTourRef("major")}>
-                    {visible.map(me => {
+                    {shownCards.map(me => {
                       const [hsy,hsm,hsd]=me.startDate.slice(0,10).split("-").map(Number);
                       const [hey,hem,hed]=me.endDate.slice(0,10).split("-").map(Number);
                       const start = new Date(hsy,hsm-1,hsd); start.setHours(0,0,0,0);
                       const end   = new Date(hey,hem-1,hed); end.setHours(23,59,59,999);
-                      const totalDays = Math.round((end - start) / 86400000) + 1;
+                      // Calendar-day span (midnight-to-midnight) so single-day
+                      // events correctly report 1 day, not 2.
+                      const totalDays = Math.round((new Date(hey,hem-1,hed) - new Date(hsy,hsm-1,hsd)) / 86400000) + 1;
                       const isActive = now2 >= start;
                       const totalSec = Math.max(0, Math.floor((start - now2) / 1000));
                       const days = Math.floor(totalSec / 86400), hours = Math.floor((totalSec % 86400) / 3600), mins = Math.floor((totalSec % 3600) / 60), secs = totalSec % 60;
@@ -2218,11 +2241,21 @@ export default function App() {
                           style={{ background:"linear-gradient(135deg,"+me.color+"dd,"+me.color+"99)", border:"1px solid "+me.color+"44", boxShadow:"0 4px 20px "+me.color+"33" }}
                           onClick={() => openMajorEventDetail(me)}>
 
-                          {/* Top row — status badge + days count */}
+                          {/* Top row — status badge + days count (pin marker left of status when pinned) */}
                           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
-                            <div style={{ fontSize:"0.6875rem", fontWeight:800, letterSpacing:"1px", textTransform:"uppercase",
-                              background:"rgba(0,0,0,0.18)", borderRadius:20, padding:"3px 10px", color:"rgba(255,255,255,0.9)" }}>
-                              {isActive ? "Ongoing" : "Upcoming"}
+                            <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                              {me.pinned && (
+                                <span title="Pinned to top"
+                                  style={{ display:"flex", alignItems:"center", justifyContent:"center",
+                                    width:20, height:20, borderRadius:"50%",
+                                    background:"rgba(0,0,0,0.22)", color:"rgba(255,255,255,0.95)" }}>
+                                  <span style={{ display:"flex", width:11, height:11 }}>{Icon.pin2}</span>
+                                </span>
+                              )}
+                              <div style={{ fontSize:"0.6875rem", fontWeight:800, letterSpacing:"1px", textTransform:"uppercase",
+                                background:"rgba(0,0,0,0.18)", borderRadius:20, padding:"3px 10px", color:"rgba(255,255,255,0.9)" }}>
+                                {isActive ? "Ongoing" : "Upcoming"}
+                              </div>
                             </div>
                             <div style={{ fontSize:"0.6875rem", fontWeight:700, color:"rgba(255,255,255,0.7)", letterSpacing:"0.3px" }}>
                               {isActive ? `Day ${dayOf} of ${totalDays}` : totalDays > 1 ? `${totalDays} days` : "1 day"}
@@ -2289,6 +2322,33 @@ export default function App() {
                         </div>
                       );
                     })}
+                    {/* Peek stack — narrower pills behind the first card hint at hidden ones */}
+                    {peekCards.length > 0 && (
+                      <div style={{ position:"relative", height: peekCards.length * 8 + 4, marginTop: -6, marginBottom: 10 }}>
+                        {peekCards.map((peek, pi) => (
+                          <div key={peek.id+"-peek"} onClick={() => setMajorExpanded(true)}
+                            style={{ position:"absolute", top: pi*6, left:(pi+1)*8, right:(pi+1)*8,
+                              height: 12, borderRadius: 18, cursor:"pointer",
+                              background:"linear-gradient(135deg,"+peek.color+"dd,"+peek.color+"99)",
+                              border:"1px solid "+peek.color+"44",
+                              boxShadow:"0 2px 8px "+peek.color+"33" }} />
+                        ))}
+                      </div>
+                    )}
+                    {canCollapse && (
+                      <button onClick={() => setMajorExpanded(v => !v)}
+                        style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"center",
+                          gap:6, padding:"8px 12px", marginBottom:12,
+                          background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10,
+                          color:"var(--muted)", fontFamily:"var(--font)", fontSize:"0.75rem", fontWeight:600,
+                          cursor:"pointer" }}>
+                        {majorExpanded ? "Show less" : `Show ${hiddenCount} more`}
+                        <span style={{ display:"inline-flex", width:14, height:14,
+                          transform: majorExpanded ? "rotate(-90deg)" : "rotate(90deg)", transition:"transform .15s" }}>
+                          {Icon.chevR}
+                        </span>
+                      </button>
+                    )}
                   </div>
                 );
               }
@@ -3829,7 +3889,7 @@ export default function App() {
             onClose={closeSheet}
           />
         )}
-        {sheet === "majorEventDetail" && activeMajorEvent && <MajorEventDetailSheet me={activeMajorEvent} groups={groups} onEdit={() => openEditMajorEvent(activeMajorEvent)} onDelete={deleteMajorEvent} onDuplicate={duplicateMajorEvent} onClose={closeSheet} mapProvider={mapProvider} />}
+        {sheet === "majorEventDetail" && activeMajorEvent && <MajorEventDetailSheet me={activeMajorEvent} groups={groups} onEdit={() => openEditMajorEvent(activeMajorEvent)} onDelete={deleteMajorEvent} onDuplicate={duplicateMajorEvent} onPin={toggleMajorPin} onClose={closeSheet} mapProvider={mapProvider} />}
         {sheet === "editMajorEvent" && activeMajorEvent && <MajorEventSheet existing={activeMajorEvent} onPreview={setPreviewMajor} groups={groups} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateMajorEvent} onDelete={deleteMajorEvent} onClose={() => { setPreviewMajor(null); closeSheet(); }} />}
         {sheet === "newEvent" && <NewEventSheet onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} defaultCalendar={userProfile.defaultCalendar} defaultReminder={userProfile.defaultReminder} />}
         {sheet === "editEvent" && activeEvent && <NewEventSheet existing={activeEvent} onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateEvent} onDelete={deleteEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} />}
@@ -5824,7 +5884,7 @@ function NewGroupSheet({ existing, currentMembers, onSave, onDelete, onClose }) 
 }
 
 // ── MAJOR EVENT DETAIL SHEET ─────────────────────────────
-function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, onClose, mapProvider }) {
+function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, onPin, onClose, mapProvider }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const parseLocal = s => { const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d); };
   const start = parseLocal(me.startDate);
@@ -5832,7 +5892,8 @@ function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, o
   const now = new Date();
   const isActive = now >= start && now <= end;
   const isPast = now > end;
-  const totalDays = Math.round((end - start) / 86400000) + 1;
+  // Calendar-day span (midnight-to-midnight) so single-day events report as 1 day.
+  const totalDays = Math.round((parseLocal(me.endDate) - parseLocal(me.startDate)) / 86400000) + 1;
   const dayOf = isActive ? Math.floor((now - start) / 86400000) + 1 : null;
   const daysUntil = !isActive && !isPast ? Math.ceil((start - now) / 86400000) : 0;
   const evGroups = groups.filter(g => me.groupIds?.includes(g.id));
@@ -5919,15 +5980,27 @@ function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, o
 
           {/* Actions */}
           {!confirmDelete && (
-            <div style={{ display:"flex", gap:8 }}>
-              <button className="btn btn-secondary" style={{ flex:1 }} onClick={onEdit}>Edit</button>
-              {onDuplicate && (
-                <button className="btn btn-secondary" style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }} onClick={() => onDuplicate(me)}>
-                  <span style={{ display:"flex", width:13, height:13 }}>{Icon.copy}</span> Copy
+            <>
+              {onPin && (
+                <button className="btn btn-secondary"
+                  style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"center", gap:6, marginBottom:8,
+                    color: me.pinned ? "#f59e0b" : "var(--muted)",
+                    borderColor: me.pinned ? "rgba(245,158,11,0.4)" : "var(--border)" }}
+                  onClick={() => onPin(me.id)}>
+                  <span style={{ display:"flex", width:13, height:13 }}>{Icon.pin2}</span>
+                  {me.pinned ? "Pinned to top" : "Pin to top"}
                 </button>
               )}
-              <button className="btn btn-secondary" style={{ flex:1, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }} onClick={() => setConfirmDelete(true)}>Delete</button>
-            </div>
+              <div style={{ display:"flex", gap:8 }}>
+                <button className="btn btn-secondary" style={{ flex:1 }} onClick={onEdit}>Edit</button>
+                {onDuplicate && (
+                  <button className="btn btn-secondary" style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }} onClick={() => onDuplicate(me)}>
+                    <span style={{ display:"flex", width:13, height:13 }}>{Icon.copy}</span> Copy
+                  </button>
+                )}
+                <button className="btn btn-secondary" style={{ flex:1, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }} onClick={() => setConfirmDelete(true)}>Delete</button>
+              </div>
+            </>
           )}
           {confirmDelete && (
             <div style={{ padding:14, borderRadius:10,
@@ -5970,6 +6043,7 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
   const [startTime, setStartTime] = useState(existing?.startTime??"09:00");
   const [endTime, setEndTime] = useState(existing?.endTime??"17:00");
   const [showCountdown, setShowCountdown] = useState(existing?.showCountdown??true);
+  const [pinned, setPinned] = useState(existing?.pinned??false);
   const [notes, setNotes] = useState(existing?.notes??"");
   const [location, setLocation] = useState(existing?.location??"");
   const [url, setUrl] = useState(existing?.url??"");
@@ -5991,7 +6065,7 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
 
   const handleSave = () => {
     if (!title.trim()) return;
-    const saved = { title, color, showCountdown, notes, location, url, allDay, startTime, endTime,
+    const saved = { title, color, showCountdown, pinned, notes, location, url, allDay, startTime, endTime,
       startDate, endDate, visibility, groupIds: selGroups };
     if (isEdit) { saved.id=existing.id; }
     onSave(saved);
@@ -6040,6 +6114,25 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
 
         {/* Dates + time — list rows */}
         <div style={{ background:"var(--surface2)", borderRadius:10, marginBottom:10, overflow:"hidden", border:"1px solid var(--border)" }}>
+          {/* Single day toggle — when on, End mirrors Start and the End row hides */}
+          {(() => {
+            const singleDay = startDate === endDate;
+            return (
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 14px", borderBottom:"1px solid var(--border)" }}>
+                <span style={{ fontSize:"0.875rem", color:"var(--text)", fontWeight:500 }}>Single day</span>
+                <button className={"toggle "+(singleDay?"on":"")} onClick={() => {
+                  if (singleDay) {
+                    // Turning off — make it a 2-day span starting from the current Start
+                    const next = new Date(startDate+"T00:00:00"); next.setDate(next.getDate()+1);
+                    const pad = n=>String(n).padStart(2,"0");
+                    setEndDate(next.getFullYear()+"-"+pad(next.getMonth()+1)+"-"+pad(next.getDate()));
+                  } else {
+                    setEndDate(startDate);
+                  }
+                }} />
+              </div>
+            );
+          })()}
           {/* All day toggle */}
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 14px", borderBottom:"1px solid var(--border)" }}>
             <span style={{ fontSize:"0.875rem", color:"var(--text)", fontWeight:500 }}>All day</span>
@@ -6048,14 +6141,16 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
           {[
             { label:"Start", type:"date", value:startDate, onChange:e=>{
                 const newStart = e.target.value;
+                const wasSingleDay = startDate === endDate;
                 setStartDate(newStart);
-                if (endDate <= newStart) {
-                  const next = new Date(newStart+"T00:00:00"); next.setDate(next.getDate()+1);
-                  const pad = n=>String(n).padStart(2,"0");
-                  setEndDate(next.getFullYear()+"-"+pad(next.getMonth()+1)+"-"+pad(next.getDate()));
-                }
+                // If single-day is active, keep End locked to Start.
+                // Otherwise push End forward only when it would become invalid.
+                if (wasSingleDay) setEndDate(newStart);
+                else if (endDate < newStart) setEndDate(newStart);
               }},
-            { label:"End",   type:"date",  value:endDate,   onChange:e=>{ if(e.target.value>=startDate) setEndDate(e.target.value); } },
+            ...(startDate !== endDate ? [
+              { label:"End", type:"date", value:endDate, onChange:e=>{ if(e.target.value>=startDate) setEndDate(e.target.value); } },
+            ] : []),
             ...(!allDay ? [
               { label:"From", type:"time", value:startTime, onChange:e=>setStartTime(e.target.value) },
               { label:"To",   type:"time", value:endTime,   onChange:e=>setEndTime(e.target.value) },
@@ -6112,26 +6207,44 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
         </div>
         )}
 
-        {/* Countdown toggle */}
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
-          background:"var(--surface2)", borderRadius:10, padding:"12px 14px", marginBottom:12,
-          border:"1px solid var(--border)" }}>
-          <div>
-            <div style={{ fontSize:"0.875rem", fontWeight:500 }}>Show countdown</div>
-            <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:1 }}>Live timer on home screen</div>
+        {/* Countdown + Pin toggles */}
+        <div style={{ background:"var(--surface2)", borderRadius:10, marginBottom:12,
+          border:"1px solid var(--border)", overflow:"hidden" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
+            padding:"12px 14px", borderBottom:"1px solid var(--border)" }}>
+            <div>
+              <div style={{ fontSize:"0.875rem", fontWeight:500 }}>Show countdown</div>
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:1 }}>Live timer on home screen</div>
+            </div>
+            <button className={"toggle"+(showCountdown?" on":"")} onClick={()=>setShowCountdown(v=>!v)} />
           </div>
-          <button className={"toggle"+(showCountdown?" on":"")} onClick={()=>setShowCountdown(v=>!v)} />
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 14px" }}>
+            <div>
+              <div style={{ fontSize:"0.875rem", fontWeight:500 }}>Pin to top</div>
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:1 }}>Always show first on the home screen</div>
+            </div>
+            <button className={"toggle"+(pinned?" on":"")} onClick={()=>setPinned(v=>!v)} />
+          </div>
         </div>
 
-        <button className="btn btn-primary" onClick={handleSave} style={{ opacity:title.trim()?1:0.5 }}>
-          {isEdit?"Save Changes":"Create Major Event"}
-        </button>
-        {isEdit&&onDelete&&(
-          <button className="btn btn-secondary" onClick={()=>onDelete(existing.id)}
-            style={{ width:"100%", marginTop:8, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>
-            Delete
+        <div style={{
+          position:"sticky", bottom:-40,
+          marginLeft:-20, marginRight:-20, marginTop:12, marginBottom:-40,
+          padding:"12px 20px 24px",
+          background:"var(--surface)",
+          borderTop:"1px solid var(--border)",
+          zIndex:2,
+        }}>
+          <button className="btn btn-primary" onClick={handleSave} disabled={!title.trim()} style={{ opacity:title.trim()?1:0.5 }}>
+            {isEdit?"Save Changes":"Create Major Event"}
           </button>
-        )}
+          {isEdit&&onDelete&&(
+            <button className="btn btn-secondary" onClick={()=>onDelete(existing.id)}
+              style={{ width:"100%", marginTop:8, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>
+              Delete
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
