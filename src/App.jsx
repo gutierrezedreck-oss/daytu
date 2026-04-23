@@ -1506,6 +1506,74 @@ export default function App() {
     if (!q) return null;
     const now = new Date();
 
+    // What's competing with free time on a given day: active shifts (with their
+    // effective time), major events covering the day, and regular events — all
+    // merged into one chronological list so the preview reads top-to-bottom
+    // like a mini agenda instead of grouping by type.
+    const computeWhatsOn = (day) => {
+      const dayStart = new Date(day); dayStart.setHours(0,0,0,0);
+      const dayEnd = new Date(day); dayEnd.setHours(23,59,59,999);
+      const ymd = day.getFullYear()+"-"+day.getMonth()+"-"+day.getDate();
+      const items = [];
+      // Shifts — use effective time (override beats base)
+      shifts.forEach(p => {
+        const key = p.id + ":" + ymd;
+        if (shiftOverrides.has(key)) return;
+        const isExtra = shiftOverrides.has("extra:" + key);
+        const isNatural = p.type === "rotation" ? getRotationStatus(p, day) === "work"
+          : p.type === "monthly" ? isMonthlyWorkDay(p, day)
+          : (p.config?.days ?? []).includes(day.getDay());
+        if (!isNatural && !isExtra) return;
+        const ov = shiftTimeOverrides[key];
+        const eff = ov ? { enabled: true, start: ov.start, end: ov.end } : (p.config?.shiftTime || null);
+        const color = p.color || "#6366f1";
+        if (eff?.enabled) {
+          const [sh, sm] = eff.start.split(":").map(Number);
+          const [eh, em] = eff.end.split(":").map(Number);
+          const startMs = new Date(day).setHours(sh, sm, 0, 0);
+          let endMs = new Date(day).setHours(eh, em, 0, 0);
+          if (endMs <= startMs) endMs += 86400000; // overnight
+          items.push({ kind:"shift", title: p.name, color, startMs, endMs, allDay: false });
+        } else {
+          items.push({ kind:"shift", title: p.name, color, allDay: true });
+        }
+      });
+      // Major events covering this day
+      majorEvents.forEach(me => {
+        const [sy,sm,sd] = me.startDate.slice(0,10).split("-").map(Number);
+        const [ey,em,ed] = me.endDate.slice(0,10).split("-").map(Number);
+        const s = new Date(sy,sm-1,sd); s.setHours(0,0,0,0);
+        const e = new Date(ey,em-1,ed); e.setHours(23,59,59,999);
+        if (day < s || day > e) return;
+        const color = me.color || "#f59e0b";
+        // Majors have per-day times only when allDay === false. Otherwise they're all-day.
+        if (me.allDay === false && me.startTime && me.endTime) {
+          const [sh, sm2] = me.startTime.split(":").map(Number);
+          const [eh, em2] = me.endTime.split(":").map(Number);
+          const startMs = new Date(day).setHours(sh, sm2, 0, 0);
+          const endMs = new Date(day).setHours(eh, em2, 0, 0);
+          items.push({ kind:"major", title: me.title, color, startMs, endMs, allDay: false });
+        } else {
+          items.push({ kind:"major", title: me.title, color, allDay: true });
+        }
+      });
+      // Regular events on this day
+      expandEvents(events, dayStart, dayEnd)
+        .filter(ev => sameDay(ev.start, day) || (ev.allDay && ev.start <= dayEnd && ev.end >= dayStart))
+        .forEach(ev => {
+          const cal = calendars.find(c => c.id === ev.calendarId);
+          const color = ev.color || cal?.color || "#888";
+          items.push({ kind:"event", title: ev.title, color,
+            startMs: ev.start.getTime(), endMs: ev.end.getTime(), allDay: !!ev.allDay });
+        });
+      // Sort: all-day items first, then by start time
+      items.sort((a, b) => {
+        if (a.allDay !== b.allDay) return a.allDay ? -1 : 1;
+        return (a.startMs || 0) - (b.startMs || 0);
+      });
+      return { items };
+    };
+
     // ── STEP 1: parse duration from the query ───────────────────────────
     // Handles "20 min", "2 hours", "an hour", "half hour", "all day"
     let neededMs = 0; // 0 = any gap
@@ -1796,7 +1864,7 @@ export default function App() {
       const qualifying = neededMs > 0 ? clipped.filter(g => g.gapMs >= neededMs) : clipped;
       if (qualifying.length > 0 && answers.length < maxResults) {
         const topGaps = neededMs > 0 && maxResults === 1 ? [qualifying[0]] : qualifying.slice(0,3);
-        answers.push({ day, gaps: topGaps });
+        answers.push({ day, gaps: topGaps, whatsOn: computeWhatsOn(day) });
       }
     }
 
@@ -1812,11 +1880,14 @@ export default function App() {
       const busyMsg = needLabel
         ? "No " + needLabel + " slots found " + whenLabel + todSuffix + "."
         : "No availability " + whenLabel + todSuffix + ".";
-      return { busy: true, text: busyMsg };
+      // For a single-day query ("next Friday", "April 25") surface what's
+      // actually taking up the day so the user can see why they're booked.
+      const busyWhatsOn = searchDays === 1 ? computeWhatsOn(targetDate) : null;
+      return { busy: true, text: busyMsg, whatsOn: busyWhatsOn };
     }
 
     return { busy: false, answers, neededMs, fullClearDay, todLabel };
-  }, [freeTimeQuery, findDayGaps]);
+  }, [freeTimeQuery, findDayGaps, events, shifts, shiftOverrides, shiftTimeOverrides, majorEvents, calendars]);
 
   const stillTimerRef = React.useRef(null);
   const setScreenRef = () => {};
@@ -2695,13 +2766,44 @@ export default function App() {
                     )}
 
                     {/* Answer */}
-                    {freeTimeAnswer && (
-                      freeTimeAnswer.busy ? (
-                        <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8,
-                          background:"rgba(248,113,113,0.12)", border:"1px solid rgba(248,113,113,0.3)",
-                          borderRadius:10, padding:"10px 12px" }}>
-                          <div style={{ width:3, alignSelf:"stretch", borderRadius:2, background:"#f87171", flexShrink:0 }} />
-                          <div style={{ fontSize:"0.8125rem", color:"var(--text)", fontWeight:500 }}>{freeTimeAnswer.text}</div>
+                    {freeTimeAnswer && (() => {
+                      // Unified chronological preview: all-day items (shifts with
+                      // no time, all-day majors/events) sit at the top, then each
+                      // timed item is listed with its start – end range.
+                      const renderWhatsOn = (whatsOn) => {
+                        if (!whatsOn || !whatsOn.items || whatsOn.items.length === 0) return null;
+                        const shapeFor = (kind) => kind === "shift" ? 2 : 99; // square for shift, round otherwise
+                        return (
+                          <div style={{ marginTop:6, padding:"8px 10px", background:"var(--surface2)",
+                            border:"1px solid var(--border)", borderRadius:8 }}>
+                            <div style={{ fontSize:"0.625rem", fontWeight:700, textTransform:"uppercase",
+                              letterSpacing:"0.6px", color:"var(--muted)", marginBottom:5 }}>On this day</div>
+                            {whatsOn.items.map((it, ii) => (
+                              <div key={ii} style={{ display:"flex", alignItems:"center", gap:8, fontSize:"0.75rem",
+                                color:"var(--text)", lineHeight:1.5, minWidth:0 }}>
+                                <div style={{ width:6, height:6, borderRadius:shapeFor(it.kind), background:it.color, flexShrink:0 }} />
+                                <span style={{ fontWeight: it.kind === "event" ? 500 : 600,
+                                  overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0, flex:1 }}>
+                                  {it.title}
+                                </span>
+                                <span style={{ color:"var(--muted)", fontFamily:"var(--mono)", fontSize:"0.6875rem", flexShrink:0 }}>
+                                  {it.allDay ? "all day"
+                                    : fmtTime(new Date(it.startMs)) + " – " + fmtTime(new Date(it.endMs))}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      };
+                      return freeTimeAnswer.busy ? (
+                        <div style={{ marginTop:8 }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:10,
+                            background:"rgba(248,113,113,0.12)", border:"1px solid rgba(248,113,113,0.3)",
+                            borderRadius:10, padding:"10px 12px" }}>
+                            <div style={{ width:3, alignSelf:"stretch", borderRadius:2, background:"#f87171", flexShrink:0 }} />
+                            <div style={{ fontSize:"0.8125rem", color:"var(--text)", fontWeight:500 }}>{freeTimeAnswer.text}</div>
+                          </div>
+                          {renderWhatsOn(freeTimeAnswer.whatsOn)}
                         </div>
                       ) : (
                         <div style={{ marginTop:4 }}>
@@ -2728,6 +2830,7 @@ export default function App() {
                                     </div>
                                   </div>
                                 ))}
+                                {renderWhatsOn(a.whatsOn)}
                               </div>
                             );
                           })}
@@ -2753,8 +2856,8 @@ export default function App() {
                             );
                           })()}
                         </div>
-                      )
-                    )}
+                      );
+                    })()}
                   </div>
                 );
               }
