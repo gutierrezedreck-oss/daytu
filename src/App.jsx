@@ -2281,11 +2281,10 @@ export default function App() {
                 <h1>Good {now.getHours() < 12 ? "morning" : now.getHours() < 17 ? "afternoon" : "evening"}, {userProfile.name.split(" ")[0]}</h1>
               </div>
               <div style={{ display:"flex", gap:6 }}>
-                {showHomeHelp && (
-                  <button onClick={() => { setTab("home"); setTourOpen(true); }} style={{ background:"rgba(124,106,247,0.15)", border:"1px solid rgba(124,106,247,0.3)", borderRadius:10, width:36, height:36, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", color:"var(--accent2)" }}>
-                    <span style={{ display:"flex", width:16, height:16 }}>{Icon.help}</span>
-                  </button>
-                )}
+                <button onClick={() => setSheet("guide")} title="Guide"
+                  style={{ background:"rgba(124,106,247,0.15)", border:"1px solid rgba(124,106,247,0.3)", borderRadius:10, width:36, height:36, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", color:"var(--accent2)" }}>
+                  <span style={{ display:"flex", width:16, height:16 }}>{Icon.help}</span>
+                </button>
                 <button onClick={() => setShowSearch(true)} style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10, width:36, height:36, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", color:"var(--muted)" }}>
                   <span style={{ display:"flex", width:16, height:16 }}>{Icon.search}</span>
                 </button>
@@ -3932,15 +3931,24 @@ export default function App() {
               ))}
             </div>
 
-            {/* Tour */}
+            {/* Help */}
             <div className="section-label">Help</div>
             <div className="card" style={{ marginBottom:16, padding:0 }}>
+              <div onClick={() => setSheet("guide")}
+                style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 16px", cursor:"pointer", borderBottom:"1px solid var(--border)" }}>
+                <div style={{ display:"flex", width:20, height:20, color:"var(--accent2)", flexShrink:0 }}>{Icon.help}</div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:"0.875rem", fontWeight:500, color:"var(--text)" }}>Guide</div>
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:2 }}>Deep reference for every tab — what's there and why you'd use it</div>
+                </div>
+                <div style={{ display:"flex", width:16, height:16, color:"var(--muted)", flexShrink:0 }}>{Icon.chevR}</div>
+              </div>
               <div onClick={() => { setTab("home"); setTourOpen(true); }}
                 style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 16px", cursor:"pointer" }}>
                 <div style={{ display:"flex", width:20, height:20, color:"var(--accent2)", flexShrink:0 }}>{Icon.help}</div>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:"0.875rem", fontWeight:500, color:"var(--text)" }}>Take a tour</div>
-                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:2 }}>A quick look at what makes this app different</div>
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:2 }}>A 60-second spotlight walk through each tab</div>
                 </div>
                 <div style={{ display:"flex", width:16, height:16, color:"var(--muted)", flexShrink:0 }}>{Icon.chevR}</div>
               </div>
@@ -4326,6 +4334,7 @@ export default function App() {
         )}
         {sheet === "newShift" && <ShiftSheet onPreview={setPreviewShift} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addShift} onClose={() => { setPreviewShift(null); closeSheet(); }} />}
         {sheet === "editShift" && activeShift && <ShiftSheet existing={activeShift} onPreview={setPreviewShift} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateShift} onDelete={deleteShift} onClose={() => { setPreviewShift(null); closeSheet(); }} />}
+        {sheet === "guide" && <GuideSheet onClose={closeSheet} onStartTour={() => { closeSheet(); setTab("home"); setTourOpen(true); }} />}
       </div>
     </>
   );
@@ -7339,6 +7348,492 @@ function EmptyStateCard({ icon, title, body, cta, onCta, accent="rgba(124,106,24
   );
 }
 
+// ── GUIDE PREVIEWS ────────────────────────────────────────
+// Tiny, in-card illustrations so features show what they look like in place.
+// All are self-contained — no state, no real data — just styled mock DOM that
+// looks like the real UI at a smaller scale. Animations run on infinite loops
+// via keyframes defined in the main css block (guide*).
+const PreviewFrame = ({ children, height = 120 }) => (
+  <div style={{
+    marginTop: 10, height, borderRadius: 10,
+    background: "rgba(0,0,0,0.18)", border: "1px solid var(--border)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    overflow: "hidden", position: "relative",
+  }}>{children}</div>
+);
+
+function PreviewStripes() {
+  const color = "#f59e0b";
+  return (
+    <PreviewFrame>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,32px)", gap: 4 }}>
+        {[10,11,12,13,14,15,16].map((d, i) => {
+          const inRange = i >= 2 && i <= 4;
+          return (
+            <div key={d} style={{ width: 32, height: 32, borderRadius: 6, background: "var(--surface3)",
+              position: "relative", display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "0.6875rem", fontWeight: 700, color: "var(--text)" }}>
+              {inRange && (
+                <>
+                  <div style={{ position: "absolute", inset: 0, borderRadius: 6,
+                    background: `repeating-linear-gradient(45deg, ${color}55 0px, ${color}55 3px, transparent 3px, transparent 8px)`,
+                    border: `1.5px solid ${color}88` }} />
+                  <div style={{ position: "absolute", top: 2, left: "50%", transform: "translateX(-50%)",
+                    width: 8, height: 2.5, borderRadius: 2, background: color }} />
+                </>
+              )}
+              <span style={{ zIndex: 1 }}>{d}</span>
+            </div>
+          );
+        })}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewRings() {
+  const colorA = "#6366f1", colorB = "#10b981";
+  const cells = [[colorA], [colorA, colorB], []];
+  return (
+    <PreviewFrame>
+      <div style={{ display: "flex", gap: 10 }}>
+        {cells.map((rings, i) => (
+          <div key={i} style={{ width: 48, height: 48, borderRadius: 8, background: "var(--surface3)",
+            position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {rings.map((c, ri) => (
+              <div key={ri} style={{ position: "absolute", inset: 2 + ri * 4, borderRadius: 6,
+                border: `2px solid ${c}` }} />
+            ))}
+            <span style={{ fontSize: "0.8125rem", fontWeight: 700, color: "var(--text)", zIndex: 1 }}>{15+i}</span>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewHolidayH() {
+  return (
+    <PreviewFrame>
+      <div style={{ width: 60, height: 60, borderRadius: 10, background: "var(--surface3)",
+        position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ position: "absolute", top: 4, left: 4, width: 18, height: 18, borderRadius: 4,
+          background: "#ef4444", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <span style={{ fontSize: "0.8125rem", fontWeight: 900, color: "#0d0b1e", lineHeight: 1 }}>H</span>
+        </div>
+        <span style={{ fontSize: "1rem", fontWeight: 700, color: "var(--text)" }}>4</span>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewConflict() {
+  return (
+    <PreviewFrame>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, width: 220 }}>
+        {[
+          { t: "Team standup", s: "9:30 – 10:00", c: "#6366f1", conflict: false },
+          { t: "Dentist appointment", s: "9:45 – 10:30", c: "#ec4899", conflict: true },
+        ].map((ev, i) => (
+          <div key={i} style={{ position: "relative", background: ev.c + "22",
+            border: `1px solid ${ev.c}55`, borderLeft: `3px solid ${ev.c}`,
+            borderRadius: 7, padding: "6px 8px" }}>
+            {ev.conflict && <div style={{ position: "absolute", top: 6, right: 8,
+              width: 8, height: 8, borderRadius: "50%", background: "#f87171" }} />}
+            <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text)" }}>{ev.t}</div>
+            <div style={{ fontSize: "0.625rem", color: "var(--muted)" }}>{ev.s}</div>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewGhost() {
+  const color = "#7c6af7";
+  return (
+    <PreviewFrame>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,36px)", gap: 4 }}>
+        {[10,11,12,13,14].map((d, i) => (
+          <div key={d} style={{ width: 36, height: 36, borderRadius: 7, background: "var(--surface3)",
+            position: "relative", display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: "0.75rem", fontWeight: 700, color: "var(--text)" }}>
+            {i === 2 && (
+              <div style={{ position: "absolute", inset: 2, borderRadius: 5,
+                border: "2px dashed " + color, background: color + "22",
+                animation: "ghostPulse 1.5s ease-in-out infinite" }} />
+            )}
+            <span style={{ zIndex: 1 }}>{d}</span>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewDoubleTap() {
+  return (
+    <PreviewFrame height={150}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ width: 56, height: 56, borderRadius: 10, background: "var(--surface3)",
+          position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <span style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--text)" }}>12</span>
+          <div style={{ position: "absolute", top: "50%", left: "50%",
+            width: 34, height: 34, borderRadius: "50%",
+            border: "2px solid var(--accent)",
+            animation: "guideDoubleTap 2.4s ease-out infinite" }} />
+        </div>
+        <span style={{ fontSize: "1.25rem", color: "var(--muted)" }}>→</span>
+        <div style={{ width: 110, padding: "8px 10px", borderRadius: 10,
+          background: "var(--surface)", border: "1px solid var(--border)",
+          animation: "guideSlideIn 2.4s ease-out infinite" }}>
+          <div style={{ fontSize: "0.625rem", fontWeight: 700, color: "var(--text)", marginBottom: 5 }}>Add to Oct 12</div>
+          <div style={{ height: 18, borderRadius: 5, background: "rgba(124,106,247,0.28)",
+            display: "flex", alignItems: "center", paddingLeft: 6,
+            fontSize: "0.5625rem", color: "var(--accent2)", fontWeight: 600, marginBottom: 3 }}>+ Event</div>
+          <div style={{ height: 18, borderRadius: 5, background: "var(--surface2)",
+            display: "flex", alignItems: "center", paddingLeft: 6,
+            fontSize: "0.5625rem", color: "var(--muted)", fontWeight: 600 }}>★ Major event</div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewLongPress() {
+  const color = "#6366f1";
+  return (
+    <PreviewFrame height={150}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ width: 56, height: 56, borderRadius: 10, background: "var(--surface3)",
+          position: "relative", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+          <span style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--text)", zIndex: 2 }}>18</span>
+          {/* Shift ring */}
+          <div style={{ position: "absolute", inset: 3, borderRadius: 8,
+            border: `2px solid ${color}` }} />
+          {/* Expanding long-press circle */}
+          <div style={{ position: "absolute", top: "50%", left: "50%",
+            width: 20, height: 20, borderRadius: "50%",
+            background: "var(--accent)",
+            animation: "guideLongPress 2.4s ease-out infinite" }} />
+        </div>
+        <span style={{ fontSize: "1.25rem", color: "var(--muted)" }}>→</span>
+        <div style={{ width: 120, padding: "8px 10px", borderRadius: 10,
+          background: "var(--surface)", border: "1px solid var(--border)",
+          animation: "guideSlideIn 2.4s ease-out infinite" }}>
+          <div style={{ fontSize: "0.625rem", fontWeight: 700, color: "var(--text)", marginBottom: 5 }}>Fri, Oct 18</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+            padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
+            <span style={{ fontSize: "0.5625rem", color: "var(--text)" }}>Morning</span>
+            <div style={{ width: 22, height: 12, borderRadius: 8, background: color }} />
+          </div>
+          <div style={{ fontSize: "0.5625rem", color: color, fontWeight: 700, paddingTop: 4 }}>Change hours →</div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewCountdown() {
+  const color = "#f59e0b";
+  const [tick, setTick] = React.useState(0);
+  React.useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const secs = 59 - (tick % 60);
+  const mins = 23;
+  const hrs = 4;
+  const days = 7;
+  return (
+    <PreviewFrame>
+      <div style={{ background: `linear-gradient(135deg, ${color}cc, ${color}88)`,
+        borderRadius: 12, padding: "10px 16px", minWidth: 240 }}>
+        <div style={{ fontSize: "0.75rem", fontWeight: 800, color: "#fff", marginBottom: 6 }}>Hawaii trip</div>
+        <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+          {[["days", days], ["hrs", hrs], ["min", mins], ["sec", String(secs).padStart(2,"0")]].map(([lbl, v], i) => (
+            <React.Fragment key={lbl}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: "1.125rem", fontWeight: 800, color: "#fff", lineHeight: 1 }}>{v}</div>
+                <div style={{ fontSize: "0.5625rem", color: "rgba(255,255,255,0.75)", fontWeight: 600, marginTop: 2 }}>{lbl}</div>
+              </div>
+              {i < 3 && <span style={{ fontSize: "1rem", fontWeight: 700, color: "rgba(255,255,255,0.6)" }}>:</span>}
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewPinned() {
+  const color = "#7c6af7";
+  return (
+    <PreviewFrame>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, width: 240 }}>
+        <div style={{ position: "relative", background: color + "22",
+          border: `1px solid ${color}55`, borderLeft: `3px solid ${color}`,
+          borderRadius: 7, padding: "6px 8px 6px 22px" }}>
+          <span style={{ position: "absolute", left: 7, top: "50%", transform: "translateY(-50%)",
+            display: "flex", width: 9, height: 9, color: "#f59e0b" }}>{Icon.pin2}</span>
+          <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text)" }}>Doctor appointment</div>
+          <div style={{ fontSize: "0.625rem", color: "var(--muted)" }}>2:00 – 3:00 PM</div>
+        </div>
+        <div style={{ background: "var(--surface3)", borderLeft: "3px solid var(--muted)",
+          borderRadius: 7, padding: "6px 8px", opacity: 0.7 }}>
+          <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text)" }}>Team standup</div>
+          <div style={{ fontSize: "0.625rem", color: "var(--muted)" }}>9:30 – 10:00 AM</div>
+        </div>
+        <div style={{ background: "var(--surface3)", borderLeft: "3px solid var(--muted)",
+          borderRadius: 7, padding: "6px 8px", opacity: 0.7 }}>
+          <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text)" }}>Lunch with Sam</div>
+          <div style={{ fontSize: "0.625rem", color: "var(--muted)" }}>12:30 – 1:30 PM</div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewFreeTime() {
+  return (
+    <PreviewFrame height={150}>
+      <div style={{ width: 260, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)",
+          borderRadius: 20, padding: "6px 12px", display: "flex", alignItems: "center", gap: 6,
+          fontSize: "0.75rem", color: "var(--text)" }}>
+          <span style={{ display: "flex", width: 12, height: 12, color: "var(--muted)" }}>{Icon.search}</span>
+          "free this weekend"
+          <span style={{ width: 1.5, height: 11, background: "var(--text)",
+            animation: "guideCaret 1s step-end infinite" }} />
+        </div>
+        <div style={{ background: "linear-gradient(135deg,rgba(52,211,153,0.18),rgba(16,185,129,0.1))",
+          border: "1px solid rgba(52,211,153,0.35)", borderRadius: 10, padding: "8px 10px",
+          animation: "guideFadeIn 2.4s ease-out infinite" }}>
+          <div style={{ fontSize: "0.625rem", fontWeight: 700, color: "#6ee7b7",
+            textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: 4 }}>3 open slots</div>
+          <div style={{ fontSize: "0.6875rem", color: "var(--text)", lineHeight: 1.5 }}>
+            Sat 10am – 2pm<br />Sat 6pm – 10pm<br />Sun all day
+          </div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewAutocomplete() {
+  const color = "#6366f1";
+  return (
+    <PreviewFrame height={150}>
+      <div style={{ width: 240, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ background: "var(--surface2)", borderRadius: 8, padding: "7px 10px",
+          display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ width: 3, alignSelf: "stretch", borderRadius: 2, background: color }} />
+          <span style={{ fontSize: "0.75rem", color: "var(--text)", fontWeight: 600 }}>Morning Ru</span>
+          <span style={{ width: 1.5, height: 12, background: "var(--text)",
+            animation: "guideCaret 1s step-end infinite" }} />
+        </div>
+        <div style={{ background: "var(--surface2)", border: "1px solid var(--border)",
+          borderRadius: 8, overflow: "hidden",
+          animation: "guideFadeIn 2.4s ease-out infinite" }}>
+          {[
+            { t: "Morning Run", cal: "Personal", n: 12, c: color },
+            { t: "Morning Run (long)", cal: "Personal", n: 3, c: color },
+          ].map((s, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px",
+              borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: s.c }} />
+              <div style={{ fontSize: "0.6875rem", fontWeight: 600, color: "var(--text)", flex: 1 }}>{s.t}</div>
+              <div style={{ fontSize: "0.5625rem", color: "var(--muted)" }}>{s.cal}</div>
+              <div style={{ fontSize: "0.5625rem", color: "var(--muted)" }}>×{s.n}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewOvernight() {
+  const color = "#6366f1";
+  return (
+    <PreviewFrame>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: "1.25rem", fontWeight: 800, color: "var(--text)", fontFamily: "var(--font-mono, monospace)" }}>22:00</div>
+          <div style={{ fontSize: "0.5625rem", color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.4px", marginTop: 2 }}>Start</div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+          <span style={{ fontSize: "0.625rem", color: "var(--muted)" }}>crosses midnight</span>
+          <span style={{ fontSize: "0.875rem", color: color }}>→</span>
+          <span style={{ fontSize: "0.6875rem", color: color, fontWeight: 700 }}>8h total</span>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: "1.25rem", fontWeight: 800, color: "var(--text)", fontFamily: "var(--font-mono, monospace)" }}>06:00</div>
+          <div style={{ fontSize: "0.5625rem", color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.4px", marginTop: 2 }}>End</div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+// Registry keyed by string so CONTENT rows stay declarative and easy to edit.
+const GUIDE_PREVIEWS = {
+  stripes:       PreviewStripes,
+  rings:         PreviewRings,
+  holidayH:      PreviewHolidayH,
+  conflict:      PreviewConflict,
+  ghost:         PreviewGhost,
+  doubleTap:     PreviewDoubleTap,
+  longPress:     PreviewLongPress,
+  countdown:     PreviewCountdown,
+  pinned:        PreviewPinned,
+  freeTime:      PreviewFreeTime,
+  autocomplete:  PreviewAutocomplete,
+  overnight:     PreviewOvernight,
+};
+
+// ── GUIDE SHEET ───────────────────────────────────────────
+// A deep, revisitable reference for every tab. The spotlight tour stays as a
+// 60-second first-launch welcome; this covers "what's on this page and why"
+// for people who skipped the tour or need a refresher. Content is structured
+// as feature rows grouped by tab so new features slot in with a single entry.
+// Rows can reference a preview by key to render an inline mini-illustration
+// so visual features actually show what they look like in place.
+function GuideSheet({ onClose, onStartTour }) {
+  const [section, setSection] = useState("home");
+  const SECTIONS = [
+    { id: "home",     label: "Home",     icon: Icon.home },
+    { id: "calendar", label: "Calendar", icon: Icon.calendar },
+    { id: "shifts",   label: "Shifts",   icon: Icon.repeat },
+    { id: "adding",   label: "Adding",   icon: Icon.plus },
+    { id: "settings", label: "Settings", icon: Icon.settings },
+    { id: "tips",     label: "Tips",     icon: Icon.help },
+  ];
+  const CONTENT = {
+    home: [
+      { title: "Today at a glance", body: "The top card shows what's happening now, what's up next, and any all-day items for today. It refreshes live." },
+      { title: "Shift status banner", body: "When you're on shift or about to start one, Daytu surfaces it here with the shift name and time window. Dismissible for the day." },
+      { title: "Major events countdown", body: "Upcoming big days — vacations, weddings, birthdays — stack here with a live countdown. Pin the most important to keep it on top.", preview: "countdown" },
+      { title: "Pinned events", body: "Events you've pinned sit at the top of each day so they don't get lost in a busy schedule.", preview: "pinned" },
+      { title: "Free-time finder", body: "Tap the search icon and ask in plain English — \"free this weekend,\" \"next 2 hours,\" \"free Friday afternoon.\" It finds real gaps around your events, shifts, and major events.", preview: "freeTime" },
+      { title: "Reorder cards", body: "Long-press any home card and drag it to rearrange — put what matters most to you first." },
+      { title: "Empty-state hints", body: "Before you've added a shift, major event, or pinned anything, a small prompt card offers to help you start. Each is dismissible independently." },
+      { title: "The ? icon", body: "Opens this Guide anytime. Always available on Home." },
+    ],
+    calendar: [
+      { title: "Three views", body: "Day, Week, and Month. Tap any cell to preview the day below without leaving the current view." },
+      { title: "Week has two layouts", body: "Columns — the whole week at a glance with an all-day strip across the top. Grid — precise time blocks for detailed planning. Switch with the toggle in the week header." },
+      { title: "Double-tap to add", body: "Double-tap any day cell to open the \"Add event / Add major event\" chooser, pre-filled with that date.", preview: "doubleTap" },
+      { title: "Long-press to tweak a shift day", body: "Long-press a cell to toggle a shift off for that day, override its hours just for that one date, or add an extra shift on a normally-off day.", preview: "longPress" },
+      { title: "Diagonal stripes = major events", body: "Cells covered by a major event show a colored diagonal stripe so trips and multi-day events are obvious at a glance.", preview: "stripes" },
+      { title: "Shift rings", body: "Concentric rings around a day number show which shifts apply, colored to match each shift pattern.", preview: "rings" },
+      { title: "Holiday 'H' badge", body: "Public holidays appear as a small H in the cell corner. Enable the countries you care about in Settings.", preview: "holidayH" },
+      { title: "Conflict dot", body: "Overlapping events get a red dot on the event pill so you catch double-bookings without doing the math.", preview: "conflict" },
+      { title: "Ghost preview", body: "While an event sheet is open, the target day pulses on the calendar so you know exactly where it'll land before you save.", preview: "ghost" },
+      { title: "Legend", body: "Below the month, a small legend lists the shifts and major events visible this month with their colors." },
+    ],
+    shifts: [
+      { title: "Three pattern types", body: "Rotation (cycles like 4-on-4-off from a start date), Weekly (the same weekdays every week), Monthly (specific calendar days like the 1st and 15th)." },
+      { title: "Templates", body: "Start from a preset — firefighter rotation, nursing three-on, 9-to-5, custody weekends — and tweak from there. Beats building every pattern from scratch." },
+      { title: "Per-day time override", body: "Need Monday's shift to end at 3 pm just this week? Long-press the day on the calendar, change the time — the rest of the pattern stays intact.", preview: "longPress" },
+      { title: "Skip or add a day", body: "The same long-press popup lets you cancel a shift day or add an extra one without changing the underlying pattern." },
+      { title: "Overnight shifts", body: "If the end time is at or before the start time, Daytu treats it as crossing midnight and counts hours correctly.", preview: "overnight" },
+      { title: "Shift color everywhere", body: "Your shift color appears as rings on the calendar, in the month legend, in the Home shift banner, and when free-time says you're busy.", preview: "rings" },
+      { title: "Free-time respects shifts", body: "\"When am I free?\" subtracts your working hours so you don't get false-positive openings during your pattern." },
+    ],
+    adding: [
+      { title: "+ floating button", body: "Bottom-right of the app. Opens a mini menu with Event and Major Event — the primary way to create anything." },
+      { title: "Double-tap a day", body: "Same chooser as the + button, but pre-filled with that specific date.", preview: "doubleTap" },
+      { title: "Title autocomplete", body: "Start typing a repeated event title and Daytu suggests it with the last-used calendar and color pre-filled. One tap fills everything.", preview: "autocomplete" },
+      { title: "Pin an event", body: "From the event detail sheet. Pinned events stick to the top of the day's list and surface on Home.", preview: "pinned" },
+      { title: "Recurrence", body: "None, daily, weekly, monthly, yearly — plus \"Specific days\" which lets you pick exact calendar dates per month for irregular schedules." },
+      { title: "Edit recurring events", body: "When saving, choose \"This date only\" (creates an exception) or \"All dates\" (modifies the whole series)." },
+      { title: "Major events", body: "Multi-day spans — vacations, weddings, trips — with a live countdown on Home. They sit above regular events and stripe the covered days.", preview: "countdown" },
+      { title: "Location + meeting link", body: "Events support a location that opens in your preferred maps app, and a URL for joining remote meetings." },
+      { title: "Notes + reminders", body: "Every event has free-form notes and a per-event reminder that overrides the default." },
+    ],
+    settings: [
+      { title: "Profile", body: "Your name and default color. The color is used wherever you haven't picked a specific one." },
+      { title: "Default calendar + reminder", body: "New events land on this calendar and use this reminder lead time unless you override per event." },
+      { title: "Calendars", body: "Create, rename, recolor, or hide calendars. Hiding keeps events stored but removes them from views — toggle back anytime." },
+      { title: "Theme", body: "Dark, Light, or Auto (follow system)." },
+      { title: "High contrast", body: "Boosts borders and text weight for readability." },
+      { title: "Text size", body: "Four steps; applies everywhere in the app." },
+      { title: "Layout mode", body: "Mobile (phone layout always), Compact (sidebar, no persistent calendar), Desktop (split layout with calendar panel), Auto (picks based on window width)." },
+      { title: "Clock format", body: "12-hour or 24-hour. Applies everywhere time is shown." },
+      { title: "Holidays", body: "Pick which countries' public holidays appear as H badges on the calendar.", preview: "holidayH" },
+      { title: "Map provider", body: "Event locations open in Apple Maps, Google Maps, or OpenStreetMap — your choice." },
+      { title: "Export", body: "Download a .ics file of everything. Import into Apple Calendar, Google Calendar, Outlook, or any other calendar app." },
+      { title: "In-app badges", body: "Toggle the small colored dots on nav icons (today has events, etc.)." },
+      { title: "Soft reset", body: "Clears events, shifts, and major events — keeps your profile, theme, and onboarding state." },
+      { title: "Full reset", body: "Deletes everything including onboarding. Starts the app completely fresh." },
+      { title: "Take a tour", body: "Replays the 60-second spotlight tour that highlights each tab's purpose." },
+    ],
+    tips: [
+      { title: "Data stays on your device", body: "Everything lives in browser storage. A full reset is the only way to lose it; export first if you want a backup." },
+      { title: "Install as an app", body: "On iPhone/iPad: Safari share sheet → Add to Home Screen. On Chrome desktop: install prompt in the address bar. Runs full-screen with no browser chrome." },
+      { title: "Long-press is your friend", body: "Long-press a calendar cell to adjust shifts for that date. Long-press a home card to reorder it. Long-press an event pill for quick actions.", preview: "longPress" },
+      { title: "Keyboard-friendly", body: "On iPad with a hardware keyboard, the title input auto-focuses when you open a sheet — start typing immediately." },
+      { title: "Conflicts are flagged", body: "Daytu marks overlapping events with a red dot on the event pill. Look for it when you're adding things in a busy week.", preview: "conflict" },
+      { title: "Hide calendars to focus", body: "In Settings → Calendars, toggle any calendar to Hidden. Its events stay stored but disappear from views until you re-enable." },
+      { title: "Color mattering", body: "Event color falls back to calendar color. Pick a per-event color only when it needs to stand out — otherwise the calendar grouping reads cleaner." },
+    ],
+  };
+  const items = CONTENT[section] || [];
+  return (
+    <div className="sheet-overlay" onClick={e => e.target===e.currentTarget && onClose()}>
+      <div className="sheet">
+        <div className="sheet-handle" />
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+          <div style={{ fontSize:"1.125rem", fontWeight:700 }}>Guide</div>
+          <button className="btn-icon" style={{ background:"var(--surface3)" }} onClick={onClose}>{Icon.close}</button>
+        </div>
+        <div style={{ fontSize:"0.8125rem", color:"var(--muted)", marginBottom:12, lineHeight:1.5 }}>
+          A reference for every tab — what's there and why you'd use it. Come back anytime.
+        </div>
+        <div style={{ display:"flex", gap:6, marginBottom:12, overflowX:"auto",
+          paddingBottom:4, marginLeft:-4, marginRight:-4, paddingLeft:4, paddingRight:4,
+          WebkitOverflowScrolling:"touch" }}>
+          {SECTIONS.map(s => (
+            <button key={s.id} onClick={() => setSection(s.id)}
+              style={{ display:"flex", alignItems:"center", gap:5, padding:"7px 11px", borderRadius:20,
+                border: "1.5px solid " + (section===s.id ? "var(--accent)" : "var(--border)"),
+                background: section===s.id ? "rgba(124,106,247,0.2)" : "var(--surface2)",
+                color: section===s.id ? "var(--accent2)" : "var(--muted)",
+                fontFamily:"var(--font)", fontSize:"0.75rem", fontWeight:600,
+                cursor:"pointer", flexShrink:0, whiteSpace:"nowrap" }}>
+              <span style={{ display:"flex", width:12, height:12 }}>{s.icon}</span>
+              {s.label}
+            </button>
+          ))}
+        </div>
+        <div>
+          {items.map((item, i) => {
+            const Preview = item.preview ? GUIDE_PREVIEWS[item.preview] : null;
+            return (
+              <div key={i} style={{ background:"var(--surface2)", border:"1px solid var(--border)",
+                borderRadius:10, padding:"12px 14px", marginBottom:8 }}>
+                <div style={{ fontSize:"0.875rem", fontWeight:600, color:"var(--text)", marginBottom:4 }}>{item.title}</div>
+                <div style={{ fontSize:"0.8125rem", color:"var(--muted)", lineHeight:1.5 }}>{item.body}</div>
+                {Preview && <Preview />}
+              </div>
+            );
+          })}
+        </div>
+        {onStartTour && (
+          <button onClick={() => { onClose(); onStartTour(); }}
+            style={{ width:"100%", marginTop:6, padding:"12px", borderRadius:10, border:"1px solid var(--border)",
+              background:"var(--surface2)", color:"var(--accent2)", fontFamily:"var(--font)", fontSize:"0.8125rem",
+              fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+            <span style={{ display:"flex", width:14, height:14 }}>{Icon.help}</span>
+            Take the quick tour instead
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function OnboardingFlow({ defaultName, defaultColor, customColors, textSize, setTextSize, onFinish }) {
   const [step, setStep] = useState(0);
   const [name, setName] = useState(defaultName || "");
@@ -8647,4 +9142,27 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 14px 0; 
   50% { opacity: 1; }
 }
 @keyframes fadeSlideUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+@keyframes guideDoubleTap {
+  0%, 100% { transform: translate(-50%, -50%) scale(0.3); opacity: 0; }
+  10%, 28% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  20% { transform: translate(-50%, -50%) scale(0.55); opacity: 0.4; }
+  38% { transform: translate(-50%, -50%) scale(1.6); opacity: 0; }
+}
+@keyframes guideLongPress {
+  0%, 70% { transform: translate(-50%, -50%) scale(0); opacity: 0.65; }
+  90% { transform: translate(-50%, -50%) scale(2.2); opacity: 0.5; }
+  100% { transform: translate(-50%, -50%) scale(3); opacity: 0; }
+}
+@keyframes guideSlideIn {
+  0%, 55% { opacity: 0; transform: translateY(10px); }
+  72%, 100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes guideFadeIn {
+  0%, 40% { opacity: 0; transform: translateY(-3px); }
+  55%, 100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes guideCaret {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
 `;
