@@ -9,4 +9,12 @@ if (!url || !anonKey) {
   );
 }
 
-export const supabase = createClient(url, anonKey);
+// Vite HMR re-evaluates this module on file changes in dev. Without a global
+// cache, each re-evaluation calls createClient() again, leaving two (or more)
+// GoTrueClient instances alive in the same tab — they fight over the same
+// localStorage auth lock and silently deadlock. Cache the instance on
+// globalThis so HMR reuses the original client and never instantiates a
+// second one. Has no effect in production builds (single evaluation).
+export const supabase =
+  globalThis.__daytuSupabase ??
+  (globalThis.__daytuSupabase = createClient(url, anonKey));

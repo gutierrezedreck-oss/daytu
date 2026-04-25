@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from "react";
+import { signOut } from "./lib/auth.js";
+import { supabase } from "./lib/supabase.js";
 
 // Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
 // SVG source still lives at src/assets/daytu-logo.svg (used for the favicon).
@@ -3987,6 +3989,15 @@ export default function App() {
               </div>
               <button onClick={() => setSheet("editProfile")} className="btn btn-secondary" style={{ fontSize:"0.75rem", padding:"6px 14px", flexShrink:0 }}>Edit</button>
             </div>
+
+            {/* Sign out */}
+            <button
+              onClick={() => signOut()}
+              className="btn btn-secondary"
+              style={{ width:"100%", marginBottom:16, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}
+            >
+              Sign out
+            </button>
 
             {/* Appearance */}
             <div className="section-label">Appearance</div>
@@ -9960,6 +9971,8 @@ function EditProfileSheet({ profile, onSave, onClose }) {
   const handleError = handle.length > 0 && handle.length < 3
     ? "Username must be at least 3 characters"
     : null;
+  const [saving, setSaving] = useState(false);
+  const [claimError, setClaimError] = useState(null);
   const [cropMode, setCropMode] = useState(false);
   const [rawImg, setRawImg] = useState(null);
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
@@ -10074,6 +10087,25 @@ function EditProfileSheet({ profile, onSave, onClose }) {
 
   const removePhoto = () => { setAvatar(null); setCropMode(false); setRawImg(null); };
 
+  // Save. If the handle changed, claim it atomically via Supabase first — if
+  // that fails (taken / invalid), surface the error inline without closing.
+  async function handleSave() {
+    if (handleError || saving) return;
+    setSaving(true);
+    setClaimError(null);
+    if (handle !== profile.handle) {
+      const { error } = await supabase.rpc("claim_handle", { p_handle: handle });
+      if (error) {
+        const msg = error.message || "";
+        setClaimError(/taken/i.test(msg) ? "That username is taken — try another." : (msg || "Could not save username."));
+        setSaving(false);
+        return;
+      }
+    }
+    onSave({ name, email: profile.email || "", handle, avatar });
+    setSaving(false);
+  }
+
   return (
     <div className="sheet-overlay" onClick={e => e.target===e.currentTarget&&onClose()}>
       <div className="sheet">
@@ -10143,11 +10175,16 @@ function EditProfileSheet({ profile, onSave, onClose }) {
               lineHeight:1.5, padding:"0 4px", marginBottom:16 }}>
               {handleError || "Pick one you like — if it's taken when sharing launches, we'll ask you to choose another. 3-20 chars, letters/numbers/underscores."}
             </div>
+            {claimError && (
+              <div style={{ fontSize:"0.75rem", color:"#f87171", lineHeight:1.4, marginBottom:10, padding:"0 4px" }}>
+                {claimError}
+              </div>
+            )}
             <button className="btn btn-primary"
-              disabled={!!handleError}
-              onClick={() => onSave({ name, email: profile.email || "", handle, avatar })}
-              style={{ opacity: handleError ? 0.5 : 1, cursor: handleError ? "not-allowed" : "pointer" }}>
-              Save
+              disabled={!!handleError || saving}
+              onClick={handleSave}
+              style={{ opacity: (handleError || saving) ? 0.5 : 1, cursor: (handleError || saving) ? "not-allowed" : "pointer" }}>
+              {saving ? "Saving…" : "Save"}
             </button>
           </>
         ) : (
