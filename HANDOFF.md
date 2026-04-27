@@ -40,7 +40,7 @@ Existing calendar app:
 
 Full detail in `NOTES.md`. Quick summary:
 
-1. **Duplicate `SIGNED_IN` events on subsequent loads** → watchdog hangs after 8s. Workaround: clear `localStorage` and sign in fresh. Likely StrictMode subscription leak in `AuthGate.jsx`.
+1. ~~**Duplicate `SIGNED_IN` events on subsequent loads** → watchdog hangs after 8s.~~ **Fixed.** Same-session-id dedup in `AuthGate.jsx`'s subscription handler ignores redundant `SIGNED_IN` / `INITIAL_SESSION` events for a user already loading or loaded. Resets on `SIGNED_OUT`.
 2. **Password reset returns 422** intermittently. Not yet reproducible on demand.
 3. **Multi-tab navigator-lock race** when an email link opens in a new tab while another is live. Two `GoTrueClient`s on the same origin deadlock on the auth refresh lock. Singleton fix doesn't cover cross-tab — different JS contexts, different `globalThis`.
 4. **`USER_UPDATED` after a failed update triggers `loadProfile`** because `AuthGate`'s catch-all branch lumps it with `SIGNED_IN` / `INITIAL_SESSION`. Combined with #1 this can loop.
@@ -93,8 +93,8 @@ The backend supports a lot more than the UI currently exposes. Frontend is wired
 
 ## Recommended order when picking this up
 
-1. **Fix duplicate `SIGNED_IN` (issue #1).** Most disruptive of the four; unblocks the others' diagnosis. Add a same-session-id dedupe in `AuthGate.jsx`'s subscription handler, OR rework the `useEffect` to be StrictMode-idempotent. ~1 hour.
-2. **Fix the `USER_UPDATED` loop (issue #4).** Split it out of the catch-all branch — at most update `session`, leave `profile` and `status` alone. ~30 min. Likely also stops issue #1's loop symptom.
+1. ~~**Fix duplicate `SIGNED_IN` (issue #1).**~~ **Done.** Same-session-id dedup landed in `AuthGate.jsx`.
+2. **Fix the `USER_UPDATED` loop (issue #4).** Split it out of the catch-all branch — at most update `session`, leave `profile` and `status` alone. ~30 min.
 3. **Capture the 422 from password reset (issue #2).** Add a one-time logger to print the response body next time it fires; once we see what's rejected, the fix is small.
 4. **Decide on issue #3 (multi-tab nav lock).** Either build a coordinator (BroadcastChannel-based leader election) or accept it and document "use password sign-in for cross-device" in the UI.
 5. **Sync localStorage `userProfile` from Supabase profile on sign-in.** Prevents the stale-handle display in Settings. Small — one effect in `App.jsx`, or pass profile from `AuthGate` as a prop.

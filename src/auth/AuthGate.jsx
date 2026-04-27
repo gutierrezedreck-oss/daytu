@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { getSession, subscribeToAuth } from '../lib/auth.js';
 import SignIn from './SignIn.jsx';
@@ -50,6 +50,13 @@ export default function AuthGate({ children }) {
   const [profile, setProfile] = useState(null);
   const [fetchError, setFetchError] = useState(null);
   const [recoveryMode, setRecoveryMode] = useState(INITIAL_RECOVERY_PATH);
+  // Dedup guard for SIGNED_IN / INITIAL_SESSION. StrictMode briefly runs two
+  // subscriptions during the dev double-mount, and supabase emits an INITIAL
+  // event per subscription plus SIGNED_IN as the stored session refreshes —
+  // so the same user can fire the catch-all branch twice and overlap two
+  // loadProfile calls. Tracking the user we've started/finished loading lets
+  // us ignore the redundant event without affecting the legitimate ones.
+  const loadStateRef = useRef({ userId: null, phase: 'idle' });
 
   const loadProfile = useCallback(async (currentSession) => {
     if (!currentSession) return;
@@ -89,6 +96,7 @@ export default function AuthGate({ children }) {
         return;
       }
       if (event === 'SIGNED_OUT' || !newSession) {
+        loadStateRef.current = { userId: null, phase: 'idle' };
         setSession(null);
         setProfile(null);
         setStatus('unauthed');
@@ -96,9 +104,25 @@ export default function AuthGate({ children }) {
         return;
       }
       // INITIAL_SESSION (with session), SIGNED_IN, USER_UPDATED
+      const userId = newSession.user.id;
+      const dedupable = event === 'SIGNED_IN' || event === 'INITIAL_SESSION';
+      if (
+        dedupable &&
+        loadStateRef.current.userId === userId &&
+        loadStateRef.current.phase !== 'idle'
+      ) {
+        console.log('[auth] dedup', event, 'for', userId);
+        setSession(newSession);
+        return;
+      }
+      loadStateRef.current = { userId, phase: 'loading' };
       setSession(newSession);
       setStatus('loading');
       await loadProfile(newSession);
+      // Mark loaded regardless of success/failure: Retry has its own path.
+      if (loadStateRef.current.userId === userId) {
+        loadStateRef.current.phase = 'loaded';
+      }
     });
     return unsub;
   }, [loadProfile]);
