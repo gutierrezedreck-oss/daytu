@@ -41,11 +41,14 @@ Existing calendar app:
 Full detail in `NOTES.md`. Quick summary:
 
 1. ~~**Duplicate `SIGNED_IN` events on subsequent loads** → watchdog hangs after 8s.~~ **Fixed.** Same-session-id dedup in `AuthGate.jsx`'s subscription handler ignores redundant `SIGNED_IN` / `INITIAL_SESSION` events for a user already loading or loaded. Resets on `SIGNED_OUT`.
-2. **Password reset returns 422** intermittently. Not yet reproducible on demand.
+2. ~~**Password reset returns 422.**~~ **Fixed.** Two underlying causes — both addressed:
+   - The recovery email used `{{ .ConfirmationURL }}` (PKCE flow), but the PKCE code-verifier in localStorage didn't survive between request and click (cross-device, cleared storage), so `detectSessionInUrl` silently failed to create a session. `updateUser` then ran with no session and returned 422 ("auth session missing"), surfaced as a misleading "expired link." Switched the **Reset Password** email template to `{{ .SiteURL }}/reset-password?token_hash={{ .TokenHash }}&type=recovery` and added an explicit `verifyOtp({ token_hash, type: 'recovery' })` in `AuthGate.jsx` at module scope (StrictMode-safe — see comment block).
+   - After `updatePassword` succeeded, `USER_UPDATED` fired and the listener's catch-all branch raced `ResetPassword.onDone` for the post-update transition; the listener's `loadProfile` hung on the same nav-lock contention. Collapsed `USER_UPDATED` into its own no-op branch (just `setSession`) — see fix to issue #4 below.
 3. **Multi-tab navigator-lock race** when an email link opens in a new tab while another is live. Two `GoTrueClient`s on the same origin deadlock on the auth refresh lock. Singleton fix doesn't cover cross-tab — different JS contexts, different `globalThis`.
-4. **`USER_UPDATED` after a failed update triggers `loadProfile`** because `AuthGate`'s catch-all branch lumps it with `SIGNED_IN` / `INITIAL_SESSION`. Combined with #1 this can loop.
+4. ~~**`USER_UPDATED` after a successful update triggers `loadProfile`**~~ **Fixed.** `USER_UPDATED` now has its own branch in the auth event handler — updates `session` and returns. The `profiles` row we render from doesn't reflect any `auth.users` columns, so refetching on `USER_UPDATED` was always wasted work. Bonus: removes the race with the recovery-flow `onDone`.
+5. **Watchdog warning fires once at page load** when the user lands via the recovery link. Likely the `recoveryVerifyInFlightRef` hold-off keeps `status='loading'` long enough that the 8s watchdog briefly arms before `PASSWORD_RECOVERY` fires. Cosmetic — flow completes correctly. Investigate next session.
 
-All four have workarounds. Calendar app + new auth core are usable today; the bugs surface in specific edge sequences.
+Issues #3 and #5 remain open. Calendar app + auth core are fully usable.
 
 ---
 
@@ -94,14 +97,15 @@ The backend supports a lot more than the UI currently exposes. Frontend is wired
 ## Recommended order when picking this up
 
 1. ~~**Fix duplicate `SIGNED_IN` (issue #1).**~~ **Done.** Same-session-id dedup landed in `AuthGate.jsx`.
-2. **Fix the `USER_UPDATED` loop (issue #4).** Split it out of the catch-all branch — at most update `session`, leave `profile` and `status` alone. ~30 min.
-3. **Capture the 422 from password reset (issue #2).** Add a one-time logger to print the response body next time it fires; once we see what's rejected, the fix is small.
-4. **Decide on issue #3 (multi-tab nav lock).** Either build a coordinator (BroadcastChannel-based leader election) or accept it and document "use password sign-in for cross-device" in the UI.
-5. **Sync localStorage `userProfile` from Supabase profile on sign-in.** Prevents the stale-handle display in Settings. Small — one effect in `App.jsx`, or pass profile from `AuthGate` as a prop.
-6. **Begin the data layer migration.** Start with events (largest, most-used). Pattern: replace `events` array reads with `supabase.rpc('events_for_viewer')`, replace writes with `supabase.from('events').insert/update`. Keep localStorage as a write-through cache during the transition if you want, or cut over fully.
-7. **Wire avatar uploads.** Easy win once data layer is started — migrate the Edit Profile cropper to upload to Storage instead of stuffing a data URI into localStorage.
-8. **Flip social feature flags one at a time and wire each.** Suggested order: Groups (simplest, owner-managed) → Friends (slightly more complex, two-sided handshake) → Sharing pickers (depends on both) → Shared-by pills (depends on data being in Supabase).
-9. **Account deletion handler.** Pre-flight transfer/delete of owned groups before `auth.admin.deleteUser()`. Reminder is in `~/.claude` memory.
+2. ~~**Fix the `USER_UPDATED` loop (issue #4).**~~ **Done.** Split into its own no-op branch in `AuthGate.jsx` — updates `session` only.
+3. ~~**Capture the 422 from password reset (issue #2).**~~ **Done.** Root cause was PKCE auto-detect on a token-hash flow + the `USER_UPDATED` race; switched the email template to `{{ .TokenHash }}`, added explicit `verifyOtp` at module scope, and split `USER_UPDATED`. End-to-end reset works.
+4. **Investigate the page-load watchdog warning (issue #5).** Single `[auth] watchdog fired` at the moment of recovery-link landing. Cosmetic, doesn't block the flow. Likely fix: skip the watchdog while `recoveryVerifyInFlightRef.current` is true, or shorten the hold-off window.
+5. **Decide on issue #3 (multi-tab nav lock).** Either build a coordinator (BroadcastChannel-based leader election) or accept it and document "use password sign-in for cross-device" in the UI.
+6. **Sync localStorage `userProfile` from Supabase profile on sign-in.** Prevents the stale-handle display in Settings. Small — one effect in `App.jsx`, or pass profile from `AuthGate` as a prop.
+7. **Begin the data layer migration.** Start with events (largest, most-used). Pattern: replace `events` array reads with `supabase.rpc('events_for_viewer')`, replace writes with `supabase.from('events').insert/update`. Keep localStorage as a write-through cache during the transition if you want, or cut over fully.
+8. **Wire avatar uploads.** Easy win once data layer is started — migrate the Edit Profile cropper to upload to Storage instead of stuffing a data URI into localStorage.
+9. **Flip social feature flags one at a time and wire each.** Suggested order: Groups (simplest, owner-managed) → Friends (slightly more complex, two-sided handshake) → Sharing pickers (depends on both) → Shared-by pills (depends on data being in Supabase).
+10. **Account deletion handler.** Pre-flight transfer/delete of owned groups before `auth.admin.deleteUser()`. Reminder is in `~/.claude` memory.
 
 ---
 

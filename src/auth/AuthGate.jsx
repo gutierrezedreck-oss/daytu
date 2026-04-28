@@ -13,6 +13,29 @@ const INITIAL_URL_ERROR = parseUrlError();
 const INITIAL_RECOVERY_PATH =
   typeof window !== 'undefined' &&
   window.location.pathname === '/reset-password';
+// Email template links are now {{ .SiteURL }}/reset-password?token_hash=...&type=recovery.
+// PKCE auto-detect does not consume token_hash URLs, so we capture the value
+// at module load and exchange it via verifyOtp in a mount effect below.
+const INITIAL_RECOVERY_TOKEN = (() => {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  return params.get('type') === 'recovery' ? params.get('token_hash') : null;
+})();
+// Fire verifyOtp exactly once, at module load. React 19 StrictMode dev runs
+// effects with a mount → unmount → remount cycle; if we kicked the call off
+// inside the effect, the first run would consume the token and the second
+// would hit Supabase with a burned token and get otp_expired. Module scope
+// is outside the component instance, so both StrictMode mounts await the
+// same promise instead of issuing two network calls.
+const RECOVERY_VERIFY_PROMISE = INITIAL_RECOVERY_TOKEN
+  ? supabase.auth
+      .verifyOtp({ token_hash: INITIAL_RECOVERY_TOKEN, type: 'recovery' })
+      .then((result) => {
+        // Strip params after the single verify so a refresh can't replay it.
+        window.history.replaceState(null, '', '/reset-password');
+        return result;
+      })
+  : null;
 
 function parseUrlError() {
   if (typeof window === 'undefined') return null;
@@ -49,7 +72,13 @@ export default function AuthGate({ children }) {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [fetchError, setFetchError] = useState(null);
-  const [recoveryMode, setRecoveryMode] = useState(INITIAL_RECOVERY_PATH);
+  const [recoveryMode, setRecoveryMode] = useState(
+    INITIAL_RECOVERY_PATH || !!INITIAL_RECOVERY_TOKEN,
+  );
+  // True while verifyOtp(recovery) is in flight. Lets the auth listener
+  // ignore the INITIAL_SESSION-with-null event that fires before verifyOtp
+  // resolves, so we don't flash the SignIn screen in the middle of recovery.
+  const recoveryVerifyInFlightRef = useRef(!!INITIAL_RECOVERY_TOKEN);
   // Dedup guard for SIGNED_IN / INITIAL_SESSION. StrictMode briefly runs two
   // subscriptions during the dev double-mount, and supabase emits an INITIAL
   // event per subscription plus SIGNED_IN as the stored session refreshes —
@@ -95,7 +124,25 @@ export default function AuthGate({ children }) {
         setRecoveryMode(true);
         return;
       }
+      if (event === 'USER_UPDATED') {
+        // Auth user changed (password reset, email change). The `profiles`
+        // row we render from doesn't reflect any auth.users fields, so no
+        // refetch is needed. Skipping the catch-all also avoids racing the
+        // reset-password onDone path — that callback is the authoritative
+        // driver for the post-reset transition (clears recoveryMode, fixes
+        // URL, runs loadProfile). A second loadProfile here would either
+        // duplicate work or hang on the same nav-lock contention we've
+        // hit before.
+        setSession(newSession);
+        return;
+      }
       if (event === 'SIGNED_OUT' || !newSession) {
+        // verifyOtp(recovery) hasn't resolved yet — INITIAL_SESSION fires
+        // first with null. Hold in 'loading' instead of flipping to unauthed.
+        if (recoveryVerifyInFlightRef.current && event === 'INITIAL_SESSION') {
+          setSession(null);
+          return;
+        }
         loadStateRef.current = { userId: null, phase: 'idle' };
         setSession(null);
         setProfile(null);
@@ -103,7 +150,7 @@ export default function AuthGate({ children }) {
         setRecoveryMode(false);
         return;
       }
-      // INITIAL_SESSION (with session), SIGNED_IN, USER_UPDATED
+      // INITIAL_SESSION (with session) or SIGNED_IN
       const userId = newSession.user.id;
       const dedupable = event === 'SIGNED_IN' || event === 'INITIAL_SESSION';
       if (
@@ -127,6 +174,41 @@ export default function AuthGate({ children }) {
     return unsub;
   }, [loadProfile]);
 
+  // Recovery-token consumer. The reset-password email link is now
+  // /reset-password?token_hash=...&type=recovery (token-hash OTP flow, not
+  // PKCE), so detectSessionInUrl does not auto-create a session. The actual
+  // verifyOtp call lives at module scope (RECOVERY_VERIFY_PROMISE) to survive
+  // StrictMode double-mount; here we just attach a handler to react to its
+  // result. On success, PASSWORD_RECOVERY fires through subscribeToAuth and
+  // the form renders. On failure, surface a real error instead of letting
+  // the doomed updateUser call below produce a misleading "expired" message.
+  useEffect(() => {
+    if (!RECOVERY_VERIFY_PROMISE) return;
+    let cancelled = false;
+    RECOVERY_VERIFY_PROMISE.then(({ error }) => {
+      recoveryVerifyInFlightRef.current = false;
+      if (cancelled) return;
+      if (error) {
+        console.error('[auth-debug] verifyOtp(recovery) failed', {
+          status: error.status,
+          code: error.code,
+          name: error.name,
+          message: error.message,
+          cause: error.cause,
+          error,
+        });
+        setFetchError(
+          'This reset link has expired or already been used. Request a new one from the sign-in screen.',
+        );
+        setStatus('error');
+        setRecoveryMode(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Watchdog: if we sit in 'loading' for 8s, flip to error so the user
   // can recover. Covers any case where INITIAL_SESSION never fires or a
   // profile fetch stalls (stale token, cross-tab lock, network hang).
@@ -149,12 +231,16 @@ export default function AuthGate({ children }) {
     return (
       <ResetPassword
         onDone={async () => {
+          console.log('[auth-debug] onDone: start, pathname=', window.location.pathname);
           if (window.location.pathname === '/reset-password') {
             window.history.replaceState(null, '', '/');
+            console.log('[auth-debug] onDone: url replaced to /');
           }
           setRecoveryMode(false);
           setStatus('loading');
+          console.log('[auth-debug] onDone: state setters fired (recoveryMode=false, status=loading); hasSession=', !!session);
           await loadProfile(session);
+          console.log('[auth-debug] onDone: loadProfile resolved');
         }}
       />
     );
