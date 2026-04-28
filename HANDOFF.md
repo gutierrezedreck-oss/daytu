@@ -47,8 +47,11 @@ Full detail in `NOTES.md`. Quick summary:
 3. **Multi-tab navigator-lock race** when an email link opens in a new tab while another is live. Two `GoTrueClient`s on the same origin deadlock on the auth refresh lock. Singleton fix doesn't cover cross-tab — different JS contexts, different `globalThis`.
 4. ~~**`USER_UPDATED` after a successful update triggers `loadProfile`**~~ **Fixed.** `USER_UPDATED` now has its own branch in the auth event handler — updates `session` and returns. The `profiles` row we render from doesn't reflect any `auth.users` columns, so refetching on `USER_UPDATED` was always wasted work. Bonus: removes the race with the recovery-flow `onDone`.
 5. **Watchdog warning fires once at page load** when the user lands via the recovery link. Likely the `recoveryVerifyInFlightRef` hold-off keeps `status='loading'` long enough that the 8s watchdog briefly arms before `PASSWORD_RECOVERY` fires. Cosmetic — flow completes correctly. Investigate next session.
+6. ~~**Stale `/reset-password` URL leaves AuthGate in a half-recovery state on reload.**~~ **Fixed.** Module-load guard in `AuthGate.jsx` redirects `/reset-password` → `/` whenever the URL is missing the `token_hash` + `type=recovery` pair. Trade-off: refreshing while on the post-verify password form also bumps to `/`; user is signed in at that point and can change password via Settings. Documented in code comment.
+7. **`loadProfile` hangs on reload while signed in.** Observed during step-1 testing: on a regular page reload while a session is already active, `loadProfile` sometimes never resolves — watchdog catches it after 8s. Reproducer not yet pinned down. Possibly related to the same nav-lock contention pattern as #3, or a race with the new Supabase events sync that lands during the same auth-resolve window. Investigate next session.
+8. **Cmd+Shift+R wipes localStorage.** The hard-reload-bypass-cache key combo seems to clear (or otherwise hide) localStorage between loads. Browsers normally don't clear localStorage on hard reload, so this is suspicious — could be a Vite dev-server artifact, a service-worker side-effect, or a browser quirk. Effectively a "soft data loss" surface for unmigrated users. Investigate next session; until understood, avoid Cmd+Shift+R when testing the events migration.
 
-Issues #3 and #5 remain open. Calendar app + auth core are fully usable.
+Issues #3, #5, #7, and #8 remain open. Calendar app + auth core are fully usable.
 
 ---
 

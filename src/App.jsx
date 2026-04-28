@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
+import { loadEventsFromSupabase } from "./lib/events.js";
 
 // Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
 // SVG source still lives at src/assets/daytu-logo.svg (used for the favicon).
@@ -678,12 +679,19 @@ function computeHolidays(year) {
   ].map(h => ({ ...h, year }));
 }
 
-export default function App() {
+export default function App({ userId }) {
   const [tab, setTab] = useState("home");
   // Load persisted data once — fallback to seed data
   const _ls = React.useMemo(() => lsLoad(), []);
   // Close fab menu on tab switch — handled inline in nav buttons
-  const [events, setEvents] = useState(() => _ls?.events ? reviveEvents(_ls.events) : seed.events);
+  // Initial state comes from localStorage so unmigrated users see a populated
+  // calendar before the Supabase load resolves. seed.events is no longer used
+  // as a fallback — <AuthGate> is mandatory, so a freshly authed user with
+  // empty localStorage should start with an empty calendar.
+  const [events, setEvents] = useState(() => _ls?.events ? reviveEvents(_ls.events) : []);
+  // Inline indicator state for the Supabase events sync.
+  const [eventsSyncing, setEventsSyncing] = useState(false);
+  const [eventsSyncError, setEventsSyncError] = useState(null);
   const [calendars, setCalendars] = useState(() => _ls?.calendars ?? seed.calendars);
   const [groups, setGroups] = useState(() => _ls?.groups ?? seed.groups);
   const [groupMembers, setGroupMembers] = useState(() => _ls?.groupMembers ?? seed.groupMembers);
@@ -925,7 +933,7 @@ export default function App() {
   ], []);
   const [holidayCountries, setHolidayCountries] = useState(() => new Set(_ls?.holidayCountries ?? ["US","GLOBAL"]));
   const [findTimeGroup, setFindTimeGroup] = useState(null); // groupId or null
-  const [pinnedEvents, setPinnedEvents] = useState(() => new Set(_ls?.pinnedEvents ?? seed.events.filter(e=>e.pinned).map(e=>e.id)));
+  const [pinnedEvents, setPinnedEvents] = useState(() => new Set(_ls?.pinnedEvents ?? []));
   // Dismissal keys are `<baseEventId>:<YYYY-MM-DD>` so recurring occurrences dismiss individually.
   const [dismissedImportantEvents, setDismissedImportantEvents] = useState(() => new Set(_ls?.dismissedImportantEvents ?? []));
   const [importantExpanded, setImportantExpanded] = useState(false);
@@ -1094,6 +1102,44 @@ export default function App() {
     setConfirmFullReset(false);
     setFullResetInput("");
   };
+
+  // Load events from Supabase once a userId is available. Step 1 of the
+  // localStorage → Supabase migration: read-swap with a localStorage fallback.
+  //   - If the migrated flag is set, Supabase is authoritative.
+  //   - If remote has rows even without the flag (another device migrated
+  //     this account), also adopt remote.
+  //   - Otherwise leave the localStorage initial state in place so step 2
+  //     has data to migrate.
+  const syncEventsFromSupabase = useCallback(async () => {
+    if (!userId) {
+      console.warn("[events] no userId; skipping Supabase sync");
+      return;
+    }
+    setEventsSyncing(true);
+    setEventsSyncError(null);
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      setEventsSyncError("Sync timed out — showing local data.");
+      setEventsSyncing(false);
+    }, 10000);
+    const { events: remoteEvents, error } = await loadEventsFromSupabase();
+    if (timedOut) return;
+    clearTimeout(timeoutId);
+    if (error) {
+      console.warn("[events] load failed", error);
+      setEventsSyncError("Couldn't sync — showing local data.");
+      setEventsSyncing(false);
+      return;
+    }
+    const migratedFlag = _ls?.events_migrated_to_supabase;
+    if (migratedFlag || remoteEvents.length > 0) {
+      setEvents(remoteEvents);
+    }
+    setEventsSyncing(false);
+  }, [userId]);
+
+  React.useEffect(() => { syncEventsFromSupabase(); }, [syncEventsFromSupabase]);
 
   // Persist all data to localStorage on any relevant change
   React.useEffect(() => {
@@ -2038,6 +2084,41 @@ export default function App() {
               {toast.tone === "err" ? Icon.close : Icon.check}
             </span>
             {toast.msg}
+          </div>
+        )}
+
+        {/* Events sync status. Subtle while syncing, slightly louder on error
+            with a Retry. App-shell level so it renders on every tab. */}
+        {(eventsSyncing || eventsSyncError) && (
+          <div style={{
+            padding: "6px 16px",
+            fontSize: 12,
+            textAlign: "center",
+            background: eventsSyncError ? "#fef3c7" : "var(--surface2)",
+            color: eventsSyncError ? "#92400e" : "var(--muted)",
+            borderBottom: "1px solid rgba(0,0,0,0.06)",
+          }}>
+            {eventsSyncError ? (
+              <>
+                {eventsSyncError}{" "}
+                <button
+                  onClick={syncEventsFromSupabase}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "#92400e",
+                    textDecoration: "underline",
+                    cursor: "pointer",
+                    fontSize: 12,
+                    padding: 0,
+                  }}
+                >
+                  Retry
+                </button>
+              </>
+            ) : (
+              "Syncing your events…"
+            )}
           </div>
         )}
 

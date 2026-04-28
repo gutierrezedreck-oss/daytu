@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { cloneElement, useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { getSession, subscribeToAuth } from '../lib/auth.js';
 import SignIn from './SignIn.jsx';
@@ -7,6 +7,27 @@ import ResetPassword from './ResetPassword.jsx';
 
 // Parsed once at module load so a StrictMode double-mount can't lose the error.
 const INITIAL_URL_ERROR = parseUrlError();
+
+// Stale-URL guard: a leftover /reset-password from a prior flow with no
+// recovery token in the URL can't be a real reset (verifyOtp won't run,
+// PASSWORD_RECOVERY won't fire). Redirect to / before deriving any recovery
+// state so AuthGate doesn't render the reset form for an unauthenticated
+// stale URL.
+//
+// Trade-off: a manual refresh while sitting on the post-verify password form
+// also lands here (the URL is /reset-password with no params by then) and
+// redirects to /. The user is signed in at that point, so they end up at the
+// app and can change their password from Settings if needed. We accept this
+// rather than introduce sessionStorage state to distinguish stale-URL from
+// mid-flow-refresh.
+if (typeof window !== 'undefined' &&
+    window.location.pathname === '/reset-password') {
+  const p = new URLSearchParams(window.location.search);
+  if (!(p.get('token_hash') && p.get('type') === 'recovery')) {
+    window.history.replaceState(null, '', '/');
+  }
+}
+
 // Captured at module load: if a refresh happens on /reset-password,
 // PASSWORD_RECOVERY won't re-fire (it's a one-shot event on link click), so
 // the URL path is the durable signal that the user is in a reset flow.
@@ -280,7 +301,10 @@ export default function AuthGate({ children }) {
       />
     );
   }
-  return children;
+  // cloneElement so <App /> in main.jsx stays declarative — we inject userId
+  // here rather than forcing the consumer to use a render prop or context.
+  // Assumes a single React element child (the App tree); not multi-child safe.
+  return cloneElement(children, { userId: session.user.id });
 }
 
 const splashStyle = {
