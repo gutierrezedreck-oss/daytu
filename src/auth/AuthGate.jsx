@@ -79,12 +79,27 @@ function parseUrlError() {
   return "That sign-in link didn't work. Request a new one below.";
 }
 
-async function fetchProfile(userId) {
-  return supabase
+async function fetchProfile(userId, signal) {
+  const reqId = Math.random().toString(36).slice(2, 8);
+  console.log(`[auth-debug] fetchProfile[${reqId}] entry`, {
+    userId,
+    hasSignal: !!signal,
+  });
+  let query = supabase
     .from('profiles')
     .select('id, handle, name, avatar_url, handle_is_placeholder')
     .eq('id', userId)
     .maybeSingle();
+  if (signal) query = query.abortSignal(signal);
+  console.log(`[auth-debug] fetchProfile[${reqId}] query built, awaiting`);
+  const result = await query;
+  console.log(`[auth-debug] fetchProfile[${reqId}] await resolved`, {
+    hasData: !!result?.data,
+    hasError: !!result?.error,
+    errorCode: result?.error?.code,
+    errorMessage: result?.error?.message,
+  });
+  return result;
 }
 
 export default function AuthGate({ children }) {
@@ -107,18 +122,79 @@ export default function AuthGate({ children }) {
   // loadProfile calls. Tracking the user we've started/finished loading lets
   // us ignore the redundant event without affecting the legitimate ones.
   const loadStateRef = useRef({ userId: null, phase: 'idle' });
+  // AbortController for the in-flight fetchProfile call. The watchdog effect
+  // calls .abort() on this when it fires, so a wedged request actually
+  // surfaces an AbortError instead of leaving the await dangling forever.
+  const inflightAbortControllerRef = useRef(null);
 
   const loadProfile = useCallback(async (currentSession) => {
     if (!currentSession) return;
     setFetchError(null);
-    console.log('[auth] loadProfile start', currentSession.user.id);
-    let { data, error } = await fetchProfile(currentSession.user.id);
-    // Insert trigger should have created the row already; retry once in case
-    // of a rare ordering hiccup.
-    if (!error && !data) {
-      await new Promise((r) => setTimeout(r, 800));
-      ({ data, error } = await fetchProfile(currentSession.user.id));
+    const userId = currentSession.user.id;
+    console.log('[auth] loadProfile start', userId);
+
+    // Wire up an AbortController for this attempt. The watchdog calls abort()
+    // if we sit in 'loading' for 8s, surfacing an error instead of leaving
+    // the await dangling forever. Replaces any previous controller — the
+    // SIGNED_IN/INITIAL_SESSION dedup ensures only one loadProfile is in
+    // flight at a time, but we abort any leftover defensively.
+    inflightAbortControllerRef.current?.abort();
+    const ac = new AbortController();
+    inflightAbortControllerRef.current = ac;
+
+    let data = null;
+    let error = null;
+
+    try {
+      // Lock-state checkpoint #2: immediately before the first fetchProfile.
+      // If a GoTrue auth lock is being acquired/contended for this query,
+      // it should be visible here.
+      if (typeof navigator !== 'undefined' && navigator.locks?.query) {
+        try {
+          const locks = await navigator.locks.query();
+          console.log(
+            '[auth-debug] navigator.locks before fetchProfile',
+            JSON.stringify(locks, null, 2),
+          );
+        } catch (lockErr) {
+          console.warn('[auth-debug] navigator.locks.query failed', lockErr);
+        }
+      }
+      ({ data, error } = await fetchProfile(userId, ac.signal));
+      console.log('[auth-debug] loadProfile fetch1 destructured', {
+        hasData: !!data,
+        hasError: !!error,
+      });
+      // Insert trigger should have created the row already; retry once in
+      // case of a rare ordering hiccup.
+      if (!error && !data) {
+        console.log('[auth-debug] loadProfile entering 800ms retry wait');
+        await new Promise((r) => setTimeout(r, 800));
+        ({ data, error } = await fetchProfile(userId, ac.signal));
+        console.log('[auth-debug] loadProfile fetch2 destructured', {
+          hasData: !!data,
+          hasError: !!error,
+        });
+      }
+    } catch (err) {
+      console.error('[auth-debug] loadProfile threw', {
+        name: err?.name,
+        message: err?.message,
+        err,
+      });
+      if (err?.name === 'AbortError') {
+        // Watchdog aborted us; it has already flipped status to 'error'.
+        return;
+      }
+      setFetchError(err?.message || 'Profile fetch failed.');
+      setStatus('error');
+      return;
+    } finally {
+      if (inflightAbortControllerRef.current === ac) {
+        inflightAbortControllerRef.current = null;
+      }
     }
+
     if (error || !data) {
       console.warn('[auth] loadProfile error', error?.message);
       setFetchError(error?.message || 'Profile not found after sign-in.');
@@ -235,8 +311,27 @@ export default function AuthGate({ children }) {
   // profile fetch stalls (stale token, cross-tab lock, network hang).
   useEffect(() => {
     if (status !== 'loading') return;
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       console.warn('[auth] watchdog fired — stuck in loading for 8s');
+      // Lock-state checkpoint #3: at watchdog fire. If a GoTrue auth lock is
+      // still held here while loadProfile's fetch is wedged, the holder's
+      // clientId tells us whether it's an orphan from a prior page lifecycle
+      // or the legitimate current client unable to release.
+      if (typeof navigator !== 'undefined' && navigator.locks?.query) {
+        try {
+          const locks = await navigator.locks.query();
+          console.log(
+            '[auth-debug] navigator.locks at watchdog fire',
+            JSON.stringify(locks, null, 2),
+          );
+        } catch (err) {
+          console.warn('[auth-debug] navigator.locks.query failed', err);
+        }
+      }
+      if (inflightAbortControllerRef.current) {
+        console.warn('[auth-debug] watchdog aborting in-flight loadProfile');
+        inflightAbortControllerRef.current.abort('watchdog timeout');
+      }
       setFetchError('Sign-in is taking longer than expected. Tap Retry to try again.');
       setStatus('error');
     }, 8000);
