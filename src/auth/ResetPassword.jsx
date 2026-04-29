@@ -111,22 +111,17 @@ export default function ResetPassword({ onDone }) {
   async function handleSubmit(e) {
     e.preventDefault();
     if (submitDisabled) return;
-    console.log('[auth-debug] reset: handleSubmit start');
     setSubmitting(true);
     setError(null);
     try {
       const { error: err } = await updatePassword(password);
-      console.log('[auth-debug] reset: updatePassword resolved', { hasError: !!err });
       if (err) {
         setError(friendlyError(err.message));
         setSubmitting(false);
         return;
       }
-      console.log('[auth-debug] reset: success — calling onDone');
       onDone?.();
-      console.log('[auth-debug] reset: onDone invocation returned (sync portion)');
     } catch (err) {
-      console.error('[auth-debug] reset: handleSubmit threw', err);
       setError(friendlyError(err?.message));
       setSubmitting(false);
     }

@@ -44,26 +44,3 @@ export const supabase =
     // refresh races become possible (already documented as HANDOFF #3).
     auth: { lock: processLock },
   }));
-
-console.log('[supabase-debug] module evaluated', {
-  reusedCached: _hadCachedClient,
-  totalCreates: globalThis.__daytuSupabaseCreateCount ?? 0,
-});
-
-// Lock-state checkpoint #1: immediately after createClient. If a stale GoTrue
-// auth lock survived a previous tab/page-lifecycle, it should already be
-// visible here. async IIFE because module top-level await isn't universally
-// supported.
-if (!_hadCachedClient && typeof navigator !== 'undefined' && navigator.locks?.query) {
-  (async () => {
-    try {
-      const locks = await navigator.locks.query();
-      console.log(
-        '[supabase-debug] navigator.locks at client creation',
-        JSON.stringify(locks, null, 2),
-      );
-    } catch (err) {
-      console.warn('[supabase-debug] navigator.locks.query failed', err);
-    }
-  })();
-}

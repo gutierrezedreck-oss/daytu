@@ -80,26 +80,13 @@ function parseUrlError() {
 }
 
 async function fetchProfile(userId, signal) {
-  const reqId = Math.random().toString(36).slice(2, 8);
-  console.log(`[auth-debug] fetchProfile[${reqId}] entry`, {
-    userId,
-    hasSignal: !!signal,
-  });
   let query = supabase
     .from('profiles')
     .select('id, handle, name, avatar_url, handle_is_placeholder')
     .eq('id', userId)
     .maybeSingle();
   if (signal) query = query.abortSignal(signal);
-  console.log(`[auth-debug] fetchProfile[${reqId}] query built, awaiting`);
-  const result = await query;
-  console.log(`[auth-debug] fetchProfile[${reqId}] await resolved`, {
-    hasData: !!result?.data,
-    hasError: !!result?.error,
-    errorCode: result?.error?.code,
-    errorMessage: result?.error?.message,
-  });
-  return result;
+  return await query;
 }
 
 export default function AuthGate({ children }) {
@@ -146,42 +133,14 @@ export default function AuthGate({ children }) {
     let error = null;
 
     try {
-      // Lock-state checkpoint #2: immediately before the first fetchProfile.
-      // If a GoTrue auth lock is being acquired/contended for this query,
-      // it should be visible here.
-      if (typeof navigator !== 'undefined' && navigator.locks?.query) {
-        try {
-          const locks = await navigator.locks.query();
-          console.log(
-            '[auth-debug] navigator.locks before fetchProfile',
-            JSON.stringify(locks, null, 2),
-          );
-        } catch (lockErr) {
-          console.warn('[auth-debug] navigator.locks.query failed', lockErr);
-        }
-      }
       ({ data, error } = await fetchProfile(userId, ac.signal));
-      console.log('[auth-debug] loadProfile fetch1 destructured', {
-        hasData: !!data,
-        hasError: !!error,
-      });
       // Insert trigger should have created the row already; retry once in
       // case of a rare ordering hiccup.
       if (!error && !data) {
-        console.log('[auth-debug] loadProfile entering 800ms retry wait');
         await new Promise((r) => setTimeout(r, 800));
         ({ data, error } = await fetchProfile(userId, ac.signal));
-        console.log('[auth-debug] loadProfile fetch2 destructured', {
-          hasData: !!data,
-          hasError: !!error,
-        });
       }
     } catch (err) {
-      console.error('[auth-debug] loadProfile threw', {
-        name: err?.name,
-        message: err?.message,
-        err,
-      });
       if (err?.name === 'AbortError') {
         // Watchdog aborted us; it has already flipped status to 'error'.
         return;
@@ -286,14 +245,6 @@ export default function AuthGate({ children }) {
       recoveryVerifyInFlightRef.current = false;
       if (cancelled) return;
       if (error) {
-        console.error('[auth-debug] verifyOtp(recovery) failed', {
-          status: error.status,
-          code: error.code,
-          name: error.name,
-          message: error.message,
-          cause: error.cause,
-          error,
-        });
         setFetchError(
           'This reset link has expired or already been used. Request a new one from the sign-in screen.',
         );
@@ -311,27 +262,11 @@ export default function AuthGate({ children }) {
   // profile fetch stalls (stale token, cross-tab lock, network hang).
   useEffect(() => {
     if (status !== 'loading') return;
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => {
       console.warn('[auth] watchdog fired — stuck in loading for 8s');
-      // Lock-state checkpoint #3: at watchdog fire. If a GoTrue auth lock is
-      // still held here while loadProfile's fetch is wedged, the holder's
-      // clientId tells us whether it's an orphan from a prior page lifecycle
-      // or the legitimate current client unable to release.
-      if (typeof navigator !== 'undefined' && navigator.locks?.query) {
-        try {
-          const locks = await navigator.locks.query();
-          console.log(
-            '[auth-debug] navigator.locks at watchdog fire',
-            JSON.stringify(locks, null, 2),
-          );
-        } catch (err) {
-          console.warn('[auth-debug] navigator.locks.query failed', err);
-        }
-      }
-      if (inflightAbortControllerRef.current) {
-        console.warn('[auth-debug] watchdog aborting in-flight loadProfile');
-        inflightAbortControllerRef.current.abort('watchdog timeout');
-      }
+      // Cancel any in-flight loadProfile so its await rejects with AbortError
+      // instead of dangling.
+      inflightAbortControllerRef.current?.abort('watchdog timeout');
       setFetchError('Sign-in is taking longer than expected. Tap Retry to try again.');
       setStatus('error');
     }, 8000);
@@ -347,16 +282,12 @@ export default function AuthGate({ children }) {
     return (
       <ResetPassword
         onDone={async () => {
-          console.log('[auth-debug] onDone: start, pathname=', window.location.pathname);
           if (window.location.pathname === '/reset-password') {
             window.history.replaceState(null, '', '/');
-            console.log('[auth-debug] onDone: url replaced to /');
           }
           setRecoveryMode(false);
           setStatus('loading');
-          console.log('[auth-debug] onDone: state setters fired (recoveryMode=false, status=loading); hasSession=', !!session);
           await loadProfile(session);
-          console.log('[auth-debug] onDone: loadProfile resolved');
         }}
       />
     );
