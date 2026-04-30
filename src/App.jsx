@@ -1170,13 +1170,7 @@ export default function App({ userId }) {
   const migrateEventsIfNeeded = useCallback(async () => {
     if (!userId) return;
     const liveLs = lsLoad() || {};
-    console.log('[migrate] start', {
-      hasUserId: !!userId,
-      flagBefore: liveLs.events_migrated_to_supabase,
-      hasRemap: !!liveLs.events_pending_migration_remap,
-    });
     if (liveLs.events_migrated_to_supabase) {
-      console.log('[migrate] already-migrated branch, calling sync');
       // Already migrated; just run the regular sync and return.
       await syncEventsFromSupabase();
       return;
@@ -1185,17 +1179,12 @@ export default function App({ userId }) {
     // Run the initial sync first — its return value tells us the remote/flag
     // state and seeds React state with whatever Step 1 decides to adopt.
     const syncResult = await syncEventsFromSupabase();
-    console.log('[migrate] syncResult', syncResult);
-    if (!syncResult) {
-      console.log('[migrate] bailing, sync returned falsy');
-      return; // sync errored or timed out; banner shows error
-    }
+    if (!syncResult) return; // sync errored or timed out; banner shows error
 
     // Defensive: if remote already has rows (migrated on another device, or
     // a partial run from a previous session caught up on its own), set the
     // flag and skip — re-uploading would create duplicates with fresh UUIDs.
     if (syncResult.remoteEventsCount > 0) {
-      console.log('[migrate] remote-has-rows branch, setting flag');
       const cur = lsLoad() || {};
       lsSave({ ...cur,
                events_migrated_to_supabase: true,
@@ -1204,9 +1193,7 @@ export default function App({ userId }) {
     }
 
     const localEvents = liveLs.events ? reviveEvents(liveLs.events) : [];
-    console.log('[migrate] localEvents.length', localEvents.length);
     if (localEvents.length === 0) {
-      console.log('[migrate] empty-local branch, setting flag');
       const cur = lsLoad() || {};
       lsSave({ ...cur, events_migrated_to_supabase: true });
       return;
@@ -1230,7 +1217,6 @@ export default function App({ userId }) {
     setEventsSyncing(true);
     setEventsSyncError(null);
 
-    console.log('[migrate] proceeding to upsert', { stampedCount: stamped.length });
     const { error } = await migrateLocalEventsToSupabase(stamped, userId);
     if (error) {
       console.warn("[events] migration failed", error);
@@ -1239,7 +1225,6 @@ export default function App({ userId }) {
       setEventsMigrationPhase(false);
       return; // do NOT set flag; remap stays persisted for next attempt
     }
-    console.log('[migrate] upsert ok, writing flag');
 
     // Snapshot the React-state-truth for both ID-keyed sets, remap once,
     // and use the same arrays for both setState (value form) and lsSave.
