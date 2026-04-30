@@ -1,7 +1,7 @@
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useRef } from "react";
 import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
-import { loadEventsFromSupabase } from "./lib/events.js";
+import { loadEventsFromSupabase, migrateLocalEventsToSupabase } from "./lib/events.js";
 
 // Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
 // SVG source still lives at src/assets/daytu-logo.svg (used for the favicon).
@@ -692,6 +692,9 @@ export default function App({ userId }) {
   // Inline indicator state for the Supabase events sync.
   const [eventsSyncing, setEventsSyncing] = useState(false);
   const [eventsSyncError, setEventsSyncError] = useState(null);
+  // Distinguishes the one-time migration phase from regular sync, so the
+  // banner can show "Setting up your events…" vs "Syncing your events…".
+  const [eventsMigrationPhase, setEventsMigrationPhase] = useState(false);
   const [calendars, setCalendars] = useState(() => _ls?.calendars ?? seed.calendars);
   const [groups, setGroups] = useState(() => _ls?.groups ?? seed.groups);
   const [groupMembers, setGroupMembers] = useState(() => _ls?.groupMembers ?? seed.groupMembers);
@@ -1132,20 +1135,156 @@ export default function App({ userId }) {
       setEventsSyncing(false);
       return;
     }
-    const migratedFlag = _ls?.events_migrated_to_supabase;
+    // Read flag fresh — _ls is captured at mount and may be stale after
+    // a same-session migration completes.
+    const liveLs = lsLoad();
+    const migratedFlag = liveLs?.events_migrated_to_supabase;
     if (migratedFlag || remoteEvents.length > 0) {
       setEvents(remoteEvents);
     }
     setEventsSyncing(false);
+    return { remoteEventsCount: remoteEvents.length, migratedFlag: !!migratedFlag };
   }, [userId]);
 
-  React.useEffect(() => { syncEventsFromSupabase(); }, [syncEventsFromSupabase]);
+  // Refs mirror pinnedEvents/dismissedImportantEvents so the migration
+  // callback can capture a fresh snapshot at the moment of remap without
+  // polluting useCallback deps with the underlying state. Updating these
+  // synchronously on every state change keeps them current at the granularity
+  // of a render commit.
+  const pinnedEventsRef = useRef(pinnedEvents);
+  const dismissedImportantEventsRef = useRef(dismissedImportantEvents);
+  React.useEffect(() => { pinnedEventsRef.current = pinnedEvents; }, [pinnedEvents]);
+  React.useEffect(() => { dismissedImportantEventsRef.current = dismissedImportantEvents; }, [dismissedImportantEvents]);
+
+  // One-time migration: push localStorage events up to Supabase the first
+  // time a signed-in user loads the app post-Step-1. Runs the initial sync
+  // first to learn whether remote already has rows for this user (cross-
+  // device case → skip migration, set the flag).
+  //
+  // Crash safety: pre-stamp UUIDs and persist the remap to localStorage
+  // BEFORE the upsert. If the page crashes mid-upsert, the next mount
+  // reuses the same UUIDs — the upsert (onConflict: 'id') becomes a true
+  // no-op rather than producing duplicate rows.
+  //
+  // Multi-tab race during migration is documented as accepted in HANDOFF #3.
+  const migrateEventsIfNeeded = useCallback(async () => {
+    if (!userId) return;
+    const liveLs = lsLoad() || {};
+    console.log('[migrate] start', {
+      hasUserId: !!userId,
+      flagBefore: liveLs.events_migrated_to_supabase,
+      hasRemap: !!liveLs.events_pending_migration_remap,
+    });
+    if (liveLs.events_migrated_to_supabase) {
+      console.log('[migrate] already-migrated branch, calling sync');
+      // Already migrated; just run the regular sync and return.
+      await syncEventsFromSupabase();
+      return;
+    }
+
+    // Run the initial sync first — its return value tells us the remote/flag
+    // state and seeds React state with whatever Step 1 decides to adopt.
+    const syncResult = await syncEventsFromSupabase();
+    console.log('[migrate] syncResult', syncResult);
+    if (!syncResult) {
+      console.log('[migrate] bailing, sync returned falsy');
+      return; // sync errored or timed out; banner shows error
+    }
+
+    // Defensive: if remote already has rows (migrated on another device, or
+    // a partial run from a previous session caught up on its own), set the
+    // flag and skip — re-uploading would create duplicates with fresh UUIDs.
+    if (syncResult.remoteEventsCount > 0) {
+      console.log('[migrate] remote-has-rows branch, setting flag');
+      const cur = lsLoad() || {};
+      lsSave({ ...cur,
+               events_migrated_to_supabase: true,
+               events_pending_migration_remap: undefined });
+      return;
+    }
+
+    const localEvents = liveLs.events ? reviveEvents(liveLs.events) : [];
+    console.log('[migrate] localEvents.length', localEvents.length);
+    if (localEvents.length === 0) {
+      console.log('[migrate] empty-local branch, setting flag');
+      const cur = lsLoad() || {};
+      lsSave({ ...cur, events_migrated_to_supabase: true });
+      return;
+    }
+
+    // Pre-stamp UUIDs (reusing any persisted remap from a prior crashed run)
+    // and write the remap before the upsert.
+    const persistedRemap = liveLs.events_pending_migration_remap || {};
+    const localRemap = {};
+    const stamped = localEvents.map((ev) => {
+      const newId = persistedRemap[ev.id] || crypto.randomUUID();
+      localRemap[ev.id] = newId;
+      return { ...ev, id: newId };
+    });
+    {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur, events_pending_migration_remap: localRemap });
+    }
+
+    setEventsMigrationPhase(true);
+    setEventsSyncing(true);
+    setEventsSyncError(null);
+
+    console.log('[migrate] proceeding to upsert', { stampedCount: stamped.length });
+    const { error } = await migrateLocalEventsToSupabase(stamped, userId);
+    if (error) {
+      console.warn("[events] migration failed", error);
+      setEventsSyncError("Couldn't set up your events. Tap Retry.");
+      setEventsSyncing(false);
+      setEventsMigrationPhase(false);
+      return; // do NOT set flag; remap stays persisted for next attempt
+    }
+    console.log('[migrate] upsert ok, writing flag');
+
+    // Snapshot the React-state-truth for both ID-keyed sets, remap once,
+    // and use the same arrays for both setState (value form) and lsSave.
+    // Refs are kept in sync via the effects above, so .current is fresh.
+    const remappedPinned = new Set(
+      [...pinnedEventsRef.current].map((id) => localRemap[id] ?? id)
+    );
+    const remappedDismissed = new Set(
+      [...dismissedImportantEventsRef.current].map((id) => localRemap[id] ?? id)
+    );
+
+    setPinnedEvents(remappedPinned);
+    setDismissedImportantEvents(remappedDismissed);
+
+    // Synchronous flag write + remap clear + remapped sets persisted, all in
+    // one shot. Closes the 300ms persist-effect debounce window. The persist
+    // effect will re-write 300ms later with identical data — harmless no-op.
+    {
+      const cur = lsLoad() || {};
+      lsSave({
+        ...cur,
+        pinnedEvents: [...remappedPinned],
+        dismissedImportantEvents: [...remappedDismissed],
+        events_migrated_to_supabase: true,
+        events_pending_migration_remap: undefined,
+      });
+    }
+
+    setEventsMigrationPhase(false);
+    // Re-sync to pull the just-uploaded rows back as UUID-id'd events.
+    await syncEventsFromSupabase();
+  }, [userId, syncEventsFromSupabase]);
+
+  React.useEffect(() => { migrateEventsIfNeeded(); }, [migrateEventsIfNeeded]);
 
   // Persist all data to localStorage on any relevant change
   React.useEffect(() => {
     // Debounced save — avoids sync localStorage writes on every keystroke
     const saveHandle = setTimeout(() => {
+      // Spread the live localStorage blob first so fields that are NOT in
+      // React state (e.g. events_migrated_to_supabase,
+      // events_pending_migration_remap) survive this reconstruction. Without
+      // this spread, every persist tick wipes any localStorage-only key.
       lsSave({
+        ...(lsLoad() || {}),
         events,
         calendars,
         groups,
@@ -2102,7 +2241,7 @@ export default function App({ userId }) {
               <>
                 {eventsSyncError}{" "}
                 <button
-                  onClick={syncEventsFromSupabase}
+                  onClick={migrateEventsIfNeeded}
                   style={{
                     background: "transparent",
                     border: "none",
@@ -2117,7 +2256,7 @@ export default function App({ userId }) {
                 </button>
               </>
             ) : (
-              "Syncing your events…"
+              eventsMigrationPhase ? "Setting up your events…" : "Syncing your events…"
             )}
           </div>
         )}

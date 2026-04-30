@@ -124,9 +124,14 @@ export async function deleteEventRow(eventId) {
 // migrated flag; we want the next load to retry.
 export async function migrateLocalEventsToSupabase(localEvents, ownerId) {
   if (!localEvents?.length) return { remap: {}, error: null };
+  const isUuid = (s) =>
+    typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
   const remap = {};
   const rows = localEvents.map((ev) => {
-    const newId = crypto.randomUUID();
+    // Caller may pre-stamp UUIDs (e.g. crash-recovery from a persisted remap)
+    // so we honor an existing UUID id instead of generating a new one.
+    const newId = isUuid(ev.id) ? ev.id : crypto.randomUUID();
     remap[ev.id] = newId;
     return eventToRow({ ...ev, id: newId }, ownerId);
   });
