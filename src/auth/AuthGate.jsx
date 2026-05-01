@@ -328,9 +328,10 @@ export default function AuthGate({ children }) {
     );
   }
   // cloneElement so <App /> in main.jsx stays declarative — we inject userId
-  // here rather than forcing the consumer to use a render prop or context.
-  // Assumes a single React element child (the App tree); not multi-child safe.
-  return cloneElement(children, { userId: session.user.id });
+  // and the loaded profile row here rather than forcing the consumer to use a
+  // render prop or context. Assumes a single React element child (the App
+  // tree); not multi-child safe.
+  return cloneElement(children, { userId: session.user.id, profile });
 }
 
 const splashStyle = {

@@ -679,7 +679,7 @@ function computeHolidays(year) {
   ].map(h => ({ ...h, year }));
 }
 
-export default function App({ userId }) {
+export default function App({ userId, profile }) {
   const [tab, setTab] = useState("home");
   // Load persisted data once — fallback to seed data
   const _ls = React.useMemo(() => lsLoad(), []);
@@ -1286,6 +1286,20 @@ export default function App({ userId }) {
   }, [userId, syncEventsFromSupabase]);
 
   React.useEffect(() => { migrateEventsIfNeeded(); }, [migrateEventsIfNeeded]);
+
+  // Hydrate server-authoritative profile fields into local userProfile.
+  // handle is the source-of-truth post-Welcome (claim_handle RPC); name is
+  // kept in sync from the server too, though Edit Profile doesn't yet push
+  // local name changes back — see HANDOFF bug #9.
+  React.useEffect(() => {
+    if (!profile) return;
+    setUserProfile(prev => {
+      const next = { ...prev };
+      if (profile.handle != null && profile.handle !== prev.handle) next.handle = profile.handle;
+      if (profile.name != null && profile.name !== prev.name) next.name = profile.name;
+      return next;
+    });
+  }, [profile?.handle, profile?.name]);
 
   // Persist all data to localStorage on any relevant change
   React.useEffect(() => {
