@@ -1,10 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-// processLock is not re-exported from supabase-js; we pull it from the
-// auth-js transitive dep directly. Bundled in lockstep with supabase-js
-// (both at 2.104.1 today). If a future supabase-js bump moves auth-js
-// out of the hoist or changes its export surface, this import is the
-// thing that'll break first.
-import { processLock } from '@supabase/auth-js';
+import { broadcastChannelLock } from './broadcastChannelLock.js';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -35,12 +30,13 @@ export const supabase =
   globalThis.__daytuSupabase ??
   (globalThis.__daytuSupabase = createClient(url, anonKey, {
     // GoTrueClient's default lock (navigatorLock, Web Locks API) self-wedges
-    // on hard reload while signed in: it acquires the lock for session
-    // recovery and never releases — every subsequent request hangs inside
-    // the locked critical section despite a 200 at the network layer
-    // (HANDOFF #7, diagnosed 2026-04-29). Override to processLock (in-memory
-    // promise chain) — no cross-page-lifecycle state, so a hard reload starts
-    // clean. Trade-off: doesn't serialize across tabs; multi-tab token-
-    // refresh races become possible (already documented as HANDOFF #3).
-    auth: { lock: processLock },
+    // on hard reload while signed in (HANDOFF #7). We previously substituted
+    // processLock (in-memory, per-JS-context) which fixed that but lost
+    // cross-tab serialization (HANDOFF #3). broadcastChannelLock is a custom
+    // implementation: in-tab FIFO chain (processLock-style) plus cross-tab
+    // coordination via BroadcastChannel with leader-election (probe → claim
+    // → run, tie-break by (claimedAt, tabId) for simultaneous claims,
+    // heartbeat + stale-out for crashed holders). Falls back to processLock
+    // when BroadcastChannel is unavailable. See src/lib/broadcastChannelLock.js.
+    auth: { lock: broadcastChannelLock },
   }));
