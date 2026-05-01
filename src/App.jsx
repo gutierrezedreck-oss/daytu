@@ -4869,6 +4869,7 @@ export default function App({ userId, profile }) {
         {sheet === "editCalendar" && <CalendarSheet existing={activeCalendar} allCalendars={calendars} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={activeCalendar ? updateCalendar : addCalendar} onDelete={activeCalendar && calendars.length > 1 ? deleteCalendar : null} onClose={closeSheet} />}
         {sheet === "editProfile" && (
           <EditProfileSheet
+            userId={userId}
             profile={userProfile}
             onSave={p => { setUserProfile(prev => ({...prev, ...p})); closeSheet(); }}
             onClose={closeSheet}
@@ -10257,7 +10258,7 @@ function CalendarSheet({ existing, allCalendars=[], allEvents=[], customColors, 
 }
 
 // ── EDIT PROFILE SHEET ───────────────────────────────────
-function EditProfileSheet({ profile, onSave, onClose }) {
+function EditProfileSheet({ userId, profile, onSave, onClose }) {
   const [name, setName] = useState(profile.name || "");
   const [handle, setHandle] = useState(profile.handle || "");
   const [avatar, setAvatar] = useState(profile.avatar || null);
@@ -10390,8 +10391,10 @@ function EditProfileSheet({ profile, onSave, onClose }) {
 
   const removePhoto = () => { setAvatar(null); setCropMode(false); setRawImg(null); };
 
-  // Save. If the handle changed, claim it atomically via Supabase first — if
-  // that fails (taken / invalid), surface the error inline without closing.
+  // Save. Handle changes go through claim_handle (atomic uniqueness check);
+  // name changes are a direct profiles.update under RLS. Both surface
+  // failures inline without closing the sheet. Order: handle first — its
+  // failure modes are most likely (taken / format) and most visible.
   async function handleSave() {
     if (handleError || saving) return;
     setSaving(true);
@@ -10401,6 +10404,15 @@ function EditProfileSheet({ profile, onSave, onClose }) {
       if (error) {
         const msg = error.message || "";
         setClaimError(/taken/i.test(msg) ? "That username is taken — try another." : (msg || "Could not save username."));
+        setSaving(false);
+        return;
+      }
+    }
+    if (name !== profile.name) {
+      const { error } = await supabase.from("profiles").update({ name }).eq("id", userId);
+      if (error) {
+        console.warn("[profile] name update failed", error);
+        setClaimError("Couldn't save name — try again.");
         setSaving(false);
         return;
       }
