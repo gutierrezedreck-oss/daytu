@@ -262,6 +262,12 @@ export default function AuthGate({ children }) {
   // profile fetch stalls (stale token, cross-tab lock, network hang).
   useEffect(() => {
     if (status !== 'loading') return;
+    // Recovery has its own resolution path (verifyOtp + the recovery-token
+    // consumer effect, which surfaces an explicit "expired link" error on
+    // failure). The generic watchdog isn't needed here and was causing a
+    // brief ErrorScreen flash before recoveryMode && session could render
+    // the reset form on slow networks. See HANDOFF bug #5.
+    if (recoveryMode) return;
     const timer = setTimeout(() => {
       console.warn('[auth] watchdog fired — stuck in loading for 8s');
       // Cancel any in-flight loadProfile so its await rejects with AbortError
@@ -271,7 +277,7 @@ export default function AuthGate({ children }) {
       setStatus('error');
     }, 8000);
     return () => clearTimeout(timer);
-  }, [status]);
+  }, [status, recoveryMode]);
 
   // Recovery takes precedence over every other render branch as long as the
   // user has a session — PASSWORD_RECOVERY sessions look like normal sessions
