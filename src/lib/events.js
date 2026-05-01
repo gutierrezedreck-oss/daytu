@@ -115,6 +115,10 @@ export async function deleteEventRow(eventId) {
   return supabase.from('events').delete().eq('id', eventId);
 }
 
+export async function deleteAllEventsForOwner(ownerId) {
+  return supabase.from('events').delete().eq('owner_id', ownerId);
+}
+
 // One-time migration helper. Generates a UUID for each local event, builds a
 // remap (oldStringId → uuid), and batch-upserts. Upsert with onConflict on id
 // means a partial failure can be retried safely — already-inserted rows

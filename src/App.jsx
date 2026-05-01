@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useRef } from "react";
 import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
-import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow } from "./lib/events.js";
+import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner } from "./lib/events.js";
 
 // Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
 // SVG source still lives at src/assets/daytu-logo.svg (used for the favicon).
@@ -1038,11 +1038,25 @@ export default function App({ userId }) {
   const addCalendar    = (cal) => { setCalendars(prev => [...prev, { ...cal, id: "c" + uid() }]); closeSheet(); showToast("Calendar created"); };
   const updateCalendar = (cal) => { setCalendars(prev => prev.map(c => c.id === cal.id ? cal : c)); closeSheet(); showToast("Calendar updated"); };
   const deleteCalendar = (id) => {
-    // Move events to first remaining calendar
+    if (!userId) return;
     const fallback = calendars.find(c => c.id !== id)?.id;
+    const priorEvents = eventsRef.current;
+    const priorCalendars = calendars;
+    const affected = fallback ? priorEvents.filter(e => e.calendarId === id) : [];
     if (fallback) setEvents(prev => prev.map(e => e.calendarId === id ? { ...e, calendarId: fallback } : e));
     setCalendars(prev => prev.filter(c => c.id !== id));
     closeSheet();
+    if (affected.length === 0) return;
+    Promise.all(
+      affected.map(ev => updateEventRow(ev.id, { ...ev, calendarId: fallback }, userId))
+    ).then(results => {
+      const failed = results.find(r => r.error);
+      if (!failed) return;
+      console.warn("[calendars] event re-assign failed", failed.error);
+      setEvents(priorEvents);
+      setCalendars(priorCalendars);
+      showToast("Couldn't move events — restored", "err");
+    });
   };
   const [activeCalendar, setActiveCalendar] = useState(null);
   const [homeOrderExpanded, setHomeOrderExpanded] = useState(false);
@@ -1050,8 +1064,16 @@ export default function App({ userId }) {
   const [confirmFullReset, setConfirmFullReset] = useState(false);
   const [fullResetInput, setFullResetInput] = useState("");
 
-  // Soft reset: clears user-generated data, keeps name/color/theme and onboarding
-  const doSoftReset = () => {
+  // Soft reset: clears user-generated data, keeps name/color/theme and onboarding.
+  // Server-side event delete runs first; on error, abort without touching local state.
+  const doSoftReset = async () => {
+    if (!userId) return;
+    const { error } = await deleteAllEventsForOwner(userId);
+    if (error) {
+      console.warn("[events] soft reset failed", error);
+      showToast("Couldn't reset — try again", "err");
+      return;
+    }
     setEvents([]);
     setMajorEvents([]);
     setShifts([]);
@@ -1072,8 +1094,16 @@ export default function App({ userId }) {
     setTab("home");
   };
 
-  // Full reset: nukes everything including onboarding — user starts completely fresh
-  const doFullReset = () => {
+  // Full reset: nukes everything including onboarding — user starts completely fresh.
+  // Server-side event delete runs first; on error, abort without touching local state.
+  const doFullReset = async () => {
+    if (!userId) return;
+    const { error } = await deleteAllEventsForOwner(userId);
+    if (error) {
+      console.warn("[events] full reset failed", error);
+      showToast("Couldn't reset — try again", "err");
+      return;
+    }
     // Clear localStorage — if the browser blocks it, we silently continue with in-memory reset
     try { localStorage.removeItem(LS_KEY); } catch {}
     // Reset all persisted state directly so we don't depend on a page reload
@@ -1106,13 +1136,8 @@ export default function App({ userId }) {
     setFullResetInput("");
   };
 
-  // Load events from Supabase once a userId is available. Step 1 of the
-  // localStorage → Supabase migration: read-swap with a localStorage fallback.
-  //   - If the migrated flag is set, Supabase is authoritative.
-  //   - If remote has rows even without the flag (another device migrated
-  //     this account), also adopt remote.
-  //   - Otherwise leave the localStorage initial state in place so step 2
-  //     has data to migrate.
+  // Load events from Supabase. Supabase is authoritative — remote always wins.
+  // The migratedFlag return value is consumed by migrateEventsIfNeeded below.
   const syncEventsFromSupabase = useCallback(async () => {
     if (!userId) {
       console.warn("[events] no userId; skipping Supabase sync");
@@ -1139,9 +1164,7 @@ export default function App({ userId }) {
     // a same-session migration completes.
     const liveLs = lsLoad();
     const migratedFlag = liveLs?.events_migrated_to_supabase;
-    if (migratedFlag || remoteEvents.length > 0) {
-      setEvents(remoteEvents);
-    }
+    setEvents(remoteEvents);
     setEventsSyncing(false);
     return { remoteEventsCount: remoteEvents.length, migratedFlag: !!migratedFlag };
   }, [userId]);
@@ -1274,7 +1297,6 @@ export default function App({ userId }) {
       // this spread, every persist tick wipes any localStorage-only key.
       lsSave({
         ...(lsLoad() || {}),
-        events,
         calendars,
         groups,
         groupMembers,
@@ -1300,7 +1322,7 @@ export default function App({ userId }) {
       });
     }, 300);
     return () => clearTimeout(saveHandle);
-  }, [events, calendars, groups, groupMembers, shifts, majorEvents, friends,
+  }, [calendars, groups, groupMembers, shifts, majorEvents, friends,
       activityFeed, feedSeenAt, onboardingActive, onboardingCompletedAt,
       customColorRecents, customColorFavorites,
       pinnedEvents, dismissedImportantEvents, hiddenCalendars, hiddenGroups, holidayCountries,
@@ -2236,7 +2258,6 @@ export default function App({ userId }) {
                 return [{ ...first, color }, ...prev.slice(1)];
               });
               // Clear ALL seed data — blank slate for real first-time users
-              setEvents([]);
               setMajorEvents([]);
               setShifts([]);
               setGroups([]);
