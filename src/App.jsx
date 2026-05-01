@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useRef } from "react";
 import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
-import { loadEventsFromSupabase, migrateLocalEventsToSupabase } from "./lib/events.js";
+import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow } from "./lib/events.js";
 
 // Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
 // SVG source still lives at src/assets/daytu-logo.svg (used for the favicon).
@@ -1146,13 +1146,17 @@ export default function App({ userId }) {
     return { remoteEventsCount: remoteEvents.length, migratedFlag: !!migratedFlag };
   }, [userId]);
 
-  // Refs mirror pinnedEvents/dismissedImportantEvents so the migration
-  // callback can capture a fresh snapshot at the moment of remap without
-  // polluting useCallback deps with the underlying state. Updating these
-  // synchronously on every state change keeps them current at the granularity
-  // of a render commit.
+  // Refs mirror these states at render-commit granularity. Two consumers:
+  //   - The migration callback captures a fresh snapshot for remap without
+  //     polluting useCallback deps with the underlying state.
+  //   - Optimistic mutation paths read the latest committed state to
+  //     snapshot `prior` for revert, without relying on React 18's
+  //     eager-state evaluation (which only kicks in when the fiber's
+  //     update queue is empty).
+  const eventsRef = useRef(events);
   const pinnedEventsRef = useRef(pinnedEvents);
   const dismissedImportantEventsRef = useRef(dismissedImportantEvents);
+  React.useEffect(() => { eventsRef.current = events; }, [events]);
   React.useEffect(() => { pinnedEventsRef.current = pinnedEvents; }, [pinnedEvents]);
   React.useEffect(() => { dismissedImportantEventsRef.current = dismissedImportantEvents; }, [dismissedImportantEvents]);
 
@@ -1313,15 +1317,26 @@ export default function App({ userId }) {
   };
 
   const addEvent = (ev) => {
-    const newId = "e" + uid();
-    setEvents(prev => [...prev, { ...ev, id: newId }]);
+    if (!userId) return;
+    const newId = crypto.randomUUID();
+    const newEv = { ...ev, id: newId };
+    setEvents(prev => [...prev, newEv]);
     if (ev.important) setPinnedEvents(prev => { const n = new Set(prev); n.add(newId); return n; });
     (ev.groupIds||[]).forEach(gid => addActivity(gid, "added", ev.title, ev.start));
     closeSheet();
     showToast("Event created");
+    insertEvent(newEv, userId).then(({ error }) => {
+      if (!error) return;
+      console.warn("[events] insert failed", error);
+      setEvents(prev => prev.filter(e => e.id !== newId));
+      if (ev.important) setPinnedEvents(prev => { const n = new Set(prev); n.delete(newId); return n; });
+      showToast("Couldn't save event — reverted", "err");
+    });
   };
   const deleteEvent = (id, opts = {}) => {
+    if (!userId) return;
     const base = baseEventId(id);
+    const prior = eventsRef.current.find(e => e.id === base);
     // Scope: "instance" deletes a single occurrence via override; "series" (default) deletes the whole event.
     if (opts.scope === "instance" && opts.dateKey) {
       setEvents(prev => prev.map(e => {
@@ -1330,27 +1345,55 @@ export default function App({ userId }) {
       }));
       closeSheet();
       showToast("Occurrence removed", "err");
+      // Instance-skip is encoded in client_extras.overrides — persist as an UPDATE, not a DELETE.
+      if (prior) {
+        const nextParent = { ...prior, overrides: { ...(prior.overrides||{}), [opts.dateKey]: { skip: true } } };
+        updateEventRow(base, nextParent, userId).then(({ error }) => {
+          if (!error) return;
+          console.warn("[events] instance-delete failed", error);
+          setEvents(prev => prev.map(e => e.id === base ? prior : e));
+          showToast("Couldn't remove — restored", "err");
+        });
+      }
       return;
     }
-    setEvents(prev => {
-      const ev = prev.find(e => e.id === base);
-      if (ev) (ev.groupIds||[]).forEach(gid => addActivity(gid, "deleted", ev.title, ev.start));
-      return prev.filter(e => e.id !== base);
-    });
+    // Snapshot full prior array so revert restores position. Clobbers any
+    // concurrent in-flight optimistic state on revert — preferred over silently reordering.
+    const priorEvents = eventsRef.current;
+    setEvents(prev => prev.filter(e => e.id !== base));
+    if (prior) (prior.groupIds||[]).forEach(gid => addActivity(gid, "deleted", prior.title, prior.start));
     closeSheet();
     showToast("Event deleted", "err");
+    if (prior) {
+      deleteEventRow(base).then(({ error }) => {
+        if (!error) return;
+        console.warn("[events] delete failed", error);
+        setEvents(priorEvents);
+        showToast("Couldn't delete — restored", "err");
+      });
+    }
   };
   const duplicateEvent = (ev) => {
-    const newEv = { ...ev, id: "e" + uid(), title: ev.title + " (copy)" };
+    if (!userId) return;
+    const newId = crypto.randomUUID();
+    const newEv = { ...ev, id: newId, title: ev.title + " (copy)" };
     setEvents(prev => [...prev, newEv]);
     closeSheet();
     showToast("Event duplicated");
+    insertEvent(newEv, userId).then(({ error }) => {
+      if (!error) return;
+      console.warn("[events] duplicate failed", error);
+      setEvents(prev => prev.filter(e => e.id !== newId));
+      showToast("Couldn't duplicate — reverted", "err");
+    });
   };
   const updateEvent = (ev, opts = {}) => {
+    if (!userId) return;
     const base = baseEventId(ev.id);
+    const prior = eventsRef.current.find(e => e.id === base);
     // Sync pin state when the important flag flips. ON → auto-pin; OFF after
     // being ON → auto-unpin. Manual pins on non-important events are preserved.
-    const wasImportant = !!events.find(e => e.id === base)?.important;
+    const wasImportant = !!prior?.important;
     const nowImportant = !!ev.important;
     if (wasImportant !== nowImportant) {
       setPinnedEvents(prev => {
@@ -1370,27 +1413,47 @@ export default function App({ userId }) {
       }));
       closeSheet();
       showToast("Occurrence updated");
+      if (prior) {
+        const nextParent = { ...prior, overrides: { ...(prior.overrides||{}), [opts.dateKey]: override } };
+        updateEventRow(base, nextParent, userId).then(({ error }) => {
+          if (!error) return;
+          console.warn("[events] instance-update failed", error);
+          setEvents(prev => prev.map(e => e.id === base ? prior : e));
+          if (wasImportant !== nowImportant) {
+            setPinnedEvents(prev => { const n = new Set(prev); if (wasImportant) n.add(base); else n.delete(base); return n; });
+          }
+          showToast("Couldn't save — reverted", "err");
+        });
+      }
       return;
     }
     // Series edit from an occurrence: preserve the base series' anchor dates but carry time-of-day
     // and other fields forward. Otherwise the series would jump to the edited occurrence's date.
     const { _seriesId, _occurrenceKey, ...clean } = ev;
-    setEvents(prev => prev.map(e => {
-      if (e.id !== base) return e;
-      const saved = { ...clean, id: base };
-      if (opts.scope === "series" && _occurrenceKey && e.start && e.end) {
-        const baseStart = new Date(e.start);
-        const baseEnd = new Date(e.end);
-        baseStart.setHours(ev.start.getHours(), ev.start.getMinutes(), 0, 0);
-        baseEnd.setHours(ev.end.getHours(), ev.end.getMinutes(), 0, 0);
-        saved.start = baseStart;
-        saved.end = baseEnd;
-      }
-      return saved;
-    }));
+    const saved = { ...clean, id: base };
+    if (opts.scope === "series" && _occurrenceKey && prior?.start && prior?.end) {
+      const baseStart = new Date(prior.start);
+      const baseEnd = new Date(prior.end);
+      baseStart.setHours(ev.start.getHours(), ev.start.getMinutes(), 0, 0);
+      baseEnd.setHours(ev.end.getHours(), ev.end.getMinutes(), 0, 0);
+      saved.start = baseStart;
+      saved.end = baseEnd;
+    }
+    setEvents(prev => prev.map(e => e.id === base ? saved : e));
     (ev.groupIds||[]).forEach(gid => addActivity(gid, "updated", ev.title, ev.start));
     closeSheet();
     showToast("Event updated");
+    if (prior) {
+      updateEventRow(base, saved, userId).then(({ error }) => {
+        if (!error) return;
+        console.warn("[events] update failed", error);
+        setEvents(prev => prev.map(e => e.id === base ? prior : e));
+        if (wasImportant !== nowImportant) {
+          setPinnedEvents(prev => { const n = new Set(prev); if (wasImportant) n.add(base); else n.delete(base); return n; });
+        }
+        showToast("Couldn't save — reverted", "err");
+      });
+    }
   };
   const addGroup = (g) => { setGroups(prev => [...prev, { ...g, id: "g" + uid(), owner: "u1" }]); closeSheet(); showToast("Group created"); };
   const updateGroup = (g, members) => {
