@@ -2,6 +2,7 @@ import React, { useState, useMemo, useCallback, useRef } from "react";
 import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner } from "./lib/events.js";
+import { uploadAvatar } from "./lib/avatars.js";
 
 // Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
 // SVG source still lives at src/assets/daytu-logo.svg (used for the favicon).
@@ -1288,18 +1289,20 @@ export default function App({ userId, profile }) {
   React.useEffect(() => { migrateEventsIfNeeded(); }, [migrateEventsIfNeeded]);
 
   // Hydrate server-authoritative profile fields into local userProfile.
-  // handle is the source-of-truth post-Welcome (claim_handle RPC); name is
-  // kept in sync from the server too, though Edit Profile doesn't yet push
-  // local name changes back — see HANDOFF bug #9.
+  // handle, name, and avatar_url are all pushed to the server by
+  // EditProfileSheet on save and hydrated here on next mount. Avatar
+  // special: a server null OVERWRITES local (intentional — clears pre-
+  // Storage-upload data URIs that were never migrated to the bucket).
   React.useEffect(() => {
     if (!profile) return;
     setUserProfile(prev => {
       const next = { ...prev };
       if (profile.handle != null && profile.handle !== prev.handle) next.handle = profile.handle;
       if (profile.name != null && profile.name !== prev.name) next.name = profile.name;
+      if (profile.avatar_url !== prev.avatar) next.avatar = profile.avatar_url;
       return next;
     });
-  }, [profile?.handle, profile?.name]);
+  }, [profile?.handle, profile?.name, profile?.avatar_url]);
 
   // Persist all data to localStorage on any relevant change
   React.useEffect(() => {
@@ -10417,7 +10420,40 @@ function EditProfileSheet({ userId, profile, onSave, onClose }) {
         return;
       }
     }
-    onSave({ name, email: profile.email || "", handle, avatar });
+    // Avatar: a fresh data URI from the cropper goes to Storage; null after a
+    // prior URL means the user tapped Remove (we just clear avatar_url and
+    // leave the orphan file for account-deletion cleanup). Unchanged value
+    // (existing URL untouched) skips the round-trip entirely.
+    let savedAvatar = avatar;
+    if (avatar !== profile.avatar) {
+      if (typeof avatar === "string" && avatar.startsWith("data:")) {
+        const { url, error: uploadError } = await uploadAvatar(userId, avatar);
+        if (uploadError) {
+          console.warn("[profile] avatar upload failed", uploadError);
+          setClaimError("Couldn't save photo — try again.");
+          setSaving(false);
+          return;
+        }
+        const { error: dbError } = await supabase.from("profiles").update({ avatar_url: url }).eq("id", userId);
+        if (dbError) {
+          console.warn("[profile] avatar_url update failed", dbError);
+          setClaimError("Couldn't save photo — try again.");
+          setSaving(false);
+          return;
+        }
+        savedAvatar = url;
+      } else if (avatar === null) {
+        const { error } = await supabase.from("profiles").update({ avatar_url: null }).eq("id", userId);
+        if (error) {
+          console.warn("[profile] avatar_url clear failed", error);
+          setClaimError("Couldn't save photo — try again.");
+          setSaving(false);
+          return;
+        }
+        savedAvatar = null;
+      }
+    }
+    onSave({ name, email: profile.email || "", handle, avatar: savedAvatar });
     setSaving(false);
   }
 

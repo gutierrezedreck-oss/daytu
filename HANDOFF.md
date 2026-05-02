@@ -73,9 +73,6 @@ The backend supports a lot more than the UI currently exposes. Frontend is wired
 - "Shared by" pills on calendar cards. Reader function payloads carry everything needed (`owner_name`, `owner_handle`, `share_path`, `share_group_id`, `share_group_name`). Render rule: own → no pill; friends/people → owner name; groups → "{owner} · {group}"; tap → profile or group.
 - Activity feed — explicitly dropped per earlier design decision.
 
-**Avatar uploads to Supabase Storage:**
-- Bucket exists with correct policies. Edit Profile sheet currently writes a JPEG data URI to localStorage. Need to upload to `avatars/{auth.uid}/profile.jpg` instead and store the resulting URL in `profiles.avatar_url`.
-
 **Account deletion flow:**
 - Reminder in memory: must transfer or delete owned groups before calling `auth.admin.deleteUser()` or the deferred one-owner-per-group invariant blocks the delete at commit. No UI for account deletion yet.
 
@@ -112,7 +109,7 @@ The backend supports a lot more than the UI currently exposes. Frontend is wired
    - ~~**Step 2: one-time migration.**~~ **Done.** On first signed-in mount, `migrateEventsIfNeeded` pushes localStorage events to Supabase, remaps `pinnedEvents` and `dismissedImportantEvents` to the new server UUIDs, and gates re-runs via `daytu_v1.events_migrated_to_supabase`. Crash-safe via persisted UUID remap (`events_pending_migration_remap`). Cross-device safe — if remote already has rows, we set the flag and skip migration.
    - ~~**Step 3: optimistic write rewires.**~~ **Done.** `addEvent` / `updateEvent` / `deleteEvent` / `duplicateEvent` apply state optimistically and fire Supabase mutations in the background; on error, state reverts and a toast surfaces the failure.
    - ~~**Step 4: cleanup.**~~ **Done.** Events are no longer written to the persist blob (Supabase is authoritative). Calendar-delete now persists the `calendarId` re-assignment via batch `updateEventRow`. `doSoftReset` / `doFullReset` call `deleteAllEventsForOwner` before clearing local state.
-8. **Wire avatar uploads.** Easy win once data layer is started — migrate the Edit Profile cropper to upload to Storage instead of stuffing a data URI into localStorage.
+8. ~~**Wire avatar uploads.**~~ **Done.** EditProfileSheet uploads cropper output to the `avatars` Storage bucket at `{userId}/profile.jpg` (upsert) and stores the public URL with a `?v=<timestamp>` cache-buster on `profiles.avatar_url`. Hydrate effect in `App.jsx` maps server `avatar_url` → local `userProfile.avatar`. Pre-feature local data URIs disappear on first post-deploy sign-in (server null overwrites local) — users re-crop to migrate. **Future cleanup:** the eventual account-deletion handler must call `supabase.storage.from('avatars').remove([\`${userId}/profile.jpg\`])` before `auth.admin.deleteUser()`.
 9. **Flip social feature flags one at a time and wire each.** Suggested order: Groups (simplest, owner-managed) → Friends (slightly more complex, two-sided handshake) → Sharing pickers (depends on both) → Shared-by pills (depends on data being in Supabase).
 10. **Account deletion handler.** Pre-flight transfer/delete of owned groups before `auth.admin.deleteUser()`. Reminder is in `~/.claude` memory.
 
