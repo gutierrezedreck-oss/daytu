@@ -3,6 +3,7 @@ import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner } from "./lib/events.js";
 import { uploadAvatar } from "./lib/avatars.js";
+import { loadGroupsForViewer } from "./lib/groups.js";
 
 // Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
 // SVG source still lives at src/assets/daytu-logo.svg (used for the favicon).
@@ -1287,6 +1288,28 @@ export default function App({ userId, profile }) {
   }, [userId, syncEventsFromSupabase]);
 
   React.useEffect(() => { migrateEventsIfNeeded(); }, [migrateEventsIfNeeded]);
+
+  // Load groups + memberships from Supabase. Server-authoritative; pre-existing
+  // local seed/demo data is overwritten on first successful sync.
+  //
+  // NOTE: groups may include ones owned by OTHER users (the existing local
+  // addGroup hardcodes `owner: "u1"`, which is wrong against multi-user
+  // data). UI is gated off behind FEATURES.groups in Phase 1, so any
+  // owner-assumes-self logic in the existing Groups UI is dormant for now.
+  // Phase 3 adds ownership-aware gating (Owner badge, Delete button, role
+  // mutations all owner-only).
+  const syncGroupsFromSupabase = useCallback(async () => {
+    if (!userId) return;
+    const { groups: remoteGroups, members: remoteMembers, error } = await loadGroupsForViewer();
+    if (error) {
+      console.warn("[groups] load failed", error);
+      return;
+    }
+    setGroups(remoteGroups);
+    setGroupMembers(remoteMembers);
+  }, [userId]);
+
+  React.useEffect(() => { syncGroupsFromSupabase(); }, [syncGroupsFromSupabase]);
 
   // Hydrate server-authoritative profile fields into local userProfile.
   // handle, name, and avatar_url are all pushed to the server by
