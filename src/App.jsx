@@ -3,7 +3,15 @@ import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner } from "./lib/events.js";
 import { uploadAvatar } from "./lib/avatars.js";
-import { loadGroupsForViewer } from "./lib/groups.js";
+import {
+  loadGroupsForViewer,
+  createGroup,
+  updateGroup as updateGroupRow,
+  deleteGroupRow,
+  addMember,
+  removeMember,
+  updateMemberRole,
+} from "./lib/groups.js";
 
 // Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
 // SVG source still lives at src/assets/daytu-logo.svg (used for the favicon).
@@ -42,11 +50,11 @@ const seed = {
     { id: "g3", name: "Roommates", owner: "u1", color: "#10b981" },
   ],
   groupMembers: [
-    { groupId: "g1", userId: "u2", name: "Jordan", role: "viewer" },
+    { groupId: "g1", userId: "u2", name: "Jordan", role: "member" },
     { groupId: "g1", userId: "u3", name: "Casey", role: "editor" },
     { groupId: "g2", userId: "u4", name: "Riley", role: "editor" },
-    { groupId: "g2", userId: "u5", name: "Sam", role: "viewer" },
-    { groupId: "g3", userId: "u6", name: "Drew", role: "viewer" },
+    { groupId: "g2", userId: "u5", name: "Sam", role: "member" },
+    { groupId: "g3", userId: "u6", name: "Drew", role: "member" },
   ],
   calendars: [
     { id: "c1", name: "Personal", color: "#6366f1" },
@@ -1181,9 +1189,13 @@ export default function App({ userId, profile }) {
   const eventsRef = useRef(events);
   const pinnedEventsRef = useRef(pinnedEvents);
   const dismissedImportantEventsRef = useRef(dismissedImportantEvents);
+  const groupsRef = useRef(groups);
+  const groupMembersRef = useRef(groupMembers);
   React.useEffect(() => { eventsRef.current = events; }, [events]);
   React.useEffect(() => { pinnedEventsRef.current = pinnedEvents; }, [pinnedEvents]);
   React.useEffect(() => { dismissedImportantEventsRef.current = dismissedImportantEvents; }, [dismissedImportantEvents]);
+  React.useEffect(() => { groupsRef.current = groups; }, [groups]);
+  React.useEffect(() => { groupMembersRef.current = groupMembers; }, [groupMembers]);
 
   // One-time migration: push localStorage events up to Supabase the first
   // time a signed-in user loads the app post-Step-1. Runs the initial sync
@@ -1517,16 +1529,132 @@ export default function App({ userId, profile }) {
       });
     }
   };
-  const addGroup = (g) => { setGroups(prev => [...prev, { ...g, id: "g" + uid(), owner: "u1" }]); closeSheet(); showToast("Group created"); };
+  // Sync round-trip: only adds to local state once the server returns
+  // the real UUID, so subsequent member-add operations have a valid
+  // group_id to FK against. Rare-but-possible double-click footgun
+  // (two RPCs in flight) is accepted; mitigations are UI polish.
+  const addGroup = async (g) => {
+    if (!userId) return;
+    const { groupId, error } = await createGroup({ name: g.name, color: g.color });
+    if (error) {
+      console.warn("[groups] create failed", error);
+      showToast("Couldn't create group", "err");
+      return;
+    }
+    setGroups(prev => [...prev, {
+      id: groupId,
+      name: g.name,
+      color: g.color,
+      owner: userId,
+      memberListHidden: false,
+    }]);
+    closeSheet();
+    showToast("Group created");
+  };
   const updateGroup = (g, members) => {
+    if (!userId) return;
+    const priorGroups = groupsRef.current;
+    const priorMembers = groupMembersRef.current;
+    const priorGroup = priorGroups.find(x => x.id === g.id);
+    if (!priorGroup) return;
+    const priorOfThis = priorMembers.filter(m => m.groupId === g.id);
+
+    // Optimistic local apply — same shape as the pre-Supabase function.
     setGroups(prev => prev.map(x => x.id === g.id ? { ...x, ...g } : x));
-    setGroupMembers(prev => [...prev.filter(m => m.groupId !== g.id), ...members.map(m => ({ ...m, groupId: g.id }))]);
+    setGroupMembers(prev => [
+      ...prev.filter(m => m.groupId !== g.id),
+      ...members.map(m => ({ ...m, groupId: g.id })),
+    ]);
     closeSheet();
     showToast("Group updated");
+
+    // Group-fields patch — only changed columns. Field names are
+    // server-shape (snake_case) per the helper's allowlist.
+    const groupPatch = {};
+    if (priorGroup.name !== g.name) groupPatch.name = g.name;
+    if (priorGroup.color !== g.color) groupPatch.color = g.color;
+    if (g.memberListHidden !== undefined && priorGroup.memberListHidden !== g.memberListHidden) {
+      groupPatch.member_list_hidden = g.memberListHidden;
+    }
+
+    // Member diff — UUID-userIds only. The "+ Add member" path in
+    // NewGroupSheet creates visual-only stubs with userId="u"+uid2();
+    // those aren't real profile rows so the server would FK-fail.
+    // Phase 3's @handle resolution makes this filter moot.
+    const isUuid = (s) => typeof s === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+    const oldMap = new Map(priorOfThis.filter(m => isUuid(m.userId)).map(m => [m.userId, m]));
+    const newMap = new Map(members.filter(m => isUuid(m.userId)).map(m => [m.userId, m]));
+
+    const ops = [];
+    if (Object.keys(groupPatch).length) {
+      ops.push(updateGroupRow(g.id, groupPatch));
+    }
+    // Adds. Concurrent-add edge case: two tabs adding the same member
+    // both succeed locally; one server INSERT wins, the other fails
+    // the (group_id, user_id) PK and triggers the loser's revert.
+    // Loser's UI is briefly stale until next syncGroupsFromSupabase.
+    for (const [uid, m] of newMap) {
+      if (!oldMap.has(uid)) ops.push(addMember(g.id, uid, m.role));
+    }
+    // Removes
+    for (const [uid] of oldMap) {
+      if (!newMap.has(uid)) ops.push(removeMember(g.id, uid));
+    }
+    // Role changes
+    for (const [uid, m] of newMap) {
+      const prev = oldMap.get(uid);
+      if (prev && prev.role !== m.role) ops.push(updateMemberRole(g.id, uid, m.role));
+    }
+
+    if (!ops.length) return;
+    Promise.allSettled(ops).then(results => {
+      const failed = results.find(r => r.status === 'rejected' || r.value?.error);
+      if (!failed) return;
+      console.warn("[groups] update failed", failed);
+      setGroups(priorGroups);
+      setGroupMembers(priorMembers);
+      showToast("Couldn't save group — reverted", "err");
+    });
   };
-  const deleteGroup = (id) => { setGroups(prev => prev.filter(g => g.id !== id)); setGroupMembers(prev => prev.filter(m => m.groupId !== id)); closeSheet(); showToast("Group deleted", "err"); };
-  const toggleMemberRole = (groupId, userId) => {
-    setGroupMembers(prev => prev.map(m => m.groupId === groupId && m.userId === userId ? { ...m, role: m.role === "editor" ? "viewer" : "editor" } : m));
+  const deleteGroup = (id) => {
+    if (!userId) return;
+    const priorGroups = groupsRef.current;
+    const priorMembers = groupMembersRef.current;
+    setGroups(prev => prev.filter(g => g.id !== id));
+    setGroupMembers(prev => prev.filter(m => m.groupId !== id));
+    closeSheet();
+    showToast("Group deleted", "err");
+    // Server cascades wipe group_members + the three share tables;
+    // local revert just re-applies prior group + member arrays.
+    deleteGroupRow(id).then(({ error }) => {
+      if (!error) return;
+      console.warn("[groups] delete failed", error);
+      setGroups(priorGroups);
+      setGroupMembers(priorMembers);
+      showToast("Couldn't delete — restored", "err");
+    });
+  };
+  // Param renamed userId → targetUserId to avoid shadowing the App-prop
+  // userId used by the pre-flight guard. Cycles editor ↔ member; owners
+  // are read-only here (managed via transferOwnership in Phase 3 UI).
+  const toggleMemberRole = (groupId, targetUserId) => {
+    if (!userId) return;
+    const priorMembers = groupMembersRef.current;
+    const cur = priorMembers.find(m => m.groupId === groupId && m.userId === targetUserId);
+    if (!cur || cur.role === 'owner') return;
+    const nextRole = cur.role === 'editor' ? 'member' : 'editor';
+    setGroupMembers(prev => prev.map(m =>
+      m.groupId === groupId && m.userId === targetUserId
+        ? { ...m, role: nextRole }
+        : m
+    ));
+    updateMemberRole(groupId, targetUserId, nextRole).then(({ error }) => {
+      if (!error) return;
+      console.warn("[groups] role change failed", error);
+      setGroupMembers(priorMembers);
+      showToast("Couldn't change role — reverted", "err");
+    });
   };
   const addMajorEvent = (me) => {
     const saved = { ...me, id: "m" + uid() };
@@ -7029,16 +7157,16 @@ function NewGroupSheet({ existing, currentMembers, onSave, onDelete, onClose }) 
           <label className="form-label">Members</label>
           <div style={{ display:"flex", gap:8, marginBottom:8 }}>
             <input className="form-input" placeholder="Member name" value={newMemberName} onChange={e=>setNewMemberName(e.target.value)}
-              onKeyDown={e=>{ if (e.key==="Enter"&&newMemberName.trim()) { setMembers(prev=>[...prev,{userId:"u"+uid2(),name:newMemberName.trim(),role:"viewer"}]); setNewMemberName(""); }}}
+              onKeyDown={e=>{ if (e.key==="Enter"&&newMemberName.trim()) { setMembers(prev=>[...prev,{userId:"u"+uid2(),name:newMemberName.trim(),role:"member"}]); setNewMemberName(""); }}}
               style={{ flex:1 }} />
             <button className="btn btn-secondary" style={{ padding:"0 14px", whiteSpace:"nowrap" }}
-              onClick={()=>{ if (newMemberName.trim()) { setMembers(prev=>[...prev,{userId:"u"+uid2(),name:newMemberName.trim(),role:"viewer"}]); setNewMemberName(""); }}}>Add</button>
+              onClick={()=>{ if (newMemberName.trim()) { setMembers(prev=>[...prev,{userId:"u"+uid2(),name:newMemberName.trim(),role:"member"}]); setNewMemberName(""); }}}>Add</button>
           </div>
           {members.map((m,idx)=>(
             <div key={m.userId} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
               <div style={{ flex:1, fontSize:"0.875rem" }}>{m.name}</div>
               <select value={m.role} onChange={e=>setMembers(prev=>prev.map((x,i)=>i===idx?{...x,role:e.target.value}:x))} style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text)", padding:"4px 8px", fontSize:"0.75rem" }}>
-                <option value="viewer">Viewer</option><option value="editor">Editor</option>
+                <option value="member">Member</option><option value="editor">Editor</option>
               </select>
               <button onClick={()=>setMembers(prev=>prev.filter((_,i)=>i!==idx))} style={{ background:"none", border:"none", color:"#f87171", cursor:"pointer", display:"flex", width:16, height:16 }}><span style={{ display:"flex", width:16, height:16 }}>{Icon.x}</span></button>
             </div>
