@@ -34,11 +34,15 @@ export async function loadGroupsForViewer() {
   const members = [];
   for (const g of (data || [])) {
     const ownerRow = g.members?.find((m) => m.role === 'owner');
+    const ownerProfile = ownerRow?.profile || {};
     groups.push({
       id: g.id,
       name: g.name,
       color: g.color,
       owner: ownerRow?.user_id ?? null,
+      ownerName: ownerProfile.name || (ownerProfile.handle ? `@${ownerProfile.handle}` : 'Unknown'),
+      ownerHandle: ownerProfile.handle ?? null,
+      ownerAvatar: ownerProfile.avatar_url ?? null,
       memberListHidden: !!g.member_list_hidden,
     });
     for (const m of (g.members || [])) {

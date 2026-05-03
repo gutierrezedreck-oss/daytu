@@ -75,6 +75,7 @@ The backend supports a lot more than the UI currently exposes. Frontend is wired
 
 **Account deletion flow:**
 - Reminder in memory: must transfer or delete owned groups before calling `auth.admin.deleteUser()` or the deferred one-owner-per-group invariant blocks the delete at commit. No UI for account deletion yet.
+- **Soft-delete leaves a "ghost" profile.** `auth.admin.deleteUser(id, shouldSoftDelete=true)` sets `auth.users.deleted_at` but doesn't fire the `profiles.id … on delete cascade`, so the profile row persists with handle/name/avatar. Phase 3's group-member-add (`findUserByHandle`) would silently resolve and add an unreachable user — RLS still gates everything by `auth.uid()` so it's a UX bug, not a security issue. When account-deletion ships, either pass `shouldSoftDelete=false` to fire the cascade, or add `profiles.deleted_at` and filter `findUserByHandle`. No user-reachable path exposes this today.
 
 **Cleanup / polish:**
 - Console `[auth]` logs in `AuthGate.jsx` — diagnostic, remove before prod.

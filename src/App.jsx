@@ -5,6 +5,7 @@ import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, upda
 import { uploadAvatar } from "./lib/avatars.js";
 import {
   loadGroupsForViewer,
+  findUserByHandle,
   createGroup,
   updateGroup as updateGroupRow,
   deleteGroupRow,
@@ -1529,6 +1530,14 @@ export default function App({ userId, profile }) {
       });
     }
   };
+  // Resolves the current user's role for a given group: 'owner' if they
+  // own it, otherwise their group_members.role ('editor' | 'member'),
+  // otherwise null. Used by NewGroupSheet for owner-aware UI gating
+  // and in Commit 2 for the transfer/leave action surface.
+  const myGroupRole = (g) => g?.owner === userId
+    ? 'owner'
+    : groupMembersRef.current.find(m => m.groupId === g?.id && m.userId === userId)?.role
+      ?? null;
   // Sync round-trip: only adds to local state once the server returns
   // the real UUID, so subsequent member-add operations have a valid
   // group_id to FK against. Rare-but-possible double-click footgun
@@ -1546,6 +1555,9 @@ export default function App({ userId, profile }) {
       name: g.name,
       color: g.color,
       owner: userId,
+      ownerName: userProfile.name,
+      ownerHandle: userProfile.handle,
+      ownerAvatar: userProfile.avatar,
       memberListHidden: false,
     }]);
     closeSheet();
@@ -5035,8 +5047,25 @@ export default function App({ userId, profile }) {
         {sheet === "newImportantEvent" && <NewEventSheet onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} defaultCalendar={userProfile.defaultCalendar} defaultReminder={userProfile.defaultReminder} defaultImportant={true} />}
         {sheet === "editEvent" && activeEvent && <NewEventSheet existing={activeEvent} onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateEvent} onDelete={deleteEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} />}
         {sheet === "eventDetail" && activeEvent && <EventDetailSheet ev={activeEvent} cal={calForCalendar(activeEvent.calendarId)} groups={groups} onDelete={deleteEvent} onEdit={() => openEditEvent(activeEvent)} onClose={closeSheet} onDuplicate={duplicateEvent} onPin={togglePin} isPinned={pinnedEvents.has(baseEventId(activeEvent.id))} mapProvider={mapProvider} />}
-        {sheet === "newGroup" && <NewGroupSheet onSave={addGroup} onClose={closeSheet} />}
-        {sheet === "editGroup" && activeGroup && <NewGroupSheet existing={activeGroup} currentMembers={groupMembers.filter(m => m.groupId === activeGroup.id)} onSave={(g, members) => updateGroup(g, members)} onDelete={deleteGroup} onClose={closeSheet} />}
+        {sheet === "newGroup" && (
+          <NewGroupSheet
+            userId={userId}
+            userProfile={userProfile}
+            myRole="owner"
+            onSave={addGroup}
+            onClose={closeSheet} />
+        )}
+        {sheet === "editGroup" && activeGroup && (
+          <NewGroupSheet
+            existing={activeGroup}
+            currentMembers={groupMembers.filter(m => m.groupId === activeGroup.id)}
+            userId={userId}
+            userProfile={userProfile}
+            myRole={myGroupRole(activeGroup)}
+            onSave={(g, members) => updateGroup(g, members)}
+            onDelete={deleteGroup}
+            onClose={closeSheet} />
+        )}
         {sheet === "icsPreview" && (
           <ICSPreviewSheet
             events={events}
@@ -7132,48 +7161,271 @@ function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplic
 }
 
 // ── NEW GROUP SHEET ───────────────────────────────────────
-function NewGroupSheet({ existing, currentMembers, onSave, onDelete, onClose }) {
-  const isEdit = !!existing;
-  const [name, setName] = useState(existing?.name??"");
-  const [color, setColor] = useState(existing?.color??"#6366f1");
-  const [members, setMembers] = useState(currentMembers??[]);
-  const [newMemberName, setNewMemberName] = useState("");
-  const colors = ["#6366f1","#f97316","#10b981","#f59e0b","#ec4899","#3b82f6"];
-  const uid2 = () => Math.random().toString(36).slice(2,7);
+//
+// Owner-aware editor. Renders different action surfaces by `myRole`:
+//   'owner'  — full edit (name, color, privacy, member ops, delete)
+//   'editor' — read-only meta; can add/remove role='member' rows only
+//   'member' — fully read-only (Commit 2 adds the Leave action)
+// Member changes are staged locally; Save commits via the parent's
+// updateGroup, which diffs against priorMembers. The owner is rendered
+// inline as a banner row at the top of the Members section using the
+// owner-profile fields attached by loadGroupsForViewer.
+
+// Hoisted out of NewGroupSheet so it isn't recreated on every render.
+function MemberAvatar({ url, name, size = 32 }) {
+  const initial = (name || '?').charAt(0).toUpperCase();
+  if (url) {
+    return (
+      <img src={url} alt=""
+        style={{ width:size, height:size, borderRadius:"50%", objectFit:"cover", flexShrink:0 }} />
+    );
+  }
   return (
-    <div className="sheet-overlay" onClick={e => e.target===e.currentTarget&&onClose()}>
+    <div style={{
+      width:size, height:size, borderRadius:"50%", background:"var(--surface3)",
+      color:"var(--muted)", display:"flex", alignItems:"center", justifyContent:"center",
+      fontSize:size*0.4, fontWeight:600, flexShrink:0,
+    }}>{initial}</div>
+  );
+}
+
+function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole, onSave, onDelete, onClose }) {
+  const isEdit = !!existing;
+  const isOwner = myRole === 'owner';
+  const isEditor = myRole === 'editor';
+  const canEditMeta = isOwner;                       // name, color, member_list_hidden, delete
+  const canAddAnyRole = isOwner;                     // owner can stage 'member' or 'editor'
+  const canAddMemberRole = isOwner || isEditor;      // editor restricted to 'member' (RLS-enforced)
+
+  const [name, setName] = useState(existing?.name ?? "");
+  const [color, setColor] = useState(existing?.color ?? "#6366f1");
+  const [memberListHidden, setMemberListHidden] = useState(!!existing?.memberListHidden);
+  const [members, setMembers] = useState(currentMembers ?? []);
+  const [handleQuery, setHandleQuery] = useState("");
+  const [handleResult, setHandleResult] = useState({ state: 'idle' });
+  const [addRole, setAddRole] = useState('member');
+  const debounceRef = useRef(null);
+  const colors = ["#6366f1","#f97316","#10b981","#f59e0b","#ec4899","#3b82f6"];
+
+  // Read latest staged members inside the debounced search timer
+  // without re-firing on every add/remove. Keeping `members` out of
+  // the search effect's deps means staged-list churn doesn't restart
+  // the 250ms timer; the "already-member" check below still sees the
+  // current list when it eventually fires.
+  const membersRef = useRef(members);
+  React.useEffect(() => { membersRef.current = members; }, [members]);
+
+  React.useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const cleaned = handleQuery.replace(/^@+/, '').toLowerCase().trim();
+    if (cleaned.length < 3) { setHandleResult({ state: 'idle' }); return; }
+    setHandleResult({ state: 'searching' });
+    debounceRef.current = setTimeout(async () => {
+      const { user, error } = await findUserByHandle(cleaned);
+      if (error) { setHandleResult({ state: 'error' }); return; }
+      if (!user) { setHandleResult({ state: 'not-found' }); return; }
+      if (user.id === userId) { setHandleResult({ state: 'yourself' }); return; }
+      if (existing?.owner === user.id) { setHandleResult({ state: 'already-member', user }); return; }
+      if (membersRef.current.some(m => m.userId === user.id)) { setHandleResult({ state: 'already-member', user }); return; }
+      setHandleResult({ state: 'found', user });
+    }, 250);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [handleQuery, userId, existing?.owner]);
+
+  const stageAdd = () => {
+    if (handleResult.state !== 'found') return;
+    const u = handleResult.user;
+    setMembers(prev => [...prev, {
+      groupId: existing?.id,
+      userId: u.id,
+      name: u.name || (u.handle ? `@${u.handle}` : 'Unknown'),
+      handle: u.handle,
+      avatar: u.avatar_url,
+      role: canAddAnyRole ? addRole : 'member',
+    }]);
+    setHandleQuery("");
+    setHandleResult({ state: 'idle' });
+    setAddRole('member');
+  };
+
+  return (
+    <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="sheet">
         <div className="sheet-handle" />
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
-          <div className="sheet-title" style={{ marginBottom:0 }}>{isEdit?"Edit Group":"New Group"}</div>
+          <div className="sheet-title" style={{ marginBottom:0 }}>{isEdit ? "Edit Group" : "New Group"}</div>
           <button className="btn-icon" style={{ background:"var(--surface3)" }} onClick={onClose}>{Icon.close}</button>
         </div>
-        <div className="form-group"><label className="form-label">Name</label><input className="form-input" placeholder="Group name" value={name} onChange={e=>setName(e.target.value)} /></div>
+
+        <div className="form-group">
+          <label className="form-label">Name</label>
+          <input className="form-input" placeholder="Group name" value={name}
+            disabled={isEdit && !canEditMeta}
+            onChange={e => setName(e.target.value)} />
+        </div>
+
         <div className="form-group">
           <label className="form-label">Color</label>
-          <div className="chip-row">{colors.map(c=><div key={c} onClick={()=>setColor(c)} style={{ width:32,height:32,borderRadius:"50%",background:c,cursor:"pointer",border:color===c?"3px solid white":"3px solid transparent",transition:"border .12s" }} />)}</div>
-        </div>
-        <div className="form-group">
-          <label className="form-label">Members</label>
-          <div style={{ display:"flex", gap:8, marginBottom:8 }}>
-            <input className="form-input" placeholder="Member name" value={newMemberName} onChange={e=>setNewMemberName(e.target.value)}
-              onKeyDown={e=>{ if (e.key==="Enter"&&newMemberName.trim()) { setMembers(prev=>[...prev,{userId:"u"+uid2(),name:newMemberName.trim(),role:"member"}]); setNewMemberName(""); }}}
-              style={{ flex:1 }} />
-            <button className="btn btn-secondary" style={{ padding:"0 14px", whiteSpace:"nowrap" }}
-              onClick={()=>{ if (newMemberName.trim()) { setMembers(prev=>[...prev,{userId:"u"+uid2(),name:newMemberName.trim(),role:"member"}]); setNewMemberName(""); }}}>Add</button>
+          <div className="chip-row">
+            {colors.map(c => (
+              <div key={c}
+                onClick={() => { if (!isEdit || canEditMeta) setColor(c); }}
+                style={{
+                  width:32, height:32, borderRadius:"50%", background:c,
+                  cursor: (!isEdit || canEditMeta) ? "pointer" : "default",
+                  border: color === c ? "3px solid white" : "3px solid transparent",
+                  opacity: (!isEdit || canEditMeta) ? 1 : 0.6,
+                  transition: "border .12s",
+                }} />
+            ))}
           </div>
-          {members.map((m,idx)=>(
-            <div key={m.userId} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
-              <div style={{ flex:1, fontSize:"0.875rem" }}>{m.name}</div>
-              <select value={m.role} onChange={e=>setMembers(prev=>prev.map((x,i)=>i===idx?{...x,role:e.target.value}:x))} style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text)", padding:"4px 8px", fontSize:"0.75rem" }}>
-                <option value="member">Member</option><option value="editor">Editor</option>
-              </select>
-              <button onClick={()=>setMembers(prev=>prev.filter((_,i)=>i!==idx))} style={{ background:"none", border:"none", color:"#f87171", cursor:"pointer", display:"flex", width:16, height:16 }}><span style={{ display:"flex", width:16, height:16 }}>{Icon.x}</span></button>
-            </div>
-          ))}
         </div>
-        <button className="btn btn-primary" onClick={()=>{ if (name.trim()) onSave({...(existing||{}),name,color},members); }} style={{ opacity:name.trim()?1:0.5 }}>{isEdit?"Save Changes":"Create Group"}</button>
-        {isEdit&&onDelete&&<button className="btn btn-secondary" onClick={()=>onDelete(existing.id)} style={{ width:"100%", marginTop:10, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>Delete Group</button>}
+
+        {isEdit && (
+          <>
+            <div className="form-group">
+              <label className="form-label">Members</label>
+
+              {existing.owner && (
+                <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
+                  <MemberAvatar url={existing.ownerAvatar} name={existing.ownerName} />
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      {existing.ownerName || "Unknown"}
+                      {existing.owner === userId && (
+                        <span style={{ fontSize:"0.6875rem", color:"var(--muted)", marginLeft:6 }}>· You</span>
+                      )}
+                    </div>
+                    {existing.ownerHandle && (
+                      <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{existing.ownerHandle}</div>
+                    )}
+                  </div>
+                  <div style={{
+                    background:"rgba(124,106,247,0.2)", color:"var(--accent2)",
+                    border:"1px solid rgba(124,106,247,0.3)", borderRadius:20,
+                    padding:"3px 10px", fontSize:"0.75rem", fontWeight:600,
+                  }}>Owner</div>
+                </div>
+              )}
+
+              {members.map((m, idx) => {
+                const canRemove = isOwner || (isEditor && m.role === 'member');
+                const canChange = isOwner;
+                return (
+                  <div key={m.userId} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
+                    <MemberAvatar url={m.avatar} name={m.name} />
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                        {m.name}
+                      </div>
+                      {m.handle && (
+                        <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{m.handle}</div>
+                      )}
+                    </div>
+                    {canChange ? (
+                      <select value={m.role}
+                        onChange={e => setMembers(prev => prev.map((x, i) => i === idx ? { ...x, role: e.target.value } : x))}
+                        style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text)", padding:"4px 8px", fontSize:"0.75rem" }}>
+                        <option value="member">Member</option>
+                        <option value="editor">Editor</option>
+                      </select>
+                    ) : (
+                      <div style={{ background:"var(--surface2)", color:"var(--muted)", borderRadius:20, padding:"3px 10px", fontSize:"0.75rem", fontWeight:500, textTransform:"capitalize" }}>
+                        {m.role}
+                      </div>
+                    )}
+                    {canRemove && (
+                      <button onClick={() => setMembers(prev => prev.filter((_, i) => i !== idx))}
+                        style={{ background:"none", border:"none", color:"#f87171", cursor:"pointer", display:"flex", width:16, height:16, padding:0 }}>
+                        <span style={{ display:"flex", width:16, height:16 }}>{Icon.x}</span>
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {canAddMemberRole && (
+              <div className="form-group">
+                <label className="form-label">Add member</label>
+                <input className="form-input" placeholder="@handle"
+                  value={handleQuery}
+                  onChange={e => setHandleQuery(e.target.value)}
+                  autoCapitalize="none" autoCorrect="off" />
+                {handleResult.state === 'searching' && (
+                  <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>Searching…</div>
+                )}
+                {handleResult.state === 'not-found' && (
+                  <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>
+                    No one with @{handleQuery.replace(/^@+/, '')}
+                  </div>
+                )}
+                {handleResult.state === 'yourself' && (
+                  <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>That's you.</div>
+                )}
+                {handleResult.state === 'already-member' && (
+                  <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>Already in this group.</div>
+                )}
+                {handleResult.state === 'error' && (
+                  <div style={{ fontSize:"0.75rem", color:"#f87171", marginTop:6 }}>Couldn't search — try again.</div>
+                )}
+                {handleResult.state === 'found' && (
+                  <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8, padding:"10px 12px", background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
+                    <MemberAvatar url={handleResult.user.avatar_url} name={handleResult.user.name} />
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                        {handleResult.user.name || "Unknown"}
+                      </div>
+                      {handleResult.user.handle && (
+                        <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{handleResult.user.handle}</div>
+                      )}
+                    </div>
+                    {canAddAnyRole && (
+                      <select value={addRole} onChange={e => setAddRole(e.target.value)}
+                        style={{ background:"var(--surface3)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text)", padding:"4px 8px", fontSize:"0.75rem" }}>
+                        <option value="member">Member</option>
+                        <option value="editor">Editor</option>
+                      </select>
+                    )}
+                    <button className="btn btn-secondary" onClick={stageAdd}
+                      style={{ padding:"6px 12px", fontSize:"0.75rem" }}>Add</button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {canEditMeta && (
+              <div className="form-group">
+                <label className="form-label">Privacy</label>
+                <label style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"10px 12px", background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)", cursor:"pointer" }}>
+                  <input type="checkbox" checked={memberListHidden}
+                    onChange={e => setMemberListHidden(e.target.checked)}
+                    style={{ marginTop:2 }} />
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:"0.875rem", color:"var(--text)", marginBottom:2 }}>Hide member list</div>
+                    <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>
+                      Only you and editors can see who's in this group. Members see only themselves.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            )}
+          </>
+        )}
+
+        <button className="btn btn-primary"
+          onClick={() => { if (name.trim()) onSave({ ...(existing || {}), name, color, memberListHidden }, members); }}
+          style={{ opacity: name.trim() ? 1 : 0.5 }}>
+          {isEdit ? "Save Changes" : "Create Group"}
+        </button>
+
+        {isEdit && canEditMeta && onDelete && (
+          <button className="btn btn-secondary"
+            onClick={() => onDelete(existing.id)}
+            style={{ width:"100%", marginTop:10, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>
+            Delete Group
+          </button>
+        )}
       </div>
     </div>
   );
