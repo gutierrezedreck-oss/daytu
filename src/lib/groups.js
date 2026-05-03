@@ -72,3 +72,104 @@ export async function findUserByHandle(handle) {
   if (error) return { user: null, error };
   return { user: data ?? null, error: null };
 }
+
+// ── Writes ──────────────────────────────────────────────────────────────
+// All write helpers are thin wrappers — RLS and table constraints are
+// authoritative. Helpers don't validate authorization client-side; they
+// surface server errors via the standard supabase-js { data, error } shape
+// (or, for RPCs that return void, just { error }). The createGroup helper
+// is the one exception: it unwraps the RPC's data into { groupId } so the
+// caller doesn't need to know the RPC returns the new UUID as `data`.
+
+// Atomic group + owner-row insert via RPC. Awaited synchronously by the
+// caller — the new group is only added to local state once the server
+// returns the UUID, so no temp-ID reconciliation is needed. Trade-off:
+// one round-trip of latency on the "Create Group" button (acceptable,
+// groups are low-frequency).
+export async function createGroup({ name, color }) {
+  const { data, error } = await supabase.rpc('create_group', {
+    p_name: name,
+    p_color: color,
+  });
+  if (error) return { groupId: null, error };
+  return { groupId: data, error: null };
+}
+
+// Partial UPDATE on groups for owner-mutable fields. `fields` keys are
+// allowlisted to { name, color, member_list_hidden } — anything else is
+// silently dropped rather than forwarded, since RLS would reject changes
+// to other columns and timestamps are managed by the groups_updated_at
+// trigger. Field names are server-shape (snake_case) by convention with
+// the design phase; caller maps from local memberListHidden.
+export async function updateGroup(id, fields) {
+  const patch = {};
+  if (fields.name !== undefined) patch.name = fields.name;
+  if (fields.color !== undefined) patch.color = fields.color;
+  if (fields.member_list_hidden !== undefined) patch.member_list_hidden = fields.member_list_hidden;
+  return supabase.from('groups').update(patch).eq('id', id);
+}
+
+// DELETE on groups. FK cascades handle group_members,
+// event_group_shares, major_event_group_shares, and shift_group_shares.
+// Renamed from deleteGroup to avoid collision with the App.jsx-side
+// deleteGroup function that imports this. Same convention as
+// deleteEventRow in events.js.
+export async function deleteGroupRow(id) {
+  return supabase.from('groups').delete().eq('id', id);
+}
+
+// INSERT into group_members. `role` is 'editor' | 'member' — owner role
+// is established only by create_group / transfer_group_ownership RPCs;
+// passing 'owner' here would also collide with the
+// group_members_one_owner_idx partial unique index. Editor callers are
+// further restricted to role='member' by RLS.
+export async function addMember(groupId, userId, role) {
+  return supabase.from('group_members').insert({
+    group_id: groupId,
+    user_id: userId,
+    role,
+  });
+}
+
+// DELETE from group_members. Owner can remove any non-owner row; editor
+// can only remove role='member' rows (RLS-enforced). Owners themselves
+// leave via leaveGroup(), which refuses sole owners.
+export async function removeMember(groupId, userId) {
+  return supabase.from('group_members')
+    .delete()
+    .eq('group_id', groupId)
+    .eq('user_id', userId);
+}
+
+// UPDATE group_members.role. Owner-only by RLS. Used by the
+// editor ↔ member toggle. Setting role='owner' through this path is
+// rejected by the partial unique index — use transferOwnership() instead.
+export async function updateMemberRole(groupId, userId, role) {
+  return supabase.from('group_members')
+    .update({ role })
+    .eq('group_id', groupId)
+    .eq('user_id', userId);
+}
+
+// Atomic owner→editor + member→owner swap via RPC. Single statement so
+// the deferred group_members_owner_invariant trigger doesn't see a
+// zero-owner state mid-flight. Caller must currently be owner; new
+// owner must already be a group member.
+export async function transferOwnership(groupId, newOwnerId) {
+  const { error } = await supabase.rpc('transfer_group_ownership', {
+    p_group: groupId,
+    p_new_owner: newOwnerId,
+  });
+  return { error };
+}
+
+// Caller-initiated removal via RPC. Refuses if caller is the sole owner
+// with the literal message 'sole owner cannot leave; transfer ownership
+// first' — callers can match on that to show a more helpful toast than
+// the generic "Couldn't leave — reverted".
+export async function leaveGroup(groupId) {
+  const { error } = await supabase.rpc('leave_group', {
+    p_group: groupId,
+  });
+  return { error };
+}
