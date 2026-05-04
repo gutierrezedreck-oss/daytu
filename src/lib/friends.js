@@ -58,3 +58,46 @@ export async function loadFriendsForViewer(viewerId) {
   }
   return { friends, error: null };
 }
+
+// ── Writes ──────────────────────────────────────────────────────────────
+// Thin RPC wrappers — RLS and RPC-internal raises are authoritative;
+// helpers don't pre-validate. The `Rpc` suffix avoids collision with the
+// App.jsx local action handlers (sendFriendRequest, acceptFriendRequest)
+// which wrap these with optimistic-with-revert.
+
+// Send a friend request to `otherUserId`. Server-side idempotent via
+// ON CONFLICT DO NOTHING — re-sending against an existing pending or
+// accepted row is a silent no-op (no error returned). Caller is expected
+// to dedupe against local friends[] before invoking, since the RPC gives
+// no signal whether a row was actually created.
+// Server raises: 'cannot friend yourself' if otherUserId == auth.uid().
+export async function sendFriendRequestRpc(otherUserId) {
+  const { error } = await supabase.rpc('send_friend_request', {
+    other: otherUserId,
+  });
+  return { error };
+}
+
+// Accept a pending incoming request from `otherUserId`. Strict: server
+// raises 'no pending request to accept' if no row exists, the row is
+// already accepted, or the caller is the original requester (self-accept
+// is implicitly blocked by `requested_by <> me` in the RPC body). The
+// error.message string is the only signal callers have to distinguish
+// stale-state races from genuine failures.
+export async function acceptFriendRequestRpc(otherUserId) {
+  const { error } = await supabase.rpc('accept_friend_request', {
+    other: otherUserId,
+  });
+  return { error };
+}
+
+// Delete the friendship row with `otherUserId`. Single RPC covers three
+// distinct UI actions — unfriend (accepted), decline (incoming pending),
+// cancel (outgoing pending) — RLS allows either party to delete regardless
+// of status. Idempotent: silent success if no row exists.
+export async function unfriendRpc(otherUserId) {
+  const { error } = await supabase.rpc('unfriend', {
+    other: otherUserId,
+  });
+  return { error };
+}

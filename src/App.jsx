@@ -15,7 +15,12 @@ import {
   transferOwnership,
   leaveGroup,
 } from "./lib/groups.js";
-import { loadFriendsForViewer } from "./lib/friends.js";
+import {
+  loadFriendsForViewer,
+  sendFriendRequestRpc,
+  acceptFriendRequestRpc,
+  unfriendRpc,
+} from "./lib/friends.js";
 
 // Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
 // SVG source still lives at src/assets/daytu-logo.svg (used for the favicon).
@@ -1195,11 +1200,13 @@ export default function App({ userId, profile }) {
   const dismissedImportantEventsRef = useRef(dismissedImportantEvents);
   const groupsRef = useRef(groups);
   const groupMembersRef = useRef(groupMembers);
+  const friendsRef = useRef(friends);
   React.useEffect(() => { eventsRef.current = events; }, [events]);
   React.useEffect(() => { pinnedEventsRef.current = pinnedEvents; }, [pinnedEvents]);
   React.useEffect(() => { dismissedImportantEventsRef.current = dismissedImportantEvents; }, [dismissedImportantEvents]);
   React.useEffect(() => { groupsRef.current = groups; }, [groups]);
   React.useEffect(() => { groupMembersRef.current = groupMembers; }, [groupMembers]);
+  React.useEffect(() => { friendsRef.current = friends; }, [friends]);
 
   // One-time migration: push localStorage events up to Supabase the first
   // time a signed-in user loads the app post-Step-1. Runs the initial sync
@@ -1790,11 +1797,80 @@ export default function App({ userId, profile }) {
     closeSheet();
     showToast("Major event deleted", "err");
   };
-  const sendFriendRequest = (user) => { setFriends(prev => [...prev, { id: "f" + uid(), userId: user.id, name: user.name, handle: user.handle, avatar: user.avatar, mutualGroups: 0, status: "pending_sent" }]); setGroupsSubTab("friends"); };
-  const acceptFriendRequest = (id) => setFriends(prev => prev.map(f => f.id === id ? { ...f, status: "accepted" } : f));
-  const declineFriendRequest = (id) => setFriends(prev => prev.filter(f => f.id !== id));
-  const cancelFriendRequest = (id) => setFriends(prev => prev.filter(f => f.id !== id));
-  const removeFriend = (id) => setFriends(prev => prev.filter(f => f.id !== id));
+  // Friends Phase 2: optimistic-with-revert against three RPCs (send,
+  // accept, unfriend). The existing local-only behavior is preserved on
+  // the happy path; revert restores the prior friends[] snapshot from
+  // friendsRef on RPC failure. UI is still flag-gated behind
+  // FEATURES.friends — these handlers fire only when the gate is open.
+  const sendFriendRequest = (user) => {
+    if (!userId) return;
+    const priorFriends = friendsRef.current;
+    // Defensive dedup. The Add sub-tab already filters its discoverable
+    // list against friends[], but a rapid double-tap could fire two
+    // optimistic adds before either RPC returns; the second is a no-op.
+    if (priorFriends.some(f => f.userId === user.id)) return;
+    setFriends(prev => [...prev, {
+      id: "f" + uid(),
+      userId: user.id,
+      name: user.name,
+      handle: user.handle,
+      avatar: user.avatar,
+      mutualGroups: 0,
+      status: "pending_sent",
+      requestedAt: new Date().toISOString(),
+      acceptedAt: null,
+    }]);
+    setGroupsSubTab("friends");
+    sendFriendRequestRpc(user.id).then(({ error }) => {
+      if (!error) return;
+      console.warn("[friends] send failed", error);
+      setFriends(priorFriends);
+      showToast("Couldn't send request — reverted", "err");
+    });
+  };
+  const acceptFriendRequest = (id) => {
+    if (!userId) return;
+    const priorFriends = friendsRef.current;
+    const row = priorFriends.find(f => f.id === id);
+    if (!row || row.status !== "pending_received") return;
+    setFriends(prev => prev.map(f => f.id === id
+      ? { ...f, status: "accepted", acceptedAt: new Date().toISOString() }
+      : f
+    ));
+    acceptFriendRequestRpc(row.userId).then(({ error }) => {
+      if (!error) return;
+      console.warn("[friends] accept failed", error);
+      setFriends(priorFriends);
+      // 'no pending request to accept' = stale local state (race: other
+      // side cancelled or accepted via another tab). Sync to reconcile
+      // rather than leaving a phantom pending_received row.
+      if (/no pending request/i.test(error.message || "")) {
+        showToast("Request no longer available — refresh", "err");
+        syncFriendsFromSupabase();
+      } else {
+        showToast("Couldn't accept — reverted", "err");
+      }
+    });
+  };
+  // Decline / cancel / remove are byte-identical server-side (all DELETE
+  // the pair row via unfriend RPC). One internal helper, three thin
+  // adapters that differ only in error-toast text.
+  const _unfriendByLocalId = (id, errToast) => {
+    if (!userId) return;
+    const priorFriends = friendsRef.current;
+    const row = priorFriends.find(f => f.id === id);
+    if (!row) return;
+    setFriends(prev => prev.filter(f => f.id !== id));
+    unfriendRpc(row.userId).then(({ error }) => {
+      if (!error) return;
+      console.warn("[friends] unfriend failed", error);
+      setFriends(priorFriends);
+      showToast(errToast, "err");
+    });
+  };
+  const declineFriendRequest = (id) => _unfriendByLocalId(id, "Couldn't decline — reverted");
+  const cancelFriendRequest  = (id) => _unfriendByLocalId(id, "Couldn't cancel — reverted");
+  const removeFriend         = (id) => _unfriendByLocalId(id, "Couldn't remove — reverted");
   const addShift = (p) => { setShifts(prev => { const maxP = prev.reduce((m,x) => Math.max(m, x.priority ?? 0), -1); return [...prev, { ...p, id: "p" + uid(), priority: maxP + 1 }]; }); closeSheet(); showToast("Shift created"); };
   const updateShift = (p) => { setShifts(prev => prev.map(x => x.id === p.id ? p : x)); closeSheet(); showToast("Shift updated"); };
 
