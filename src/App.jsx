@@ -35,7 +35,7 @@ const DaytuLogo = ({ size = 48, style }) => (
 // Hidden until a proper backend supports them.
 // Flip to true when ready — everything comes back, no re-work.
 const FEATURES = {
-  groups:       false, // Groups tab, group sharing, group events
+  groups:       true,  // Groups tab, group sharing, group events
   sharing:      false, // Event visibility field, share to groups
   friends:      false, // Friend list, requests, discoverable users
   activityFeed: false, // Who did what in a group (requires multi-user)
@@ -4224,9 +4224,11 @@ export default function App({ userId, profile }) {
             <div className="sub-tab-row">
               {[
                 { v:"groups",  l:"Groups" },
-                { v:"feed",    l:"Feed",    badge: userProfile.badges?.feed !== false ? activityFeed.filter(a => a.userId !== "u1" && a.ts > feedSeenAt).length : 0 },
-                { v:"friends", l:"Friends", badge: userProfile.badges?.friendRequests !== false ? friendRequests : 0 },
-                { v:"add",     l:"Add" },
+                ...(FEATURES.activityFeed ? [{ v:"feed", l:"Feed", badge: userProfile.badges?.feed !== false ? activityFeed.filter(a => a.userId !== "u1" && a.ts > feedSeenAt).length : 0 }] : []),
+                ...(FEATURES.friends ? [
+                  { v:"friends", l:"Friends", badge: userProfile.badges?.friendRequests !== false ? friendRequests : 0 },
+                  { v:"add",     l:"Add" },
+                ] : []),
               ].map(t => (
                 <button key={t.v} className={"sub-tab"+(groupsSubTab===t.v?" active":"")}
                   onClick={() => { setGroupsSubTab(t.v); if (t.v === "feed") setFeedSeenAt(new Date()); }}
@@ -4273,8 +4275,10 @@ export default function App({ userId, profile }) {
                       {members.map(m => (
                         <div key={m.userId} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
                           <div style={{ fontSize:"0.875rem", color:"var(--text)" }}>{m.name}</div>
-                          <button onClick={() => toggleMemberRole(g.id, m.userId)}
-                            style={{ background:m.role==="editor"?"rgba(124,106,247,0.2)":"var(--surface2)", color:m.role==="editor"?"var(--accent2)":"var(--muted)", border:m.role==="editor"?"1px solid rgba(124,106,247,0.3)":"1px solid transparent", borderRadius:20, padding:"3px 10px", fontSize:"0.75rem", fontWeight:500, cursor:"pointer", fontFamily:"var(--font)" }}>
+                          <button
+                            onClick={g.owner === userId ? () => toggleMemberRole(g.id, m.userId) : undefined}
+                            disabled={g.owner !== userId}
+                            style={{ background:m.role==="editor"?"rgba(124,106,247,0.2)":"var(--surface2)", color:m.role==="editor"?"var(--accent2)":"var(--muted)", border:m.role==="editor"?"1px solid rgba(124,106,247,0.3)":"1px solid transparent", borderRadius:20, padding:"3px 10px", fontSize:"0.75rem", fontWeight:500, cursor: g.owner === userId ? "pointer" : "default", fontFamily:"var(--font)" }}>
                             {m.role}
                           </button>
                         </div>
