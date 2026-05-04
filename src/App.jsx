@@ -43,7 +43,7 @@ const DaytuLogo = ({ size = 48, style }) => (
 const FEATURES = {
   groups:       true,  // Groups tab, group sharing, group events
   sharing:      false, // Event visibility field, share to groups
-  friends:      false, // Friend list, requests, discoverable users
+  friends:      true,  // Friend list, requests, discoverable users
   activityFeed: false, // Who did what in a group (requires multi-user)
   attendees:    false, // Event attendees (can't invite anyone without backend)
 };
