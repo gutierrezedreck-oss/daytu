@@ -355,11 +355,12 @@ function shiftTimeLabel(config) {
 const visibilityIcon = (v) => {
   const s = { display:"inline-flex", width:13, height:13, verticalAlign:"middle" };
   if (v === "private") return <span style={{...s, color:"#a0a0b8"}} title="Only me"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>;
+  if (v === "friends") return <span style={{...s, color:"#fda4af"}} title="Friends"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></span>;
   if (v === "groups") return <span style={{...s, color:"#6ee7b7"}} title="Groups"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>;
-  if (v === "full_access") return <span style={{...s, color:"#93c5fd"}} title="Public"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>;
+  if (v === "people") return <span style={{...s, color:"#93c5fd"}} title="People"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>;
   return null;
 };
-const visibilityLabel = (v) => ({ private:"Only me", groups:"Groups", full_access:"Everyone", inherit:"Calendar default" }[v] || v);
+const visibilityLabel = (v) => ({ private:"Only me", friends:"Friends", groups:"Groups", people:"People", inherit:"Calendar default" }[v] || v);
 const reminderLabel = (r) => ({ "0":"At event time", "10":"10 min before", "15":"15 min before", "30":"30 min before", "60":"1 hour before", "1440":"1 day before", "none":"No reminder" }[r] || "No reminder");
 
 const Icon = {
@@ -5337,7 +5338,7 @@ export default function App({ userId, profile }) {
             </div>
           </div>
         )}
-        {sheet === "newMajorEvent" && <MajorEventSheet defaultDate={selectedDate} onPreview={setPreviewMajor} groups={groups} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addMajorEvent} onClose={() => { setPreviewMajor(null); closeSheet(); }} />}
+        {sheet === "newMajorEvent" && <MajorEventSheet defaultDate={selectedDate} onPreview={setPreviewMajor} groups={groups} friends={friends} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addMajorEvent} onClose={() => { setPreviewMajor(null); closeSheet(); }} />}
         {sheet === "editCalendar" && <CalendarSheet existing={activeCalendar} allCalendars={calendars} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={activeCalendar ? updateCalendar : addCalendar} onDelete={activeCalendar && calendars.length > 1 ? deleteCalendar : null} onClose={closeSheet} />}
         {sheet === "editProfile" && (
           <EditProfileSheet
@@ -5347,12 +5348,12 @@ export default function App({ userId, profile }) {
             onClose={closeSheet}
           />
         )}
-        {sheet === "majorEventDetail" && activeMajorEvent && <MajorEventDetailSheet me={activeMajorEvent} groups={groups} onEdit={() => openEditMajorEvent(activeMajorEvent)} onDelete={deleteMajorEvent} onDuplicate={duplicateMajorEvent} onPin={toggleMajorPin} onClose={closeSheet} mapProvider={mapProvider} />}
-        {sheet === "editMajorEvent" && activeMajorEvent && <MajorEventSheet existing={activeMajorEvent} onPreview={setPreviewMajor} groups={groups} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateMajorEvent} onDelete={deleteMajorEvent} onClose={() => { setPreviewMajor(null); closeSheet(); }} />}
-        {sheet === "newEvent" && <NewEventSheet onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} defaultCalendar={userProfile.defaultCalendar} defaultReminder={userProfile.defaultReminder} />}
-        {sheet === "newImportantEvent" && <NewEventSheet onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} defaultCalendar={userProfile.defaultCalendar} defaultReminder={userProfile.defaultReminder} defaultImportant={true} />}
-        {sheet === "editEvent" && activeEvent && <NewEventSheet existing={activeEvent} onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateEvent} onDelete={deleteEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} />}
-        {sheet === "eventDetail" && activeEvent && <EventDetailSheet ev={activeEvent} cal={calForCalendar(activeEvent.calendarId)} groups={groups} onDelete={deleteEvent} onEdit={() => openEditEvent(activeEvent)} onClose={closeSheet} onDuplicate={duplicateEvent} onPin={togglePin} isPinned={pinnedEvents.has(baseEventId(activeEvent.id))} mapProvider={mapProvider} />}
+        {sheet === "majorEventDetail" && activeMajorEvent && <MajorEventDetailSheet me={activeMajorEvent} groups={groups} friends={friends} onEdit={() => openEditMajorEvent(activeMajorEvent)} onDelete={deleteMajorEvent} onDuplicate={duplicateMajorEvent} onPin={toggleMajorPin} onClose={closeSheet} mapProvider={mapProvider} />}
+        {sheet === "editMajorEvent" && activeMajorEvent && <MajorEventSheet existing={activeMajorEvent} onPreview={setPreviewMajor} groups={groups} friends={friends} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateMajorEvent} onDelete={deleteMajorEvent} onClose={() => { setPreviewMajor(null); closeSheet(); }} />}
+        {sheet === "newEvent" && <NewEventSheet onPreview={setPreviewEvent} calendars={calendars} groups={groups} friends={friends} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} defaultCalendar={userProfile.defaultCalendar} defaultReminder={userProfile.defaultReminder} />}
+        {sheet === "newImportantEvent" && <NewEventSheet onPreview={setPreviewEvent} calendars={calendars} groups={groups} friends={friends} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} defaultCalendar={userProfile.defaultCalendar} defaultReminder={userProfile.defaultReminder} defaultImportant={true} />}
+        {sheet === "editEvent" && activeEvent && <NewEventSheet existing={activeEvent} onPreview={setPreviewEvent} calendars={calendars} groups={groups} friends={friends} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateEvent} onDelete={deleteEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} />}
+        {sheet === "eventDetail" && activeEvent && <EventDetailSheet ev={activeEvent} cal={calForCalendar(activeEvent.calendarId)} groups={groups} friends={friends} onDelete={deleteEvent} onEdit={() => openEditEvent(activeEvent)} onClose={closeSheet} onDuplicate={duplicateEvent} onPin={togglePin} isPinned={pinnedEvents.has(baseEventId(activeEvent.id))} mapProvider={mapProvider} />}
         {sheet === "newGroup" && (
           <NewGroupSheet
             userId={userId}
@@ -6871,7 +6872,7 @@ function CustomColorPopup({ current, recents, favorites, onPick, onToggleFavorit
   );
 }
 
-function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors, onSave, onDelete, onClose, defaultDate, defaultCalendar, defaultReminder, defaultImportant=false, onPreview }) {
+function NewEventSheet({ existing, calendars, groups, friends=[], allEvents=[], customColors, onSave, onDelete, onClose, defaultDate, defaultCalendar, defaultReminder, defaultImportant=false, onPreview }) {
   const isEdit = !!existing;
   const pad = n => String(n).padStart(2,"0");
   const defaultStart = new Date(defaultDate); defaultStart.setHours(9,0);
@@ -6885,6 +6886,7 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
   const [notes, setNotes] = useState(existing?.notes??"");
   const [visibility, setVisibility] = useState(existing?.visibility==="inherit" ? "private" : (existing?.visibility??"private"));
   const [selGroups, setSelGroups] = useState(existing?.groupIds??[]);
+  const [selUsers,  setSelUsers]  = useState(existing?.userIds??[]);
   const [frequency, setFrequency] = useState(existing?.frequency??"none");
   const [monthDays, setMonthDays] = useState(existing?.monthDays ?? {});
   const [reminder, setReminder] = useState(existing?.reminder??defaultReminder??"none");
@@ -6902,6 +6904,7 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
   const [scope, setScope] = useState(isRecurringOccurrence ? "instance" : "series");
 
   const toggleGroup = id => setSelGroups(prev => prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
+  const toggleUser  = id => setSelUsers(prev  => prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
 
   const handleSave = () => {
     if (!title.trim()) return;
@@ -6911,7 +6914,13 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
     const [eh,emin] = endTime.split(":").map(Number);
     const start = new Date(sy,sm-1,sd, allDay?0:sh, allDay?0:smin);
     const end = new Date(ey,em-1,ed, allDay?23:eh, allDay?59:emin);
-    const saved = { title, calendarId:calId, start, end, allDay, notes, visibility, groupIds:selGroups, frequency, reminder, location, color:eventColor, url, attendees, important };
+    // Visibility-aware: only include the matching array. Switching the
+    // chip from 'groups'→'private' shouldn't write phantom share rows
+    // for groups the user picked then deselected by chip-toggling away.
+    const saved = { title, calendarId:calId, start, end, allDay, notes, visibility,
+      groupIds: visibility === 'groups' ? selGroups : [],
+      userIds:  visibility === 'people' ? selUsers  : [],
+      frequency, reminder, location, color:eventColor, url, attendees, important };
     if (frequency === "specific") saved.monthDays = monthDays;
     if (isEdit) {
       saved.id = existing.id;
@@ -7234,21 +7243,54 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
                 </div>
               )}
             </div>
-            {FEATURES.sharing && (
-            <div style={{ marginBottom:8 }}>
-              <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Visibility</div>
-              <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
-                {[{v:"private",l:"Only me"},{v:"groups",l:"Groups"},{v:"full_access",l:"Everyone"}].map(opt=>(
-                  <div key={opt.v} className={"chip"+(visibility===opt.v?" active":"")} onClick={()=>setVisibility(opt.v)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{opt.l}</div>
-                ))}
-              </div>
-              {visibility==="groups" && (
-                <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
-                  {groups.map(g=><div key={g.id} className={"chip"+(selGroups.includes(g.id)?" active":"")} onClick={()=>toggleGroup(g.id)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{g.name}</div>)}
+            {FEATURES.sharing && (() => {
+              const accepted = friends.filter(f => f.status === 'accepted');
+              return (
+                <div style={{ marginBottom:8 }}>
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Visibility</div>
+                  <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
+                    {[{v:"private",l:"Only me"},{v:"friends",l:"Friends"},{v:"groups",l:"Groups"},{v:"people",l:"People"}].map(opt=>(
+                      <div key={opt.v} className={"chip"+(visibility===opt.v?" active":"")} onClick={()=>setVisibility(opt.v)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{opt.l}</div>
+                    ))}
+                  </div>
+                  {visibility==="groups" && (
+                    groups.length === 0 ? (
+                      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6, lineHeight:1.5 }}>You haven't created any groups yet — head to the Groups screen to add one.</div>
+                    ) : (
+                      <>
+                        <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
+                          {groups.map(g=><div key={g.id} className={"chip"+(selGroups.includes(g.id)?" active":"")} onClick={()=>toggleGroup(g.id)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{g.name}</div>)}
+                        </div>
+                        {selGroups.length === 0 && (
+                          <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:5, lineHeight:1.5 }}>Pick at least one group, or this event stays private to you.</div>
+                        )}
+                      </>
+                    )
+                  )}
+                  {visibility==="people" && (
+                    accepted.length === 0 ? (
+                      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6, lineHeight:1.5 }}>You haven't added any friends yet — head to the Add tab.</div>
+                    ) : (
+                      <>
+                        <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
+                          {accepted.map(f => (
+                            <div key={f.id} className={"chip"+(selUsers.includes(f.userId)?" active":"")}
+                              onClick={() => toggleUser(f.userId)}
+                              style={{ fontSize:"0.6875rem", padding:"3px 8px", display:"flex", alignItems:"center", gap:5 }}>
+                              <MemberAvatar url={f.avatar} name={f.name} size={16} />
+                              {f.name}
+                            </div>
+                          ))}
+                        </div>
+                        {selUsers.length === 0 && (
+                          <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:5, lineHeight:1.5 }}>Pick at least one person, or this event stays private to you.</div>
+                        )}
+                      </>
+                    )
+                  )}
                 </div>
-              )}
-            </div>
-            )}
+              );
+            })()}
             {FEATURES.attendees && (
             <div style={{ marginBottom:8 }}>
               <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Attendees</div>
@@ -7320,8 +7362,9 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
     </div>
   );
 }
-function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplicate, onPin, isPinned, mapProvider }) {
+function EventDetailSheet({ ev, cal, groups, friends=[], onDelete, onEdit, onClose, onDuplicate, onPin, isPinned, mapProvider }) {
   const evGroups = groups.filter(g => ev.groupIds?.includes(g.id));
+  const evUsers  = (friends || []).filter(f => f.status === 'accepted' && ev.userIds?.includes(f.userId));
   const isMultiDay = ev.allDay && !sameDay(ev.start, ev.end);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const isRecurring = ev.frequency && ev.frequency !== "none";
@@ -7355,9 +7398,26 @@ function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplic
         <div className="card card-sm" style={{ marginBottom:12 }}>
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
             <span style={{ fontSize:"1.125rem" }}>{visibilityIcon(ev.visibility)}</span>
-            <div>
+            <div style={{ flex:1 }}>
               <div style={{ fontSize:"0.875rem", fontWeight:500 }}>{visibilityLabel(ev.visibility)}</div>
-              {evGroups.length>0&&<div style={{ display:"flex", gap:6, marginTop:6, flexWrap:"wrap" }}>{evGroups.map(g=><span key={g.id} className="group-badge"><div style={{ width:7, height:7, borderRadius:"50%", background:g.color }} />{g.name}</span>)}</div>}
+              {ev.visibility === 'friends' && (
+                <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:2 }}>All your friends</div>
+              )}
+              {ev.visibility === 'groups' && evGroups.length>0 && (
+                <div style={{ display:"flex", gap:6, marginTop:6, flexWrap:"wrap" }}>
+                  {evGroups.map(g=><span key={g.id} className="group-badge"><div style={{ width:7, height:7, borderRadius:"50%", background:g.color }} />{g.name}</span>)}
+                </div>
+              )}
+              {ev.visibility === 'people' && evUsers.length>0 && (
+                <div style={{ display:"flex", gap:6, marginTop:6, flexWrap:"wrap" }}>
+                  {evUsers.map(f => (
+                    <span key={f.id} style={{ display:"flex", alignItems:"center", gap:5, background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:20, padding:"3px 8px", fontSize:"0.6875rem" }}>
+                      <MemberAvatar url={f.avatar} name={f.name} size={14} />
+                      {f.name}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -7885,7 +7945,7 @@ function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole,
 }
 
 // ── MAJOR EVENT DETAIL SHEET ─────────────────────────────
-function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, onPin, onClose, mapProvider }) {
+function MajorEventDetailSheet({ me, groups=[], friends=[], onEdit, onDelete, onDuplicate, onPin, onClose, mapProvider }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const parseLocal = s => { const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d); };
   const start = parseLocal(me.startDate);
@@ -7962,15 +8022,21 @@ function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, o
               </a>
             </div>
           )}
-          {FEATURES.sharing && evGroups.length > 0 && (
-            <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", marginBottom:8,
-              background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
-              <span style={{ display:"flex", width:14, height:14, color:"var(--muted)", flexShrink:0 }}>{Icon.groups}</span>
-              <div style={{ fontSize:"0.8125rem", color:"var(--text)", flex:1 }}>
-                Shared with {evGroups.map(g => g.name).join(", ")}
+          {FEATURES.sharing && me.visibility !== 'private' && (() => {
+            const evUsers = (friends || []).filter(f => f.status === 'accepted' && me.userIds?.includes(f.userId));
+            let summary = null;
+            if (me.visibility === 'friends') summary = "Shared with all friends";
+            else if (me.visibility === 'groups' && evGroups.length > 0) summary = "Shared with " + evGroups.map(g => g.name).join(", ");
+            else if (me.visibility === 'people' && evUsers.length > 0) summary = "Shared with " + evUsers.map(f => f.name).join(", ");
+            if (!summary) return null;
+            return (
+              <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", marginBottom:8,
+                background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
+                <span style={{ display:"flex", width:14, height:14, color:"var(--muted)", flexShrink:0 }}>{Icon.groups}</span>
+                <div style={{ fontSize:"0.8125rem", color:"var(--text)", flex:1 }}>{summary}</div>
               </div>
-            </div>
-          )}
+            );
+          })()}
           {me.notes && (
             <div style={{ background:"var(--surface2)", borderRadius:10, padding:12, marginBottom:12,
               border:"1px solid var(--border)" }}>
@@ -8029,7 +8095,7 @@ function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, o
 }
 
 // ── MAJOR EVENT SHEET ─────────────────────────────────────
-function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSave, onDelete, onClose, onPreview }) {
+function MajorEventSheet({ existing, defaultDate, groups=[], friends=[], customColors, onSave, onDelete, onClose, onPreview }) {
   const isEdit = !!existing;
   const pad = n => String(n).padStart(2,"0");
   const fmtForInput = d => { const dt=new Date(d); return dt.getFullYear()+"-"+pad(dt.getMonth()+1)+"-"+pad(dt.getDate()); };
@@ -8050,7 +8116,9 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
   const [url, setUrl] = useState(existing?.url??"");
   const [visibility, setVisibility] = useState(existing?.visibility==="inherit" ? "private" : (existing?.visibility??"private"));
   const [selGroups, setSelGroups] = useState(existing?.groupIds??[]);
+  const [selUsers,  setSelUsers]  = useState(existing?.userIds??[]);
   const toggleGroup = id => setSelGroups(p => p.includes(id) ? p.filter(x=>x!==id) : [...p, id]);
+  const toggleUser  = id => setSelUsers(p  => p.includes(id) ? p.filter(x=>x!==id) : [...p, id]);
 
   // Live preview: report the current date range + color so calendar can visualize it
   React.useEffect(() => {
@@ -8067,7 +8135,9 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
   const handleSave = () => {
     if (!title.trim()) return;
     const saved = { title, color, showCountdown, pinned, notes, location, url, allDay, startTime, endTime,
-      startDate, endDate, visibility, groupIds: selGroups };
+      startDate, endDate, visibility,
+      groupIds: visibility === 'groups' ? selGroups : [],
+      userIds:  visibility === 'people' ? selUsers  : [] };
     if (isEdit) { saved.id=existing.id; }
     onSave(saved);
   };
@@ -8202,25 +8272,58 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
           onChange={e=>setNotes(e.target.value)} style={{ marginBottom:10, minHeight:56, resize:"none" }} />
 
         {/* Visibility */}
-        {FEATURES.sharing && (
-        <div style={{ marginBottom:10 }}>
-          <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Who can see this?</div>
-          <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
-            {[{v:"private",l:"Only me"},{v:"groups",l:"Groups"},{v:"full_access",l:"Everyone"}].map(opt=>(
-              <div key={opt.v} className={"chip"+(visibility===opt.v?" active":"")}
-                onClick={()=>setVisibility(opt.v)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{opt.l}</div>
-            ))}
-          </div>
-          {visibility==="groups" && groups.length > 0 && (
-            <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
-              {groups.map(g => (
-                <div key={g.id} className={"chip"+(selGroups.includes(g.id)?" active":"")}
-                  onClick={()=>toggleGroup(g.id)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{g.name}</div>
-              ))}
+        {FEATURES.sharing && (() => {
+          const accepted = friends.filter(f => f.status === 'accepted');
+          return (
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Who can see this?</div>
+              <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
+                {[{v:"private",l:"Only me"},{v:"friends",l:"Friends"},{v:"groups",l:"Groups"},{v:"people",l:"People"}].map(opt=>(
+                  <div key={opt.v} className={"chip"+(visibility===opt.v?" active":"")}
+                    onClick={()=>setVisibility(opt.v)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{opt.l}</div>
+                ))}
+              </div>
+              {visibility==="groups" && (
+                groups.length === 0 ? (
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6, lineHeight:1.5 }}>You haven't created any groups yet — head to the Groups screen to add one.</div>
+                ) : (
+                  <>
+                    <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
+                      {groups.map(g => (
+                        <div key={g.id} className={"chip"+(selGroups.includes(g.id)?" active":"")}
+                          onClick={()=>toggleGroup(g.id)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{g.name}</div>
+                      ))}
+                    </div>
+                    {selGroups.length === 0 && (
+                      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:5, lineHeight:1.5 }}>Pick at least one group, or this event stays private to you.</div>
+                    )}
+                  </>
+                )
+              )}
+              {visibility==="people" && (
+                accepted.length === 0 ? (
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6, lineHeight:1.5 }}>You haven't added any friends yet — head to the Add tab.</div>
+                ) : (
+                  <>
+                    <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
+                      {accepted.map(f => (
+                        <div key={f.id} className={"chip"+(selUsers.includes(f.userId)?" active":"")}
+                          onClick={() => toggleUser(f.userId)}
+                          style={{ fontSize:"0.6875rem", padding:"3px 8px", display:"flex", alignItems:"center", gap:5 }}>
+                          <MemberAvatar url={f.avatar} name={f.name} size={16} />
+                          {f.name}
+                        </div>
+                      ))}
+                    </div>
+                    {selUsers.length === 0 && (
+                      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:5, lineHeight:1.5 }}>Pick at least one person, or this event stays private to you.</div>
+                    )}
+                  </>
+                )
+              )}
             </div>
-          )}
-        </div>
-        )}
+          );
+        })()}
 
         {/* Countdown + Pin toggles */}
         <div style={{ background:"var(--surface2)", borderRadius:10, marginBottom:12,
