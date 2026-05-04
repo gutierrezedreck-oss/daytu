@@ -18,8 +18,11 @@ import { supabase } from './supabase.js';
 // id through client_extras.calendarId. When calendars do migrate, we'll
 // backfill events.calendar_id and stop reading from extras.
 //
-// groupIds is intentionally NOT round-tripped — sharing UI is out of scope
-// for this milestone, and every event we create or migrate is private.
+// groupIds and userIds round-trip via follow-up queries to event_group_shares
+// and event_user_shares; the Postgres RLS policies on those tables already
+// restrict reads to events I own, so the queries need no WHERE clause. Reads
+// land in Phase 1 of the Sharing migration; writes (insert/delete share rows
+// on event create/update) come in Phase 2.
 
 function isoOrNull(dateOrString) {
   if (!dateOrString) return null;
@@ -72,6 +75,7 @@ export function rowToEvent(row) {
     allDay: !!row.all_day,
     visibility: row.visibility || 'private',
     groupIds: [],
+    userIds: [],
     reminder: row.reminder ?? null,
     frequency: row.frequency || 'none',
     location: row.location ?? '',
@@ -95,9 +99,57 @@ export function rowToEvent(row) {
 // ── I/O ──────────────────────────────────────────────────────────────────────
 
 export async function loadEventsFromSupabase() {
-  const { data, error } = await supabase.rpc('events_for_viewer');
-  if (error) return { events: [], error };
-  return { events: (data || []).map(rowToEvent), error: null };
+  const [eventsRes, sharesRes] = await Promise.all([
+    supabase.rpc('events_for_viewer'),
+    loadShareTargetsForOwnedEvents(),
+  ]);
+  if (eventsRes.error) return { events: [], error: eventsRes.error };
+  // Share-load failure is non-fatal — render events with empty share lists
+  // rather than blanking the timeline. RLS or PostgREST hiccups on the share
+  // tables shouldn't take the calendar down.
+  if (sharesRes.error) console.warn('[events] share-load failed', sharesRes.error);
+  const groupShares = sharesRes.error ? new Map() : sharesRes.groupSharesByEvent;
+  const userShares  = sharesRes.error ? new Map() : sharesRes.userSharesByEvent;
+  const events = (eventsRes.data || []).map((row) => {
+    const ev = rowToEvent(row);
+    ev.groupIds = groupShares.get(row.id) || [];
+    ev.userIds  = userShares.get(row.id)  || [];
+    return ev;
+  });
+  return { events, error: null };
+}
+
+// Fetch share-target rows for events I own, returning two Maps keyed by
+// event_id. RLS on event_group_shares / event_user_shares restricts reads
+// to rows where the underlying event is owned by auth.uid(), so unbounded
+// SELECTs return only my-owned share rows — no WHERE clause needed.
+//
+// Events shared WITH the viewer (i.e. owned by someone else) intentionally
+// produce no entries here. The viewer's events_for_viewer row already
+// carries share_path / share_group_name for the "shared by" pill — knowing
+// the full share list of someone else's event is neither needed nor
+// permitted.
+//
+// Failure surfaces { error } and empty Maps; the caller renders events
+// with empty groupIds/userIds rather than failing the whole load.
+export async function loadShareTargetsForOwnedEvents() {
+  const [groupRes, userRes] = await Promise.all([
+    supabase.from('event_group_shares').select('event_id, group_id'),
+    supabase.from('event_user_shares').select('event_id, user_id'),
+  ]);
+  if (groupRes.error) return { groupSharesByEvent: new Map(), userSharesByEvent: new Map(), error: groupRes.error };
+  if (userRes.error)  return { groupSharesByEvent: new Map(), userSharesByEvent: new Map(), error: userRes.error };
+  const groupSharesByEvent = new Map();
+  const userSharesByEvent  = new Map();
+  for (const r of groupRes.data || []) {
+    if (!groupSharesByEvent.has(r.event_id)) groupSharesByEvent.set(r.event_id, []);
+    groupSharesByEvent.get(r.event_id).push(r.group_id);
+  }
+  for (const r of userRes.data || []) {
+    if (!userSharesByEvent.has(r.event_id)) userSharesByEvent.set(r.event_id, []);
+    userSharesByEvent.get(r.event_id).push(r.user_id);
+  }
+  return { groupSharesByEvent, userSharesByEvent, error: null };
 }
 
 export async function insertEvent(event, ownerId) {
