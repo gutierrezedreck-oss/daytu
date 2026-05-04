@@ -42,6 +42,20 @@ function clientExtrasFromEvent(event) {
   return Object.keys(extras).length ? extras : null;
 }
 
+// Defensive boundary filter — never write a value that would fail the
+// events.visibility CHECK constraint. NewEventSheet should already
+// normalize 'inherit' (UI sentinel) to 'private' on save, but we
+// belt-and-suspenders here so any future caller — or stale localStorage
+// — can't trip the constraint. 'full_access' is a legacy chip retired
+// in the Sharing migration; map it to 'friends' (broadest DB-valid)
+// rather than dropping the user's intent on the floor.
+function normalizeVisibility(v) {
+  if (v === 'inherit')     return 'private';
+  if (v === 'full_access') return 'friends';
+  if (v === 'private' || v === 'friends' || v === 'groups' || v === 'people') return v;
+  return 'private';
+}
+
 export function eventToRow(event, ownerId) {
   return {
     id: event.id,
@@ -59,7 +73,7 @@ export function eventToRow(event, ownerId) {
     important: !!event.important,
     frequency: event.frequency || 'none',
     reminder: event.reminder ?? null,
-    visibility: event.visibility || 'private',
+    visibility: normalizeVisibility(event.visibility),
     client_extras: clientExtrasFromEvent(event),
   };
 }
@@ -150,6 +164,61 @@ export async function loadShareTargetsForOwnedEvents() {
     userSharesByEvent.get(r.event_id).push(r.user_id);
   }
   return { groupSharesByEvent, userSharesByEvent, error: null };
+}
+
+// Diff old/new share targets and write the four CRUD ops in parallel.
+// Returns the first error from the batch (Promise.allSettled), or null
+// on success / no-op.
+//
+// INSERT batches are filtered to UUID-only ids — belt-and-suspenders
+// against any future stale-state path where a non-UUID local id (e.g.
+// seed "g1") leaks into the picker. DELETE batches need no such filter;
+// matching on a non-existent id is a server-side no-op.
+//
+// Caller is App.jsx's addEvent / duplicateEvent / updateEvent (series
+// path), which fires this AFTER the events row write succeeds. Partial-
+// failure handling is the caller's concern; this helper just surfaces
+// what went wrong on the share write.
+export async function diffAndWriteShares(
+  eventId, oldGroupIds, oldUserIds, newGroupIds, newUserIds
+) {
+  const isUuid = (s) => typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+
+  const groupAdds    = newGroupIds.filter(id => !oldGroupIds.includes(id) && isUuid(id));
+  const groupRemoves = oldGroupIds.filter(id => !newGroupIds.includes(id));
+  const userAdds     = newUserIds.filter(id => !oldUserIds.includes(id) && isUuid(id));
+  const userRemoves  = oldUserIds.filter(id => !newUserIds.includes(id));
+
+  // No-op: nothing changed (or only non-UUID adds got stripped).
+  if (!groupAdds.length && !groupRemoves.length && !userAdds.length && !userRemoves.length) {
+    return { error: null };
+  }
+
+  const ops = [];
+  if (groupAdds.length) {
+    ops.push(supabase.from('event_group_shares').insert(
+      groupAdds.map((group_id) => ({ event_id: eventId, group_id }))
+    ));
+  }
+  if (groupRemoves.length) {
+    ops.push(supabase.from('event_group_shares')
+      .delete().eq('event_id', eventId).in('group_id', groupRemoves));
+  }
+  if (userAdds.length) {
+    ops.push(supabase.from('event_user_shares').insert(
+      userAdds.map((user_id) => ({ event_id: eventId, user_id }))
+    ));
+  }
+  if (userRemoves.length) {
+    ops.push(supabase.from('event_user_shares')
+      .delete().eq('event_id', eventId).in('user_id', userRemoves));
+  }
+
+  const results = await Promise.allSettled(ops);
+  const failed = results.find(r => r.status === 'rejected' || r.value?.error);
+  if (failed) return { error: failed.reason ?? failed.value.error };
+  return { error: null };
 }
 
 export async function insertEvent(event, ownerId) {

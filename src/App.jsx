@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useRef } from "react";
 import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
-import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner } from "./lib/events.js";
+import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner, diffAndWriteShares } from "./lib/events.js";
 import { uploadAvatar } from "./lib/avatars.js";
 import {
   loadGroupsForViewer,
@@ -1448,12 +1448,26 @@ export default function App({ userId, profile }) {
     (ev.groupIds||[]).forEach(gid => addActivity(gid, "added", ev.title, ev.start));
     closeSheet();
     showToast("Event created");
-    insertEvent(newEv, userId).then(({ error }) => {
-      if (!error) return;
-      console.warn("[events] insert failed", error);
-      setEvents(prev => prev.filter(e => e.id !== newId));
-      if (ev.important) setPinnedEvents(prev => { const n = new Set(prev); n.delete(newId); return n; });
-      showToast("Couldn't save event — reverted", "err");
+    insertEvent(newEv, userId).then(async ({ error }) => {
+      if (error) {
+        console.warn("[events] insert failed", error);
+        setEvents(prev => prev.filter(e => e.id !== newId));
+        if (ev.important) setPinnedEvents(prev => { const n = new Set(prev); n.delete(newId); return n; });
+        showToast("Couldn't save event — reverted", "err");
+        return;
+      }
+      // Event row saved. Now write share rows. Partial-failure: event
+      // stays saved with empty shares; toast surfaces the divergence.
+      const { error: shareErr } = await diffAndWriteShares(
+        newId, [], [], ev.groupIds || [], ev.userIds || []
+      );
+      if (shareErr) {
+        console.warn("[events] share insert failed", shareErr);
+        setEvents(prev => prev.map(e =>
+          e.id === newId ? { ...e, groupIds: [], userIds: [] } : e
+        ));
+        showToast("Event saved — sharing didn't apply", "err");
+      }
     });
   };
   const deleteEvent = (id, opts = {}) => {
@@ -1503,11 +1517,25 @@ export default function App({ userId, profile }) {
     setEvents(prev => [...prev, newEv]);
     closeSheet();
     showToast("Event duplicated");
-    insertEvent(newEv, userId).then(({ error }) => {
-      if (!error) return;
-      console.warn("[events] duplicate failed", error);
-      setEvents(prev => prev.filter(e => e.id !== newId));
-      showToast("Couldn't duplicate — reverted", "err");
+    insertEvent(newEv, userId).then(async ({ error }) => {
+      if (error) {
+        console.warn("[events] duplicate failed", error);
+        setEvents(prev => prev.filter(e => e.id !== newId));
+        showToast("Couldn't duplicate — reverted", "err");
+        return;
+      }
+      // Source's shares carry over via the spread; mirror addEvent's
+      // partial-failure semantics.
+      const { error: shareErr } = await diffAndWriteShares(
+        newId, [], [], ev.groupIds || [], ev.userIds || []
+      );
+      if (shareErr) {
+        console.warn("[events] share duplicate failed", shareErr);
+        setEvents(prev => prev.map(e =>
+          e.id === newId ? { ...e, groupIds: [], userIds: [] } : e
+        ));
+        showToast("Event saved — sharing didn't apply", "err");
+      }
     });
   };
   const updateEvent = (ev, opts = {}) => {
@@ -1567,14 +1595,31 @@ export default function App({ userId, profile }) {
     closeSheet();
     showToast("Event updated");
     if (prior) {
-      updateEventRow(base, saved, userId).then(({ error }) => {
-        if (!error) return;
-        console.warn("[events] update failed", error);
-        setEvents(prev => prev.map(e => e.id === base ? prior : e));
-        if (wasImportant !== nowImportant) {
-          setPinnedEvents(prev => { const n = new Set(prev); if (wasImportant) n.add(base); else n.delete(base); return n; });
+      updateEventRow(base, saved, userId).then(async ({ error }) => {
+        if (error) {
+          console.warn("[events] update failed", error);
+          setEvents(prev => prev.map(e => e.id === base ? prior : e));
+          if (wasImportant !== nowImportant) {
+            setPinnedEvents(prev => { const n = new Set(prev); if (wasImportant) n.add(base); else n.delete(base); return n; });
+          }
+          showToast("Couldn't save — reverted", "err");
+          return;
         }
-        showToast("Couldn't save — reverted", "err");
+        // Event row updated. Diff and apply share changes; on share
+        // failure, revert just the share fields to prior (event row
+        // update stands).
+        const oldG = prior.groupIds || [];
+        const oldU = prior.userIds  || [];
+        const newG = saved.groupIds || [];
+        const newU = saved.userIds  || [];
+        const { error: shareErr } = await diffAndWriteShares(base, oldG, oldU, newG, newU);
+        if (shareErr) {
+          console.warn("[events] share update failed", shareErr);
+          setEvents(prev => prev.map(e =>
+            e.id === base ? { ...e, groupIds: oldG, userIds: oldU } : e
+          ));
+          showToast("Event saved — share changes reverted", "err");
+        }
       });
     }
   };
