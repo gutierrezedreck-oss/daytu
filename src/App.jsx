@@ -135,9 +135,9 @@ const seed = {
     ];
   })(),
   friends: [
-    { id: "f1", userId: "u2", name: "Jordan Lee",   handle: "@jordanlee",   avatar: "JL", mutualGroups: 1, status: "accepted" },
-    { id: "f2", userId: "u3", name: "Casey Rivera", handle: "@caseyrivera", avatar: "CR", mutualGroups: 2, status: "accepted" },
-    { id: "f3", userId: "d3", name: "Riley Patel",  handle: "@rileypatel",  avatar: "RP", mutualGroups: 0, status: "pending_received" },
+    { id: "f1", userId: "u2", name: "Jordan Lee",   handle: "@jordanlee",   avatar: null, mutualGroups: 1, status: "accepted" },
+    { id: "f2", userId: "u3", name: "Casey Rivera", handle: "@caseyrivera", avatar: null, mutualGroups: 2, status: "accepted" },
+    { id: "f3", userId: "d3", name: "Riley Patel",  handle: "@rileypatel",  avatar: null, mutualGroups: 0, status: "pending_received" },
   ],
   discoverableUsers: [
     { id: "d1", name: "Taylor Kim",   handle: "@taylorkim",   avatar: "TK" },
@@ -742,7 +742,9 @@ export default function App({ userId, profile }) {
   const [shiftNoticeDismissed, setShiftNoticeDismissed] = useState(() => _ls?.shiftNoticeDismissed ?? null);
   const [majorEvents, setMajorEvents] = useState(() => _ls?.majorEvents ?? seed.majorEvents);
   const [friends, setFriends] = useState(() => _ls?.friends ?? seed.friends);
-  const [friendSearch, setFriendSearch] = useState("");
+  const [handleQuery, setHandleQuery] = useState("");
+  const [handleResult, setHandleResult] = useState({ state: 'idle' });
+  const handleSearchDebounceRef = useRef(null);
   const [groupsSubTab, setGroupsSubTab] = useState("groups");
   const [feedSeenAt, setFeedSeenAt] = useState(() => _ls?.feedSeenAt ? new Date(_ls.feedSeenAt) : new Date(0));
   const [activityFeed, setActivityFeed] = useState(() => _ls?.activityFeed
@@ -1349,6 +1351,26 @@ export default function App({ userId, profile }) {
   }, [userId]);
 
   React.useEffect(() => { syncFriendsFromSupabase(); }, [syncFriendsFromSupabase]);
+
+  // Add sub-tab handle search. 250ms debounce + 3-char minimum mirrors
+  // NewGroupSheet's pattern. Effect emits only "did we resolve a profile";
+  // the relationship branch (yourself / already-friends / already-pending-* /
+  // found) is derived in render from live friends[], so accept/decline/cancel
+  // from this surface refresh the card without re-querying. findUserByHandle
+  // is reused from groups.js per the Phase 2 decision not to refactor it out.
+  React.useEffect(() => {
+    if (handleSearchDebounceRef.current) clearTimeout(handleSearchDebounceRef.current);
+    const cleaned = handleQuery.replace(/^@+/, '').toLowerCase().trim();
+    if (cleaned.length < 3) { setHandleResult({ state: 'idle' }); return; }
+    setHandleResult({ state: 'searching' });
+    handleSearchDebounceRef.current = setTimeout(async () => {
+      const { user, error } = await findUserByHandle(cleaned);
+      if (error) { setHandleResult({ state: 'error' });     return; }
+      if (!user) { setHandleResult({ state: 'not-found' }); return; }
+      setHandleResult({ state: 'resolved', user });
+    }, 250);
+    return () => { if (handleSearchDebounceRef.current) clearTimeout(handleSearchDebounceRef.current); };
+  }, [handleQuery]);
 
   // Hydrate server-authoritative profile fields into local userProfile.
   // handle, name, and avatar_url are all pushed to the server by
@@ -4430,7 +4452,7 @@ export default function App({ userId, profile }) {
                     <div className="section-label">Requests</div>
                     {friends.filter(f => f.status === "pending_received").map(f => (
                       <div key={f.id} className="friend-card friend-card-pending">
-                        <div className="friend-avatar" style={{ background:"var(--surface3)", color:"var(--muted)" }}>{f.avatar}</div>
+                        <MemberAvatar url={f.avatar} name={f.name} size={40} />
                         <div style={{ flex:1, minWidth:0 }}>
                           <div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{f.name}</div>
                           <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:2 }}>{f.handle}</div>
@@ -4449,9 +4471,15 @@ export default function App({ userId, profile }) {
                     <div className="section-label">Sent</div>
                     {friends.filter(f => f.status === "pending_sent").map(f => (
                       <div key={f.id} className="friend-card">
-                        <div className="friend-avatar" style={{ background:"var(--surface3)", color:"var(--muted)" }}>{f.avatar}</div>
-                        <div style={{ flex:1, minWidth:0 }}><div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{f.name}</div><div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>{f.handle}</div></div>
-                        <button onClick={() => cancelFriendRequest(f.id)} style={{ background:"rgba(124,106,247,0.12)", border:"1px solid rgba(124,106,247,0.25)", borderRadius:8, padding:"6px 10px", cursor:"pointer", color:"var(--accent2)", fontSize:"0.75rem", fontWeight:500 }}>Pending</button>
+                        <MemberAvatar url={f.avatar} name={f.name} size={40} />
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{f.name}</div>
+                          <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>{f.handle}</div>
+                        </div>
+                        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                          <span style={{ background:"rgba(124,106,247,0.12)", border:"1px solid rgba(124,106,247,0.25)", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600, color:"var(--accent2)" }}>Sent</span>
+                          <button onClick={() => cancelFriendRequest(f.id)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", cursor:"pointer", color:"var(--muted)", fontSize:"0.75rem" }}>Cancel</button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -4459,17 +4487,23 @@ export default function App({ userId, profile }) {
                 {friends.some(f => f.status === "accepted") && (
                   <div>
                     <div className="section-label">Friends</div>
-                    {friends.filter(f => f.status === "accepted").map(f => (
-                      <div key={f.id} className="friend-card">
-                        <div className="friend-avatar">{f.avatar}</div>
-                        <div style={{ flex:1, minWidth:0 }}>
-                          <div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{f.name}</div>
-                          <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>{f.handle}</div>
-                          {f.mutualGroups > 0 && <div style={{ fontSize:"0.6875rem", color:"var(--accent2)", marginTop:3 }}>{f.mutualGroups} shared group{f.mutualGroups!==1?"s":""}</div>}
+                    {friends.filter(f => f.status === "accepted").map(f => {
+                      // Derived live from groupMembers — counts groups where
+                      // the friend appears in the viewer's visible memberships
+                      // (which equals "groups we're both in" by RLS scope).
+                      const mutualCount = groupMembers.filter(m => m.userId === f.userId).length;
+                      return (
+                        <div key={f.id} className="friend-card">
+                          <MemberAvatar url={f.avatar} name={f.name} size={40} />
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{f.name}</div>
+                            <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>{f.handle}</div>
+                            {mutualCount > 0 && <div style={{ fontSize:"0.6875rem", color:"var(--accent2)", marginTop:3 }}>{mutualCount} shared group{mutualCount!==1?"s":""}</div>}
+                          </div>
+                          <button onClick={() => removeFriend(f.id)} style={{ background:"none", border:"1px solid rgba(248,113,113,0.25)", borderRadius:8, padding:"6px 10px", cursor:"pointer", color:"#f87171", fontSize:"0.75rem", fontWeight:500 }}>Remove</button>
                         </div>
-                        <button onClick={() => removeFriend(f.id)} style={{ background:"none", border:"1px solid rgba(248,113,113,0.25)", borderRadius:8, padding:"6px 10px", cursor:"pointer", color:"#f87171", fontSize:"0.75rem", fontWeight:500 }}>Remove</button>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
                 {friends.length === 0 && (
@@ -4525,29 +4559,86 @@ export default function App({ userId, profile }) {
               </div>
             )}
 
-            {groupsSubTab === "add" && (
-              <>
-                <div className="form-group">
-                  <input className="form-input" placeholder="Search by name or @handle..." value={friendSearch} onChange={e => setFriendSearch(e.target.value)} />
+            {groupsSubTab === "add" && (() => {
+              // Derive the relationship branch from live friends[]. Keeping
+              // this in render (vs. inside the search effect) means accept/
+              // decline/cancel from this surface refresh the card without
+              // re-firing findUserByHandle.
+              let cardState = handleResult.state;
+              let user = null, existingFriend = null;
+              if (handleResult.state === 'resolved') {
+                user = handleResult.user;
+                if (user.id === userId) {
+                  cardState = 'yourself';
+                } else {
+                  existingFriend = friends.find(f => f.userId === user.id);
+                  if      (!existingFriend)                              cardState = 'found';
+                  else if (existingFriend.status === 'accepted')         cardState = 'already-friends';
+                  else if (existingFriend.status === 'pending_sent')     cardState = 'already-pending-sent';
+                  else if (existingFriend.status === 'pending_received') cardState = 'already-pending-received';
+                }
+              }
+              const profileCard = (right) => (
+                <div className="friend-card">
+                  <MemberAvatar url={user?.avatar_url} name={user?.name} size={40} />
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{user?.name || (user?.handle ? `@${user.handle}` : 'Unknown')}</div>
+                    {user?.handle && <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{user.handle}</div>}
+                  </div>
+                  {right}
                 </div>
-                {[
-                    { id:"d1", name:"Taylor Kim",   handle:"@taylorkim",   avatar:"TK" },
-                    { id:"d2", name:"Morgan Chen",  handle:"@morganchen",  avatar:"MC" },
-                    { id:"d4", name:"Drew Santos",  handle:"@drewsantos",  avatar:"DS" },
-                    { id:"d5", name:"Sam Nakamura", handle:"@samnakamura", avatar:"SN" },
-                    { id:"d6", name:"Alex Okonkwo", handle:"@alexokonkwo", avatar:"AO" },
-                  ]
-                  .filter(u => !friends.some(f => f.userId === u.id && (f.status === "accepted" || f.status === "pending_sent")))
-                  .filter(u => !friendSearch.trim() || u.name.toLowerCase().includes(friendSearch.toLowerCase()) || u.handle.includes(friendSearch.toLowerCase()))
-                  .map(u => (
-                    <div key={u.id} className="friend-card">
-                      <div className="friend-avatar" style={{ background:"var(--surface3)", color:"var(--muted)" }}>{u.avatar}</div>
-                      <div style={{ flex:1, minWidth:0 }}><div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{u.name}</div><div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>{u.handle}</div></div>
-                      <button onClick={() => sendFriendRequest(u)} style={{ background:"var(--accent)", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", color:"white", fontSize:"0.75rem", fontWeight:600 }}>+ Add</button>
+              );
+              return (
+                <>
+                  <div className="form-group">
+                    <input className="form-input" placeholder="Find by @handle..."
+                      value={handleQuery} onChange={e => setHandleQuery(e.target.value)} />
+                  </div>
+                  {cardState === 'idle' && (
+                    <div style={{ fontSize:"0.75rem", color:"var(--muted)", textAlign:"center", padding:"20px 8px" }}>
+                      Find friends by @handle. They'll need to accept your request.
                     </div>
-                  ))}
-              </>
-            )}
+                  )}
+                  {cardState === 'searching' && (
+                    <div style={{ fontSize:"0.75rem", color:"var(--muted)", padding:"12px 4px" }}>Searching…</div>
+                  )}
+                  {cardState === 'not-found' && (
+                    <div style={{ fontSize:"0.75rem", color:"var(--muted)", padding:"12px 4px" }}>
+                      No one with @{handleQuery.replace(/^@+/, '').toLowerCase().trim()}
+                    </div>
+                  )}
+                  {cardState === 'error' && (
+                    <div style={{ fontSize:"0.75rem", color:"#f87171", padding:"12px 4px" }}>Couldn't search — try again.</div>
+                  )}
+                  {cardState === 'yourself' && profileCard(
+                    <span style={{ background:"var(--surface2)", color:"var(--muted)", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600 }}>That's you</span>
+                  )}
+                  {cardState === 'found' && profileCard(
+                    <button onClick={() => sendFriendRequest({
+                      id: user.id,
+                      name: user.name || `@${user.handle}`,
+                      handle: user.handle ? `@${user.handle}` : '',
+                      avatar: user.avatar_url,
+                    })} style={{ background:"var(--accent)", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", color:"white", fontSize:"0.75rem", fontWeight:600 }}>+ Add friend</button>
+                  )}
+                  {cardState === 'already-friends' && profileCard(
+                    <span style={{ background:"rgba(110,231,183,0.1)", border:"1px solid rgba(110,231,183,0.2)", color:"#10b981", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600 }}>Already friends</span>
+                  )}
+                  {cardState === 'already-pending-sent' && profileCard(
+                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                      <span style={{ background:"rgba(124,106,247,0.12)", border:"1px solid rgba(124,106,247,0.25)", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600, color:"var(--accent2)" }}>Sent</span>
+                      <button onClick={() => cancelFriendRequest(existingFriend.id)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", cursor:"pointer", color:"var(--muted)", fontSize:"0.75rem" }}>Cancel</button>
+                    </div>
+                  )}
+                  {cardState === 'already-pending-received' && profileCard(
+                    <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+                      <button onClick={() => acceptFriendRequest(existingFriend.id)} style={{ background:"var(--accent)", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", color:"white", fontSize:"0.75rem", fontWeight:600 }}>Accept</button>
+                      <button onClick={() => declineFriendRequest(existingFriend.id)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"5px 12px", cursor:"pointer", color:"var(--muted)", fontSize:"0.75rem" }}>Decline</button>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
           );
         })()}
