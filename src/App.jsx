@@ -15,6 +15,7 @@ import {
   transferOwnership,
   leaveGroup,
 } from "./lib/groups.js";
+import { loadFriendsForViewer } from "./lib/friends.js";
 
 // Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
 // SVG source still lives at src/assets/daytu-logo.svg (used for the favicon).
@@ -1325,6 +1326,22 @@ export default function App({ userId, profile }) {
   }, [userId]);
 
   React.useEffect(() => { syncGroupsFromSupabase(); }, [syncGroupsFromSupabase]);
+
+  // Load friendships from Supabase. Server-authoritative; pre-existing
+  // local seed/demo data is overwritten on first successful sync. UI is
+  // gated off behind FEATURES.friends in Phase 1 — writes still mutate
+  // local state only. Phase 2 wires the action handlers to RPCs.
+  const syncFriendsFromSupabase = useCallback(async () => {
+    if (!userId) return;
+    const { friends: remoteFriends, error } = await loadFriendsForViewer(userId);
+    if (error) {
+      console.warn("[friends] load failed", error);
+      return;
+    }
+    setFriends(remoteFriends);
+  }, [userId]);
+
+  React.useEffect(() => { syncFriendsFromSupabase(); }, [syncFriendsFromSupabase]);
 
   // Hydrate server-authoritative profile fields into local userProfile.
   // handle, name, and avatar_url are all pushed to the server by
