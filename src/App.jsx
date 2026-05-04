@@ -12,6 +12,8 @@ import {
   addMember,
   removeMember,
   updateMemberRole,
+  transferOwnership,
+  leaveGroup,
 } from "./lib/groups.js";
 
 // Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
@@ -1666,6 +1668,77 @@ export default function App({ userId, profile }) {
       console.warn("[groups] role change failed", error);
       setGroupMembers(priorMembers);
       showToast("Couldn't change role — reverted", "err");
+    });
+  };
+  // Transfer ownership: caller (current owner) → newOwnerId.
+  // Wait-on-success — destructive enough that optimistic apply + revert
+  // would flicker visibly. After server confirms, we update three pieces
+  // of local state in lock-step:
+  //   - groups[].owner + owner-profile fields → reflect new owner
+  //   - groupMembers: remove new-owner row (owner is excluded from this
+  //     array per loadGroupsForViewer convention), add caller back as
+  //     editor (per the RPC's owner→editor demotion)
+  // Then close the sheet — simpler than refreshing activeGroup mid-flight,
+  // and the user can re-open to verify.
+  const transferGroupOwnership = (groupId, newOwnerId) => {
+    if (!userId) return;
+    transferOwnership(groupId, newOwnerId).then(({ error }) => {
+      if (error) {
+        console.warn("[groups] transfer failed", error);
+        showToast("Couldn't transfer — try again", "err");
+        return;
+      }
+      const newOwnerRow = groupMembersRef.current.find(
+        m => m.groupId === groupId && m.userId === newOwnerId
+      );
+      setGroups(prev => prev.map(g => g.id === groupId ? {
+        ...g,
+        owner: newOwnerId,
+        ownerName:   newOwnerRow?.name   ?? g.ownerName,
+        ownerHandle: newOwnerRow?.handle ?? g.ownerHandle,
+        ownerAvatar: newOwnerRow?.avatar ?? g.ownerAvatar,
+      } : g));
+      setGroupMembers(prev => {
+        const withoutNewOwner = prev.filter(
+          m => !(m.groupId === groupId && m.userId === newOwnerId)
+        );
+        return [...withoutNewOwner, {
+          groupId,
+          userId,
+          name: userProfile.name || (userProfile.handle ? `@${userProfile.handle}` : 'Unknown'),
+          handle: userProfile.handle,
+          avatar: userProfile.avatar,
+          role: 'editor',
+        }];
+      });
+      closeSheet();
+      showToast("Ownership transferred");
+    });
+  };
+  // Leave a group. Wait-on-success — like transfer, optimistic-revert on
+  // a destructive op would flicker. Sole-owner refusal is server-side
+  // (leave_group RPC raises 'sole owner cannot leave; transfer ownership
+  // first'); UI also gates Leave to non-owners but the substring match
+  // here is belt-and-suspenders for race / bypass.
+  const leaveGroupAction = (groupId) => {
+    if (!userId) return;
+    const group = groupsRef.current.find(g => g.id === groupId);
+    const groupName = group?.name ?? "this group";
+    leaveGroup(groupId).then(({ error }) => {
+      if (error) {
+        console.warn("[groups] leave failed", error);
+        const msg = error.message || "";
+        if (msg.includes("sole owner cannot leave")) {
+          showToast(`You're the only owner of ${groupName}. Transfer first or delete the group instead.`, "err");
+        } else {
+          showToast("Couldn't leave — try again", "err");
+        }
+        return;
+      }
+      setGroups(prev => prev.filter(g => g.id !== groupId));
+      setGroupMembers(prev => prev.filter(m => m.groupId !== groupId));
+      closeSheet();
+      showToast(`Left ${groupName}`);
     });
   };
   const addMajorEvent = (me) => {
@@ -5064,6 +5137,8 @@ export default function App({ userId, profile }) {
             myRole={myGroupRole(activeGroup)}
             onSave={(g, members) => updateGroup(g, members)}
             onDelete={deleteGroup}
+            onTransferOwnership={transferGroupOwnership}
+            onLeaveGroup={leaveGroupAction}
             onClose={closeSheet} />
         )}
         {sheet === "icsPreview" && (
@@ -7189,7 +7264,8 @@ function MemberAvatar({ url, name, size = 32 }) {
   );
 }
 
-function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole, onSave, onDelete, onClose }) {
+function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole,
+                        onSave, onDelete, onTransferOwnership, onLeaveGroup, onClose }) {
   const isEdit = !!existing;
   const isOwner = myRole === 'owner';
   const isEditor = myRole === 'editor';
@@ -7204,8 +7280,27 @@ function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole, 
   const [handleQuery, setHandleQuery] = useState("");
   const [handleResult, setHandleResult] = useState({ state: 'idle' });
   const [addRole, setAddRole] = useState('member');
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferTargetId, setTransferTargetId] = useState(null);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const debounceRef = useRef(null);
   const colors = ["#6366f1","#f97316","#10b981","#f59e0b","#ec4899","#3b82f6"];
+
+  // Pending edits not yet saved — guards Transfer Ownership behind a
+  // "Save pending changes first" hint so the transfer doesn't happen
+  // mid-edit (which would commit a stale-server view to the sheet).
+  const isDirty = useMemo(() => {
+    if (!isEdit) return false;
+    if (name !== existing.name) return true;
+    if (color !== existing.color) return true;
+    if (memberListHidden !== !!existing.memberListHidden) return true;
+    if (members.length !== (currentMembers?.length ?? 0)) return true;
+    const orig = new Map((currentMembers ?? []).map(m => [m.userId, m.role]));
+    for (const m of members) {
+      if (orig.get(m.userId) !== m.role) return true;
+    }
+    return false;
+  }, [name, color, memberListHidden, members, existing, currentMembers, isEdit]);
 
   // Read latest staged members inside the debounced search timer
   // without re-firing on every add/remove. Keeping `members` out of
@@ -7413,11 +7508,136 @@ function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole, 
           </>
         )}
 
+        {isEdit && isOwner && (
+          <div className="form-group">
+            <label className="form-label">Ownership</label>
+
+            {members.length === 0 ? (
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", padding:"10px 12px",
+                            background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
+                Add a member first to transfer ownership.
+              </div>
+            ) : !transferOpen ? (
+              <>
+                <button className="btn btn-secondary"
+                  disabled={isDirty}
+                  onClick={() => setTransferOpen(true)}
+                  style={{ width:"100%", opacity: isDirty ? 0.5 : 1, cursor: isDirty ? 'default' : 'pointer' }}>
+                  Transfer ownership →
+                </button>
+                {isDirty && (
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6 }}>
+                    Save pending changes first.
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ background:"var(--surface2)", borderRadius:10,
+                            border:"1px solid var(--border)", padding:"10px 12px" }}>
+                {!transferTargetId ? (
+                  <>
+                    <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginBottom:8 }}>
+                      Transfer to which member?
+                    </div>
+                    {members.map(m => (
+                      <div key={m.userId}
+                        onClick={() => setTransferTargetId(m.userId)}
+                        style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0",
+                                 cursor:"pointer", borderBottom:"1px solid var(--border)" }}>
+                        <MemberAvatar url={m.avatar} name={m.name} size={28} />
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontSize:"0.875rem", color:"var(--text)" }}>{m.name}</div>
+                          {m.handle && <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{m.handle}</div>}
+                        </div>
+                      </div>
+                    ))}
+                    <button onClick={() => setTransferOpen(false)}
+                      style={{ width:"100%", marginTop:8, background:"none",
+                               border:"1px solid var(--border)", borderRadius:8, padding:"8px",
+                               fontSize:"0.75rem", color:"var(--muted)", cursor:"pointer", fontFamily:"var(--font)" }}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (() => {
+                  const target = members.find(m => m.userId === transferTargetId);
+                  if (!target) return null;
+                  return (
+                    <>
+                      <div style={{ fontSize:"0.875rem", color:"var(--text)", marginBottom:8 }}>
+                        Make <strong>{target.name}</strong> the owner of <strong>{name}</strong>?
+                      </div>
+                      <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginBottom:12 }}>
+                        You'll become an editor and lose owner-only controls.
+                      </div>
+                      <div style={{ display:"flex", gap:8 }}>
+                        <button onClick={() => setTransferTargetId(null)}
+                          style={{ flex:1, padding:"8px", borderRadius:8, background:"var(--surface3)",
+                                   border:"1px solid var(--border)", color:"var(--text)",
+                                   fontSize:"0.8125rem", fontWeight:600, cursor:"pointer", fontFamily:"var(--font)" }}>
+                          Cancel
+                        </button>
+                        <button onClick={() => {
+                            onTransferOwnership(existing.id, transferTargetId);
+                            setTransferOpen(false);
+                            setTransferTargetId(null);
+                          }}
+                          style={{ flex:1, padding:"8px", borderRadius:8, background:"var(--accent)",
+                                   border:"none", color:"#fff",
+                                   fontSize:"0.8125rem", fontWeight:700, cursor:"pointer", fontFamily:"var(--font)" }}>
+                          Make owner
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+
+            <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:8 }}>
+              Owners can't leave directly — transfer ownership first, or delete the group.
+            </div>
+          </div>
+        )}
+
         <button className="btn btn-primary"
           onClick={() => { if (name.trim()) onSave({ ...(existing || {}), name, color, memberListHidden }, members); }}
           style={{ opacity: name.trim() ? 1 : 0.5 }}>
           {isEdit ? "Save Changes" : "Create Group"}
         </button>
+
+        {isEdit && !isOwner && onLeaveGroup && (
+          !leaveConfirmOpen ? (
+            <button className="btn btn-secondary"
+              onClick={() => setLeaveConfirmOpen(true)}
+              style={{ width:"100%", marginTop:10, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>
+              Leave group
+            </button>
+          ) : (
+            <div style={{ marginTop:10, background:"var(--surface2)", borderRadius:10,
+                          border:"1px solid rgba(248,113,113,0.3)", padding:"12px" }}>
+              <div style={{ fontSize:"0.875rem", color:"var(--text)", marginBottom:4 }}>
+                Leave {existing.name}?
+              </div>
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginBottom:12 }}>
+                You'll lose access to events shared with this group.
+              </div>
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={() => setLeaveConfirmOpen(false)}
+                  style={{ flex:1, padding:"8px", borderRadius:8, background:"var(--surface3)",
+                           border:"1px solid var(--border)", color:"var(--text)",
+                           fontSize:"0.8125rem", fontWeight:600, cursor:"pointer", fontFamily:"var(--font)" }}>
+                  Cancel
+                </button>
+                <button onClick={() => onLeaveGroup(existing.id)}
+                  style={{ flex:1, padding:"8px", borderRadius:8, background:"#ef4444",
+                           border:"none", color:"#fff",
+                           fontSize:"0.8125rem", fontWeight:700, cursor:"pointer", fontFamily:"var(--font)" }}>
+                  Leave
+                </button>
+              </div>
+            </div>
+          )
+        )}
 
         {isEdit && canEditMeta && onDelete && (
           <button className="btn btn-secondary"
