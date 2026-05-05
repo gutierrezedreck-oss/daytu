@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback, useRef } from "react";
 import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner, diffAndWriteShares } from "./lib/events.js";
-import { loadMajorEventsFromSupabase } from "./lib/major_events.js";
+import { loadMajorEventsFromSupabase, migrateLocalMajorEventsToSupabase } from "./lib/major_events.js";
 import { uploadAvatar } from "./lib/avatars.js";
 import {
   loadGroupsForViewer,
@@ -1269,7 +1269,66 @@ export default function App({ userId, profile }) {
     if (remote.length > 0 || migratedFlag) {
       setMajorEvents(remote);
     }
+    return { remoteMajorEventsCount: remote.length, migratedFlag: !!migratedFlag };
   }, [userId]);
+
+  // Crash safety: pre-stamp UUIDs and persist the remap to localStorage
+  // BEFORE the upsert. If the page crashes mid-upsert, the next mount
+  // reuses the same UUIDs (upsert with onConflict 'id' dedupes).
+  const migrateMajorEventsIfNeeded = useCallback(async () => {
+    if (!userId) return;
+    const liveLs = lsLoad() || {};
+    if (liveLs.major_events_migrated_to_supabase) {
+      await syncMajorEventsFromSupabase();
+      return;
+    }
+
+    const syncResult = await syncMajorEventsFromSupabase();
+    if (!syncResult) return;
+
+    if (syncResult.remoteMajorEventsCount > 0) {
+      // Cross-device or already-caught-up case: set flag, clear remap.
+      const cur = lsLoad() || {};
+      lsSave({ ...cur,
+               major_events_migrated_to_supabase: true,
+               major_events_pending_migration_remap: undefined });
+      return;
+    }
+
+    const localMajorEvents = liveLs.majorEvents ?? [];
+    if (localMajorEvents.length === 0) {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur, major_events_migrated_to_supabase: true });
+      return;
+    }
+
+    const persistedRemap = liveLs.major_events_pending_migration_remap || {};
+    const localRemap = {};
+    const stamped = localMajorEvents.map((me) => {
+      const newId = persistedRemap[me.id] || crypto.randomUUID();
+      localRemap[me.id] = newId;
+      return { ...me, id: newId };
+    });
+    {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur, major_events_pending_migration_remap: localRemap });
+    }
+
+    const { error } = await migrateLocalMajorEventsToSupabase(stamped, userId);
+    if (error) {
+      console.warn("[major_events] migration failed", error);
+      return; // do NOT set flag; remap stays persisted for next attempt
+    }
+
+    {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur,
+               major_events_migrated_to_supabase: true,
+               major_events_pending_migration_remap: undefined });
+    }
+
+    await syncMajorEventsFromSupabase();
+  }, [userId, syncMajorEventsFromSupabase]);
 
   // Refs mirror these states at render-commit granularity. Two consumers:
   //   - The migration callback captures a fresh snapshot for remap without
@@ -1395,7 +1454,7 @@ export default function App({ userId, profile }) {
 
   React.useEffect(() => { migrateEventsIfNeeded(); }, [migrateEventsIfNeeded]);
 
-  React.useEffect(() => { syncMajorEventsFromSupabase(); }, [syncMajorEventsFromSupabase]);
+  React.useEffect(() => { migrateMajorEventsIfNeeded(); }, [migrateMajorEventsIfNeeded]);
 
   // Load groups + memberships from Supabase. Server-authoritative; pre-existing
   // local seed/demo data is overwritten on first successful sync.

@@ -8,6 +8,38 @@ import { supabase } from './supabase.js';
 // major_event_user_shares) carry groupIds and userIds for owned major events;
 // reads land here in Phase 1, writes come in Phase 4.
 
+// Defensive boundary filter — never write a value that would fail the
+// major_events.visibility CHECK constraint. The picker UI should already
+// normalize 'inherit' (UI sentinel) to 'private' on save, but we
+// belt-and-suspenders here so any future caller — or stale localStorage
+// — can't trip the constraint. 'full_access' is a legacy chip retired
+// in the Sharing migration; map it to 'friends' (broadest DB-valid)
+// rather than dropping the user's intent on the floor.
+function normalizeVisibility(v) {
+  if (v === 'inherit')     return 'private';
+  if (v === 'full_access') return 'friends';
+  if (v === 'private' || v === 'friends' || v === 'groups' || v === 'people') return v;
+  return 'private';
+}
+
+export function majorEventToRow(me, ownerId) {
+  return {
+    id: me.id,
+    owner_id: ownerId,
+    title: me.title ?? null,
+    color: me.color || null,
+    show_countdown: !!me.showCountdown,
+    start_date: me.startDate || null,
+    end_date: me.endDate || null,
+    all_day: !!me.allDay,
+    notes: me.notes || null,
+    location: me.location || null,
+    url: me.url || null,
+    visibility: normalizeVisibility(me.visibility),
+    pinned: !!me.pinned,
+  };
+}
+
 export function rowToMajorEvent(row) {
   const me = {
     id: row.id,
@@ -21,6 +53,7 @@ export function rowToMajorEvent(row) {
     location: row.location ?? '',
     url: row.url ?? '',
     visibility: row.visibility || 'private',
+    pinned: !!row.pinned,
     groupIds: [],
     userIds: [],
   };
@@ -81,4 +114,30 @@ export async function loadShareTargetsForOwnedMajorEvents() {
     userSharesByEvent.get(r.major_event_id).push(r.user_id);
   }
   return { groupSharesByEvent, userSharesByEvent, error: null };
+}
+
+// One-time migration helper. Generates a UUID for each local major event,
+// builds a remap (oldStringId → uuid), and batch-upserts. Upsert with
+// onConflict on id means a partial failure can be retried safely —
+// already-inserted rows dedupe by their pre-assigned UUID.
+//
+// Returns { remap, error }. If error is non-null, the caller MUST NOT set
+// the migrated flag; we want the next load to retry.
+export async function migrateLocalMajorEventsToSupabase(localMajorEvents, ownerId) {
+  if (!localMajorEvents?.length) return { remap: {}, error: null };
+  const isUuid = (s) =>
+    typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+  const remap = {};
+  const rows = localMajorEvents.map((me) => {
+    // Caller may pre-stamp UUIDs (e.g. crash-recovery from a persisted remap)
+    // so we honor an existing UUID id instead of generating a new one.
+    const newId = isUuid(me.id) ? me.id : crypto.randomUUID();
+    remap[me.id] = newId;
+    return majorEventToRow({ ...me, id: newId }, ownerId);
+  });
+  const { error } = await supabase
+    .from('major_events')
+    .upsert(rows, { onConflict: 'id' });
+  return { remap, error };
 }
