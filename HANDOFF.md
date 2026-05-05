@@ -10,7 +10,7 @@ Status snapshot for picking this back up after time away. Branch is feature-comp
 
 ## What's working end-to-end
 
-Backend (Supabase, both migrations applied):
+Backend (Supabase, all migrations applied):
 
 - **Schema:** `profiles`, `friendships`, `groups` + `group_members` (with owner/editor/member roles and member-list privacy toggle), `events` / `major_events` / `shifts` and their `*_group_shares` / `*_user_shares` target tables. RLS on every table, scoped by `is_friend()` + `can_see_*()` predicates so unfriending revokes visibility at query time without touching share rows.
 - **Reader functions:** `events_for_viewer()`, `major_events_for_viewer()`, `shifts_for_viewer()` — return rows the caller can see plus `share_path`, `share_group_id`, `share_group_name`, `owner_name`, `owner_handle` for the "shared by" pill UI.
