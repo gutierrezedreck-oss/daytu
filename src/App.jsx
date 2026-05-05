@@ -2,6 +2,7 @@ import React, { useState, useMemo, useCallback, useRef } from "react";
 import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner, diffAndWriteShares } from "./lib/events.js";
+import { loadMajorEventsFromSupabase } from "./lib/major_events.js";
 import { uploadAvatar } from "./lib/avatars.js";
 import {
   loadGroupsForViewer,
@@ -1251,6 +1252,25 @@ export default function App({ userId, profile }) {
     return { remoteEventsCount: remoteEvents.length, migratedFlag: !!migratedFlag };
   }, [userId]);
 
+  // Phase 1 read-side for major events. Silent swap-in: local state shows
+  // immediately on mount; remote state replaces it when ready. Falls back
+  // to local state when remote is empty AND the migration flag is unset,
+  // so a pre-migration user doesn't see a blank list. Phase 2 will run the
+  // migration and flip the flag.
+  const syncMajorEventsFromSupabase = useCallback(async () => {
+    if (!userId) return;
+    const { majorEvents: remote, error } = await loadMajorEventsFromSupabase();
+    if (error) {
+      console.warn("[major_events] load failed", error);
+      return;
+    }
+    const liveLs = lsLoad();
+    const migratedFlag = liveLs?.major_events_migrated_to_supabase;
+    if (remote.length > 0 || migratedFlag) {
+      setMajorEvents(remote);
+    }
+  }, [userId]);
+
   // Refs mirror these states at render-commit granularity. Two consumers:
   //   - The migration callback captures a fresh snapshot for remap without
   //     polluting useCallback deps with the underlying state.
@@ -1374,6 +1394,8 @@ export default function App({ userId, profile }) {
   }, [userId, syncEventsFromSupabase]);
 
   React.useEffect(() => { migrateEventsIfNeeded(); }, [migrateEventsIfNeeded]);
+
+  React.useEffect(() => { syncMajorEventsFromSupabase(); }, [syncMajorEventsFromSupabase]);
 
   // Load groups + memberships from Supabase. Server-authoritative; pre-existing
   // local seed/demo data is overwritten on first successful sync.
