@@ -1,9 +1,9 @@
 # HANDOFF — Supabase integration
 
-Status snapshot for picking this back up after time away.
+Status snapshot for picking this back up after time away. Branch is feature-complete; remaining work is pre-merge polish.
 
 **Branch:** `supabase-integration` (not `main`).
-**Last commit at handoff:** `e7f6eb7` — "Add email + password auth, handle picker, and known-issues notes."
+**Last commit at handoff:** `3a2d0a9` — "style(auth): align Welcome and ResetPassword with SignIn design language."
 **Production:** Vercel deploys from `main`, so `daytu.app` is not affected by this branch.
 
 ---
@@ -14,12 +14,12 @@ Backend (Supabase, both migrations applied):
 
 - **Schema:** `profiles`, `friendships`, `groups` + `group_members` (with owner/editor/member roles and member-list privacy toggle), `events` / `major_events` / `shifts` and their `*_group_shares` / `*_user_shares` target tables. RLS on every table, scoped by `is_friend()` + `can_see_*()` predicates so unfriending revokes visibility at query time without touching share rows.
 - **Reader functions:** `events_for_viewer()`, `major_events_for_viewer()`, `shifts_for_viewer()` — return rows the caller can see plus `share_path`, `share_group_id`, `share_group_name`, `owner_name`, `owner_handle` for the "shared by" pill UI.
-- **RPCs:** `send_friend_request`, `accept_friend_request`, `unfriend`, `create_group`, `transfer_group_ownership`, `handle_available`, `claim_handle`.
+- **RPCs:** `send_friend_request`, `accept_friend_request`, `unfriend`, `create_group`, `transfer_group_ownership`, `leave_group`, `delete_my_account`, `handle_available`, `claim_handle`.
 - **Triggers:** auto-profile on `auth.users` insert, deferred one-owner-per-group invariant, immutable friendships pair, `updated_at` bumps.
 - **Storage:** `avatars` bucket with owner-scoped write policies (public read).
 - **Profile backfill:** all 8 prior users have `profiles` rows with auto-derived placeholder handles.
 
-Frontend auth flow:
+Frontend:
 
 - **Sign-up** — email + password, password ≥ 8 chars (validated client AND server). Email confirmation is OFF in the dashboard, so signup auto-signs in.
 - **Sign-in** — `signInWithPassword`. Inline error translation: "Invalid email or password" for bad creds, friendly rate-limit message, etc.
@@ -29,57 +29,39 @@ Frontend auth flow:
 - **Edit handle later** — Settings → Edit Profile. Save routes through `claim_handle` first, then updates local state. Honors the "you can change it later" promise from Welcome.
 - **8-second watchdog** in `AuthGate` — any infinite loading flips to an error screen with Retry instead of a white screen.
 - **Singleton Supabase client** — `globalThis` cache in `src/lib/supabase.js` prevents Vite HMR from instantiating multiple `GoTrueClient` instances per tab.
-
-Existing calendar app:
-
-- **Untouched and fully functional behind the auth gate.** `<AuthGate><App /></AuthGate>` in `main.jsx`. App still uses `localStorage` for everything except handle save and sign-out.
-
----
-
-## What's broken (auth)
-
-Full detail in `NOTES.md`. Quick summary:
-
-1. ~~**Duplicate `SIGNED_IN` events on subsequent loads** → watchdog hangs after 8s.~~ **Fixed.** Same-session-id dedup in `AuthGate.jsx`'s subscription handler ignores redundant `SIGNED_IN` / `INITIAL_SESSION` events for a user already loading or loaded. Resets on `SIGNED_OUT`.
-2. ~~**Password reset returns 422.**~~ **Fixed.** Two underlying causes — both addressed:
-   - The recovery email used `{{ .ConfirmationURL }}` (PKCE flow), but the PKCE code-verifier in localStorage didn't survive between request and click (cross-device, cleared storage), so `detectSessionInUrl` silently failed to create a session. `updateUser` then ran with no session and returned 422 ("auth session missing"), surfaced as a misleading "expired link." Switched the **Reset Password** email template to `{{ .SiteURL }}/reset-password?token_hash={{ .TokenHash }}&type=recovery` and added an explicit `verifyOtp({ token_hash, type: 'recovery' })` in `AuthGate.jsx` at module scope (StrictMode-safe — see comment block).
-   - After `updatePassword` succeeded, `USER_UPDATED` fired and the listener's catch-all branch raced `ResetPassword.onDone` for the post-update transition; the listener's `loadProfile` hung on the same nav-lock contention. Collapsed `USER_UPDATED` into its own no-op branch (just `setSession`) — see fix to issue #4 below.
-3. ~~**Multi-tab token refresh race.**~~ **Fixed.** Custom `broadcastChannelLock` in `src/lib/broadcastChannelLock.js` replaces bare `processLock` in `src/lib/supabase.js`. Dual-mode: fast path claims immediately when no peer holder is visible (preserves auth-js's invariant that `lockAcquired` flips true within microtasks of `this.lock()` being called — without this, a 300ms Phase 1/2 wait would create a priority-inversion deadlock with auth-js's pendingInLock drain loop); slow path runs full probe → claim → tie-break protocol when a peer is observed via BroadcastChannel. Tie-break by `(claimedAt, tabId)` for simultaneous claims, heartbeat + stale-out for crashed holders, `beforeunload` for graceful release. Falls back to processLock when BroadcastChannel is unavailable. Residual race: two tabs both starting cold may both fast-path through and refresh concurrently — server rejection of duplicate refresh tokens is the safety net (same residual behavior as processLock today, just narrowed to the genuinely-concurrent case).
-4. ~~**`USER_UPDATED` after a successful update triggers `loadProfile`**~~ **Fixed.** `USER_UPDATED` now has its own branch in the auth event handler — updates `session` and returns. The `profiles` row we render from doesn't reflect any `auth.users` columns, so refetching on `USER_UPDATED` was always wasted work. Bonus: removes the race with the recovery-flow `onDone`.
-5. ~~**Watchdog warning fires once at page load** when the user lands via the recovery link.~~ **Fixed.** Watchdog effect in `AuthGate.jsx` now early-returns when `recoveryMode` is true. Recovery has its own resolution paths (verifyOtp + the recovery-token consumer effect, which surfaces an explicit "expired link" error on failure), so the generic 8s watchdog wasn't needed during recovery and was causing a brief ErrorScreen flash before `recoveryMode && session` could render the reset form.
-6. ~~**Stale `/reset-password` URL leaves AuthGate in a half-recovery state on reload.**~~ **Fixed.** Module-load guard in `AuthGate.jsx` redirects `/reset-password` → `/` whenever the URL is missing the `token_hash` + `type=recovery` pair. Trade-off: refreshing while on the post-verify password form also bumps to `/`; user is signed in at that point and can change password via Settings. Documented in code comment.
-7. ~~**`loadProfile` hangs on plain reload while signed in.**~~ **Fixed (2026-04-29).** Root cause: GoTrueClient's default `navigatorLock` (Web Locks API) acquired the auth-token lock during session recovery on hard reload and never released it. The lock holder was the legitimate current client (not an orphan), so contention wasn't the issue — the locked critical section itself wedged. Subsequent PostgREST calls returned 200 at the network layer but their JS-level promises hung waiting on the lock. Fix: switched the client to `processLock` (in-memory promise chain) via `auth: { lock: processLock }` in `createClient`. processLock has no cross-page-lifecycle state, so hard reload starts clean. Trade-off: lose cross-tab serialization of token refreshes (already accepted under #3). Diagnosis driven by lock-state instrumentation captured in the prior commit and stripped in the follow-up.
-8. ~~**Hard reload (Cmd+Shift+R) wipes localStorage when signed out.**~~ **Fixed (no longer reproducible).** Hard-reload while signed out preserves all `daytu_v1` keys (verified: keyCount stable across the cycle). Likely closed as collateral benefit of the persist-effect spread fix in Step 2 (which protects localStorage-only fields from being clobbered on every persist tick), but the original root cause was never definitively identified. Marking closed pending recurrence.
-
-9. ~~**Edit Profile name doesn't push to Supabase.**~~ **Fixed.** `EditProfileSheet.handleSave` now runs a direct `profiles.update({name}).eq('id', userId)` after the handle path when name has changed. RLS policy `profiles_update_own` already permitted this — no migration needed. Avatar still local-only (separate Storage upload work).
-
-All known auth/data-layer issues fixed. Calendar app + auth core are fully usable.
+- **Profile editing** — `EditProfileSheet` pushes name via `profiles.update` and handle via `claim_handle`. Hydrate effect in `App.jsx` syncs `userProfile.handle`/`name`/`avatar` from server values on every `loadProfile` resolution.
+- **Avatar upload** — cropper output uploaded to `avatars/{userId}/profile.jpg` (upsert) and `profiles.avatar_url` stores the public URL with `?v=<timestamp>` cache-buster.
+- **Events** — Supabase is authoritative. Reads via `events_for_viewer`, optimistic writes (`addEvent`/`updateEvent`/`deleteEvent`/`duplicateEvent`) with revert-on-error toasts. One-time localStorage migration runs on first signed-in mount, with crash-safe UUID remap gated by the `daytu_v1.events_migrated_to_supabase` flag.
+- **Groups** — full UI behind the now-on `FEATURES.groups` flag. Create/edit sheets, owner-aware controls, handle-based member-add, transfer-ownership and leave-group flows, role-pill polish on list cards.
+- **Friends** — list, requests inbox/sent, accept/decline, handle search via `profiles` SELECT (RLS lets any authed user resolve handles). Optimistic Supabase writes for all mutations. Behind the now-on `FEATURES.friends` flag.
+- **Sharing** — 4-level visibility picker (private/friends/groups/people) on events. Share targets round-trip via `loadShareTargetsForOwnedEvents` (read) and `diffAndWriteShares` (write). "Shared by" pill payload (`owner_name`, `owner_handle`, `share_path`, `share_group_name`) carried inline by `events_for_viewer`. Behind the now-on `FEATURES.sharing` flag.
+- **Account deletion** — Settings → Danger Zone. `loadDeletionPreflight` surfaces any owned groups before the destructive call; `delete_my_account` RPC executes the atomic cascade (storage avatars + `auth.users` delete → cascades through every public-schema FK).
+- **Calendars (legacy localStorage).** The user's calendars (`c1`, `c2`, …) are not in the schema yet. `events.calendar_id` is reserved as `uuid` with no FK; events round-trip the local string id through `client_extras.calendarId`.
 
 ---
 
-## What hasn't been started
+## What's still open
 
-The backend supports a lot more than the UI currently exposes. Frontend is wired only for auth + handle picker.
+**Data layer (secondary):**
+- **`major_events` and `shifts`.** Reader functions and share-target tables exist server-side; the client hasn't migrated. Both still write/read `localStorage` exclusively (no `src/lib/major_events.js` or `src/lib/shifts.js` yet). Mirror the four-step events plan: read swap → one-time migration → optimistic writes → cleanup.
+- **Calendars table.** The user's calendars (`c1`, `c2`, …) are not in the schema. `events.calendar_id` is reserved as `uuid` with no FK; the interim is `client_extras.calendarId` carrying the local string id. Implicit direction (per `src/lib/events.js:13–19`) is to add a `calendars` table and backfill `events.calendar_id`, then drop the extras read.
 
-**Data layer migration (foundational — blocks everything social):**
-- `events`, `major_events`, `shifts` — still `localStorage`-only on the client. Need to swap reads to `events_for_viewer()` / etc., and writes to direct table inserts/updates with `owner_id = auth.uid()`.
-- `userProfile` — Welcome screen writes the chosen handle to Supabase, but the existing localStorage `userProfile.handle` doesn't sync back. Settings will display the stale local value until the user opens Edit Profile and re-saves. Documented in code; needs a one-time sync on first sign-in.
-- Calendars — currently a localStorage construct (`c1`, `c2`, etc.). Schema doesn't model them as a table; `events.calendar_id` is `uuid` with no FK. Decide: add a `calendars` table, or keep calendars as a per-user JSON config on `profiles`?
+**Frontend:**
+- **Shared-by pills on event cards.** Payload is round-tripped to the client (`_ownerName` / `_sharePath` / `_shareGroupName` set in `rowToEvent` at `events.js:105–109`), but no consumer renders them. Render rule: own → no pill; friends/people → owner name; groups → "{owner} · {group}"; tap → profile or group.
 
-**Social UI (gated behind `FEATURES.*` flags in `src/App.jsx:21`, all currently `false`):**
-- Friends — list, requests inbox, sent, accept/decline, search by `@handle` (calls `profiles` SELECT, RLS lets any authed user resolve handles). Existing dummy UI at `App.jsx:3785–3909`.
-- Groups — create/edit/delete, member add/remove, role badges (Owner/Editor/Member pills), member-list privacy toggle. Existing dummy UI at `App.jsx:3702–3783` and create/edit sheet at `6666–6711`.
-- Sharing pickers on events / major events / shifts — 4-level visibility (private/friends/groups/people). Existing dummy picker at `App.jsx:6431–6443` (3-level only — needs the 4th "people" option added).
-- "Shared by" pills on calendar cards. Reader function payloads carry everything needed (`owner_name`, `owner_handle`, `share_path`, `share_group_id`, `share_group_name`). Render rule: own → no pill; friends/people → owner name; groups → "{owner} · {group}"; tap → profile or group.
-- Activity feed — explicitly dropped per earlier design decision.
+**Pre-merge polish:**
+- **Flip email confirmation ON** in the Supabase dashboard. Currently OFF for dev convenience.
+- **Remove `[auth]` console logs** in `src/auth/AuthGate.jsx` — diagnostic, not for prod.
+- **Magic-link email template** is customized with `{{ .Token }}` from a deleted OTP-code path. Harmless (we don't call `signInWithOtp`); revert to default any time.
 
-**Account deletion flow:**
-- Reminder in memory: must transfer or delete owned groups before calling `auth.admin.deleteUser()` or the deferred one-owner-per-group invariant blocks the delete at commit. No UI for account deletion yet.
-- **Soft-delete leaves a "ghost" profile.** `auth.admin.deleteUser(id, shouldSoftDelete=true)` sets `auth.users.deleted_at` but doesn't fire the `profiles.id … on delete cascade`, so the profile row persists with handle/name/avatar. Phase 3's group-member-add (`findUserByHandle`) would silently resolve and add an unreachable user — RLS still gates everything by `auth.uid()` so it's a UX bug, not a security issue. When account-deletion ships, either pass `shouldSoftDelete=false` to fire the cascade, or add `profiles.deleted_at` and filter `findUserByHandle`. No user-reachable path exposes this today.
+### Pre-merge checklist
 
-**Cleanup / polish:**
-- Console `[auth]` logs in `AuthGate.jsx` — diagnostic, remove before prod.
-- Magic-link email template in Supabase dashboard — customized with `{{ .Token }}` from earlier OTP-code experiment. Unused now (we don't call `signInWithOtp`). Can revert to default any time.
+When ready to merge `supabase-integration` → `main`. Note: there's one Supabase project (`rwioojyvnzatobueuzqr`) serving both dev and prod, so backend migrations are already live — only client code + dashboard settings need attention pre-merge.
+
+1. Flip email confirmation ON in Supabase.
+2. Remove `[auth]` console logs in `AuthGate.jsx`.
+3. (Optional) Revert magic-link email template to default.
+4. Decide whether `major_events`/`shifts` migration ships before or after the merge. Both work in localStorage form, so deferring is a no-op for the merge itself.
 
 ---
 
@@ -93,40 +75,18 @@ The backend supports a lot more than the UI currently exposes. Frontend is wired
 - Working tree at handoff: clean (after this HANDOFF.md commit lands).
 - All commits on `supabase-integration` pushed to `origin/supabase-integration`.
 - Range from `main`: `main..supabase-integration` covers the full social-layer migration + auth work.
-- Two migration files under `supabase/migrations/` — both already **applied** to the linked Supabase project. Re-running on a fresh project: idempotent for the second migration (`if not exists`), idempotent enough for the first (will error on existing tables but in a recoverable way; check `NOTES.md` style for the pre-check query).
-
----
-
-## Recommended order when picking this up
-
-1. ~~**Fix duplicate `SIGNED_IN` (issue #1).**~~ **Done.** Same-session-id dedup landed in `AuthGate.jsx`.
-2. ~~**Fix the `USER_UPDATED` loop (issue #4).**~~ **Done.** Split into its own no-op branch in `AuthGate.jsx` — updates `session` only.
-3. ~~**Capture the 422 from password reset (issue #2).**~~ **Done.** Root cause was PKCE auto-detect on a token-hash flow + the `USER_UPDATED` race; switched the email template to `{{ .TokenHash }}`, added explicit `verifyOtp` at module scope, and split `USER_UPDATED`. End-to-end reset works.
-4. ~~**Investigate the page-load watchdog warning (issue #5).**~~ **Done.** Watchdog effect now skips while `recoveryMode` is true. Same rationale as the bug-list entry above.
-5. ~~**Decide on issue #3 (multi-tab refresh race).**~~ **Done.** Built `broadcastChannelLock` — see bug #3 entry above.
-6. ~~**Sync localStorage `userProfile` from Supabase profile on sign-in.**~~ **Done.** `AuthGate` passes the loaded `profile` row to `App` via `cloneElement`; an effect in `App.jsx` hydrates `userProfile.handle` and `userProfile.name` from server values on every `loadProfile` resolution. Avatar deferred to item #8 (Storage uploads). Local-only fields (defaultCalendar, defaultReminder, badges, email) are preserved.
-7. **Data layer migration — events.** Step-by-step plan. Steps 1 and 2 done; 3 and 4 open.
-   - ~~**Step 1: read swap.**~~ **Done.** `loadEventsFromSupabase()` via `events_for_viewer` RPC; localStorage fallback when remote is empty and the migrated flag is unset; inline "Syncing your events…" banner with timeout + Retry. (`6243016`)
-   - ~~**Step 2: one-time migration.**~~ **Done.** On first signed-in mount, `migrateEventsIfNeeded` pushes localStorage events to Supabase, remaps `pinnedEvents` and `dismissedImportantEvents` to the new server UUIDs, and gates re-runs via `daytu_v1.events_migrated_to_supabase`. Crash-safe via persisted UUID remap (`events_pending_migration_remap`). Cross-device safe — if remote already has rows, we set the flag and skip migration.
-   - ~~**Step 3: optimistic write rewires.**~~ **Done.** `addEvent` / `updateEvent` / `deleteEvent` / `duplicateEvent` apply state optimistically and fire Supabase mutations in the background; on error, state reverts and a toast surfaces the failure.
-   - ~~**Step 4: cleanup.**~~ **Done.** Events are no longer written to the persist blob (Supabase is authoritative). Calendar-delete now persists the `calendarId` re-assignment via batch `updateEventRow`. `doSoftReset` / `doFullReset` call `deleteAllEventsForOwner` before clearing local state.
-8. ~~**Wire avatar uploads.**~~ **Done.** EditProfileSheet uploads cropper output to the `avatars` Storage bucket at `{userId}/profile.jpg` (upsert) and stores the public URL with a `?v=<timestamp>` cache-buster on `profiles.avatar_url`. Hydrate effect in `App.jsx` maps server `avatar_url` → local `userProfile.avatar`. Pre-feature local data URIs disappear on first post-deploy sign-in (server null overwrites local) — users re-crop to migrate. **Future cleanup:** the eventual account-deletion handler must call `supabase.storage.from('avatars').remove([\`${userId}/profile.jpg\`])` before `auth.admin.deleteUser()`.
-9. **Flip social feature flags one at a time and wire each.** Suggested order: Groups (simplest, owner-managed) → Friends (slightly more complex, two-sided handshake) → Sharing pickers (depends on both) → Shared-by pills (depends on data being in Supabase).
-10. **Account deletion handler.** Pre-flight transfer/delete of owned groups before `auth.admin.deleteUser()`. Reminder is in `~/.claude` memory.
+- Six forward migrations under `supabase/migrations/` (each with a corresponding `_down.sql`), all applied to the linked Supabase project (`rwioojyvnzatobueuzqr`).
 
 ---
 
 ## Environment quirks
 
-- **Supabase Site URL** is currently `http://localhost:5173`. Must change to `https://daytu.app` before prod. Both URLs already in the redirect-URL allowlist (`/**`).
+- **Supabase Site URL** is `https://daytu.app`. `http://localhost:5173` remains in the redirect-URL allowlist for dev.
 - **Email confirmation:** OFF for dev. Toggle ON before prod for security.
 - **Minimum password length:** set to 8 server-side (matches client).
 - **Email rate limits:** Supabase free tier defaults are aggressive — ~4 emails/hour per project for the built-in SMTP. Hit during magic-link experimentation. For prod or heavy testing, configure a real SMTP provider in Authentication → SMTP Settings.
-- **Magic-link email template:** customized with `{{ .Token }}` from the deleted OTP-code path. Harmless (we no longer call `signInWithOtp`), but feel free to revert to default.
 - **`.env.local` at repo root:** contains real `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. Gitignored via the existing `*.local` rule.
-- **`[auth]` console logs** in `src/auth/AuthGate.jsx` are diagnostic — keep them while we still have unresolved auth bugs, remove before prod.
 - **Persist effect spreads `...lsLoad()`** — the `daytu_v1` blob is reconstructed on a 300ms debounce from React state. Without spreading the live localStorage blob first, any field that lives in localStorage but not in React state (the migration flag, the pending UUID remap, future similar fields) gets clobbered every tick. The spread is now first in the lsSave object literal so React-state keys still override on top. Defensive — protects all future localStorage-only fields, not just the events migration ones.
 - **Existing 8 users have no password.** First time each one signs in, they'll need to use "Forgot password?" to set one. This is documented in the auth flow and works correctly.
-- **The DB owner-of-group invariant is deferred.** If a user is deleted from `auth.users` and they own groups, the cascade will fail at commit. No bug today (no account-deletion UI), but the future flow must transfer/delete groups first.
+- **The DB owner-of-group invariant is deferred.** If a user is deleted from `auth.users` while owning groups, the cascade fails at commit. The `delete_my_account` RPC handles this with a pre-flight refusal that asks the caller to transfer or delete owned groups first; `loadDeletionPreflight` surfaces the same check in the Settings UI before the destructive call.
 - **Vite HMR + Supabase singleton:** the `globalThis` cache in `src/lib/supabase.js` is essential — without it, every save in dev re-instantiates `GoTrueClient` and you'll hit the in-tab nav-lock contention. Don't refactor that file casually.
-- **Event `groupIds` are not round-tripped to Supabase yet.** `eventToRow` intentionally drops them (sharing UI is out of scope for this milestone). Optimistic state retains `groupIds` after a write, but the next `loadEventsFromSupabase` will return them as `[]`. Wires up when sharing migrates.
