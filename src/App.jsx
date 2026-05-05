@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback, useRef } from "react";
 import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner, diffAndWriteShares } from "./lib/events.js";
-import { loadMajorEventsFromSupabase, migrateLocalMajorEventsToSupabase } from "./lib/major_events.js";
+import { loadMajorEventsFromSupabase, migrateLocalMajorEventsToSupabase, insertMajorEvent, updateMajorEventRow, deleteMajorEventRow } from "./lib/major_events.js";
 import { uploadAvatar } from "./lib/avatars.js";
 import {
   loadGroupsForViewer,
@@ -1343,12 +1343,14 @@ export default function App({ userId, profile }) {
   const groupsRef = useRef(groups);
   const groupMembersRef = useRef(groupMembers);
   const friendsRef = useRef(friends);
+  const majorEventsRef = useRef(majorEvents);
   React.useEffect(() => { eventsRef.current = events; }, [events]);
   React.useEffect(() => { pinnedEventsRef.current = pinnedEvents; }, [pinnedEvents]);
   React.useEffect(() => { dismissedImportantEventsRef.current = dismissedImportantEvents; }, [dismissedImportantEvents]);
   React.useEffect(() => { groupsRef.current = groups; }, [groups]);
   React.useEffect(() => { groupMembersRef.current = groupMembers; }, [groupMembers]);
   React.useEffect(() => { friendsRef.current = friends; }, [friends]);
+  React.useEffect(() => { majorEventsRef.current = majorEvents; }, [majorEvents]);
 
   // One-time migration: push localStorage events up to Supabase the first
   // time a signed-in user loads the app post-Step-1. Runs the initial sync
@@ -1576,9 +1578,18 @@ export default function App({ userId, profile }) {
   const openEditMajorEvent = (me) => { setActiveMajorEvent(me); setSheet("editMajorEvent"); };
   const openMajorEventDetail = (me) => { setActiveMajorEvent(me); setSheet("majorEventDetail"); };
   const duplicateMajorEvent = (me) => {
-    const copy = { ...me, id: "m" + uid(), title: me.title + " (copy)" };
+    if (!userId) return;
+    const newId = crypto.randomUUID();
+    const copy = { ...me, id: newId, title: me.title + " (copy)" };
     setMajorEvents(prev => [...prev, copy]);
     closeSheet();
+    insertMajorEvent(copy, userId).then(({ error }) => {
+      if (error) {
+        console.warn("[major_events] duplicate failed", error);
+        setMajorEvents(prev => prev.filter(x => x.id !== newId));
+        showToast("Couldn't duplicate — reverted", "err");
+      }
+    });
   };
 
   const addEvent = (ev) => {
@@ -1975,36 +1986,76 @@ export default function App({ userId, profile }) {
     });
   };
   const addMajorEvent = (me) => {
-    const saved = { ...me, id: "m" + uid() };
+    if (!userId) return;
+    const newId = crypto.randomUUID();
+    const saved = { ...me, id: newId };
     setMajorEvents(prev => [...prev, saved]);
     const startDate = typeof saved.startDate === "string" ? new Date(saved.startDate) : saved.startDate;
     (saved.groupIds||[]).forEach(gid => addActivity(gid, "added", saved.title, startDate));
     closeSheet();
     showToast("Major event created");
+    insertMajorEvent(saved, userId).then(({ error }) => {
+      if (error) {
+        console.warn("[major_events] insert failed", error);
+        setMajorEvents(prev => prev.filter(x => x.id !== newId));
+        showToast("Couldn't save — reverted", "err");
+      }
+    });
   };
   const updateMajorEvent = (me) => {
+    if (!userId) return;
+    const prior = majorEventsRef.current.find(x => x.id === me.id);
     setMajorEvents(prev => prev.map(x => x.id === me.id ? me : x));
     const startDate = typeof me.startDate === "string" ? new Date(me.startDate) : me.startDate;
     (me.groupIds||[]).forEach(gid => addActivity(gid, "updated", me.title, startDate));
     closeSheet();
     showToast("Major event updated");
+    if (prior) {
+      updateMajorEventRow(me.id, me, userId).then(({ error }) => {
+        if (error) {
+          console.warn("[major_events] update failed", error);
+          setMajorEvents(prev => prev.map(x => x.id === me.id ? prior : x));
+          showToast("Couldn't save — reverted", "err");
+        }
+      });
+    }
   };
   // Quick pin/unpin without opening the edit form — used by the detail sheet.
   const toggleMajorPin = (id) => {
-    setMajorEvents(prev => prev.map(me => me.id === id ? { ...me, pinned: !me.pinned } : me));
+    if (!userId) return;
+    const prior = majorEventsRef.current.find(x => x.id === id);
+    if (!prior) return;
+    const next = { ...prior, pinned: !prior.pinned };
+    setMajorEvents(prev => prev.map(me => me.id === id ? next : me));
+    updateMajorEventRow(id, next, userId).then(({ error }) => {
+      if (error) {
+        console.warn("[major_events] pin toggle failed", error);
+        setMajorEvents(prev => prev.map(me => me.id === id ? prior : me));
+        showToast("Couldn't save pin — reverted", "err");
+      }
+    });
   };
 
   const deleteMajorEvent = (id) => {
-    setMajorEvents(prev => {
-      const me = prev.find(x => x.id === id);
-      if (me) {
-        const startDate = typeof me.startDate === "string" ? new Date(me.startDate) : me.startDate;
-        (me.groupIds||[]).forEach(gid => addActivity(gid, "deleted", me.title, startDate));
-      }
-      return prev.filter(x => x.id !== id);
-    });
+    if (!userId) return;
+    const priorMajorEvents = majorEventsRef.current;
+    const prior = priorMajorEvents.find(x => x.id === id);
+    setMajorEvents(prev => prev.filter(x => x.id !== id));
+    if (prior) {
+      const startDate = typeof prior.startDate === "string" ? new Date(prior.startDate) : prior.startDate;
+      (prior.groupIds||[]).forEach(gid => addActivity(gid, "deleted", prior.title, startDate));
+    }
     closeSheet();
     showToast("Major event deleted", "err");
+    if (prior) {
+      deleteMajorEventRow(id).then(({ error }) => {
+        if (error) {
+          console.warn("[major_events] delete failed", error);
+          setMajorEvents(priorMajorEvents);
+          showToast("Couldn't delete — restored", "err");
+        }
+      });
+    }
   };
   // Friends Phase 2: optimistic-with-revert against three RPCs (send,
   // accept, unfriend). The existing local-only behavior is preserved on

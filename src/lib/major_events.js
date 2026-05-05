@@ -116,6 +116,21 @@ export async function loadShareTargetsForOwnedMajorEvents() {
   return { groupSharesByEvent, userSharesByEvent, error: null };
 }
 
+export async function insertMajorEvent(me, ownerId) {
+  return supabase.from('major_events').insert(majorEventToRow(me, ownerId));
+}
+
+export async function updateMajorEventRow(id, me, ownerId) {
+  // Strip immutable cols from the patch — RLS rejects owner_id changes; id is
+  // the lookup key, not part of the update payload.
+  const { id: _id, owner_id: _o, ...patch } = majorEventToRow(me, ownerId);
+  return supabase.from('major_events').update(patch).eq('id', id);
+}
+
+export async function deleteMajorEventRow(id) {
+  return supabase.from('major_events').delete().eq('id', id);
+}
+
 // One-time migration helper. Generates a UUID for each local major event,
 // builds a remap (oldStringId → uuid), and batch-upserts. Upsert with
 // onConflict on id means a partial failure can be retried safely —
