@@ -21,6 +21,7 @@ import {
   acceptFriendRequestRpc,
   unfriendRpc,
 } from "./lib/friends.js";
+import { loadDeletionPreflight, deleteMyAccount } from "./lib/account.js";
 
 // Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
 // SVG source still lives at src/assets/daytu-logo.svg (used for the favicon).
@@ -1085,6 +1086,10 @@ export default function App({ userId, profile }) {
   const [confirmSoftReset, setConfirmSoftReset] = useState(false);
   const [confirmFullReset, setConfirmFullReset] = useState(false);
   const [fullResetInput, setFullResetInput] = useState("");
+  const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false);
+  const [deleteAccountInput, setDeleteAccountInput] = useState("");
+  // null | 'loading' | 'error' | { ownedGroups, eventCount, friendshipCount }
+  const [deletionPreflight, setDeletionPreflight] = useState(null);
 
   // Soft reset: clears user-generated data, keeps name/color/theme and onboarding.
   // Server-side event delete runs first; on error, abort without touching local state.
@@ -1156,6 +1161,61 @@ export default function App({ userId, profile }) {
     // Close the confirmation UI
     setConfirmFullReset(false);
     setFullResetInput("");
+  };
+
+  // Account deletion. Three-state expand: loading → preflight → either
+  // owned-groups gating (refuse path) or confirm-form (destructive path).
+  // Server-side cascade is delegated entirely to delete_my_account RPC.
+  const expandDeleteAccount = async () => {
+    if (!userId) return;
+    setConfirmDeleteAccount(true);
+    setDeletionPreflight('loading');
+    const res = await loadDeletionPreflight(userId);
+    if (res.error) {
+      console.warn("[account] preflight failed", res.error);
+      setDeletionPreflight('error');
+      return;
+    }
+    setDeletionPreflight(res);
+  };
+  const collapseDeleteAccount = () => {
+    setConfirmDeleteAccount(false);
+    setDeleteAccountInput("");
+    setDeletionPreflight(null);
+  };
+  // Owned-group click: collapse the danger zone first so the next
+  // re-expand re-fires preflight with fresh server state — the user
+  // is about to transfer or delete the group, which moves them off
+  // the gate. Then route them to the group's edit sheet where the
+  // Transfer / Delete actions live.
+  const handleOwnedGroupClick = (g) => {
+    collapseDeleteAccount();
+    openEditGroup(g);
+  };
+  const doDeleteAccount = async () => {
+    if (!userId) return;
+    const expected = (userProfile.handle || '').replace(/^@+/, '').toLowerCase();
+    const entered  = deleteAccountInput.replace(/^@+/, '').toLowerCase();
+    if (!expected || entered !== expected) return;
+    const { error } = await deleteMyAccount();
+    if (error) {
+      console.warn("[account] delete failed", error);
+      // RPC's owned-group raise is the backstop for a race where
+      // ownership changed mid-session. Re-fetch preflight so the
+      // user sees the new gating state instead of a stale form.
+      if (/owned group/i.test(error.message || '')) {
+        showToast("You still own groups — list refreshed", "err");
+        const fresh = await loadDeletionPreflight(userId);
+        if (!fresh.error) setDeletionPreflight(fresh);
+        return;
+      }
+      showToast("Couldn't delete account — try again", "err");
+      return;
+    }
+    // Success. signOut() clears the supabase-js session; reload tears
+    // down any zombie React state referring to a now-deleted userId.
+    await signOut();
+    window.location.reload();
   };
 
   // Load events from Supabase. Supabase is authoritative — remote always wins.
@@ -5230,6 +5290,117 @@ export default function App({ userId, profile }) {
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* Delete account — Supabase-side destruction with type-to-confirm */}
+            <div className="card" style={{ marginBottom:20, padding:0 }}>
+              {!confirmDeleteAccount ? (
+                <div onClick={expandDeleteAccount}
+                  style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 16px", cursor:"pointer" }}>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:"0.875rem", fontWeight:600, color:"#f87171" }}>Delete account</div>
+                    <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:2 }}>
+                      Permanently remove your profile, events, and friendships from the server
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", width:16, height:16, color:"#f87171", flexShrink:0 }}>{Icon.chevR}</div>
+                </div>
+              ) : deletionPreflight === 'loading' ? (
+                <div style={{ padding:14, background:"rgba(248,113,113,0.08)" }}>
+                  <div style={{ fontSize:"0.75rem", color:"var(--muted)", padding:"8px 4px" }}>Loading…</div>
+                </div>
+              ) : deletionPreflight === 'error' ? (
+                <div style={{ padding:14, background:"rgba(248,113,113,0.08)" }}>
+                  <div style={{ fontSize:"0.75rem", color:"#fca5a5", marginBottom:10 }}>
+                    Couldn't load deletion details — try again.
+                  </div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button onClick={collapseDeleteAccount} className="btn btn-secondary" style={{ flex:1 }}>Cancel</button>
+                    <button onClick={expandDeleteAccount}
+                      style={{ flex:1, padding:"10px", borderRadius:8, background:"#b91c1c",
+                        border:"none", fontSize:"0.8125rem", fontWeight:700, color:"#fff",
+                        cursor:"pointer", fontFamily:"var(--font)" }}>
+                      Retry
+                    </button>
+                  </div>
+                </div>
+              ) : deletionPreflight && deletionPreflight.ownedGroups.length > 0 ? (
+                <div style={{ padding:14, background:"rgba(248,113,113,0.08)" }}>
+                  <div style={{ fontSize:"0.875rem", fontWeight:700, color:"#fca5a5", marginBottom:8 }}>
+                    You still own these groups:
+                  </div>
+                  <div style={{ marginBottom:10 }}>
+                    {deletionPreflight.ownedGroups.map(g => (
+                      <div key={g.id} onClick={() => handleOwnedGroupClick(g)}
+                        style={{ display:"flex", alignItems:"center", gap:8,
+                          padding:"10px 12px", marginBottom:6, cursor:"pointer",
+                          background:"rgba(248,113,113,0.06)", borderRadius:8,
+                          border:"1px solid rgba(248,113,113,0.2)" }}>
+                        <div style={{ flex:1, fontSize:"0.8125rem", color:"var(--text)" }}>{g.name}</div>
+                        <div style={{ fontSize:"0.6875rem", fontWeight:600, color:"var(--accent2)" }}>Edit →</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", lineHeight:1.5, marginBottom:12 }}>
+                    Transfer ownership or delete each before you can delete your account.
+                  </div>
+                  <button onClick={collapseDeleteAccount} className="btn btn-secondary" style={{ width:"100%" }}>Cancel</button>
+                </div>
+              ) : deletionPreflight ? (() => {
+                const handleNormalized = (userProfile.handle || '').replace(/^@+/, '').toLowerCase();
+                const inputNormalized  = deleteAccountInput.replace(/^@+/, '').toLowerCase();
+                const canDelete = handleNormalized.length > 0 && inputNormalized === handleNormalized;
+                if (!handleNormalized) {
+                  return (
+                    <div style={{ padding:14, background:"rgba(248,113,113,0.08)" }}>
+                      <div style={{ fontSize:"0.75rem", color:"#fca5a5", marginBottom:10, lineHeight:1.5 }}>
+                        Couldn't load your handle — try refreshing the page and signing in again before deleting.
+                      </div>
+                      <button onClick={collapseDeleteAccount} className="btn btn-secondary" style={{ width:"100%" }}>Cancel</button>
+                    </div>
+                  );
+                }
+                return (
+                  <div style={{ padding:14, background:"rgba(248,113,113,0.08)" }}>
+                    <div style={{ fontSize:"0.875rem", fontWeight:700, color:"#fca5a5", marginBottom:6 }}>
+                      Delete account?
+                    </div>
+                    <div style={{ fontSize:"0.75rem", color:"var(--text)", lineHeight:1.7, marginBottom:8,
+                      paddingLeft:8, borderLeft:"2px solid rgba(248,113,113,0.3)" }}>
+                      Permanent. Removes:<br/>
+                      • Your profile and avatar<br/>
+                      • <strong>{deletionPreflight.eventCount}</strong> event{deletionPreflight.eventCount === 1 ? "" : "s"}<br/>
+                      • <strong>{deletionPreflight.friendshipCount}</strong> friendship{deletionPreflight.friendshipCount === 1 ? "" : "s"} and requests<br/>
+                      • All your group memberships<br/>
+                      • Visibility you've granted to others
+                    </div>
+                    <div style={{ fontSize:"0.6875rem", color:"var(--muted)", lineHeight:1.5, marginBottom:12 }}>
+                      Major events and shifts on this device aren't deleted — they're not on the server yet. Use "Reset app" to clear local data.
+                    </div>
+                    <div style={{ fontSize:"0.6875rem", fontWeight:600, color:"#fca5a5", marginBottom:6 }}>
+                      Type <strong style={{ color:"var(--text)", fontFamily:"var(--mono)" }}>@{handleNormalized}</strong> to confirm
+                    </div>
+                    <input value={deleteAccountInput} onChange={e => setDeleteAccountInput(e.target.value)}
+                      placeholder={`Type @${handleNormalized} here`}
+                      style={{ width:"100%", boxSizing:"border-box",
+                        background:"rgba(0,0,0,0.3)", border:"1px solid rgba(248,113,113,0.3)",
+                        borderRadius:8, padding:"10px 12px", color:"var(--text)",
+                        fontSize:"0.875rem", fontFamily:"var(--mono)", outline:"none", marginBottom:12 }} />
+                    <div style={{ display:"flex", gap:8 }}>
+                      <button onClick={collapseDeleteAccount} className="btn btn-secondary" style={{ flex:1 }}>Cancel</button>
+                      <button onClick={doDeleteAccount} disabled={!canDelete}
+                        style={{ flex:1, padding:"10px", borderRadius:8,
+                          background: canDelete ? "#b91c1c" : "rgba(185,28,28,0.25)",
+                          border:"none", fontSize:"0.8125rem", fontWeight:700,
+                          color: canDelete ? "#fff" : "var(--muted)",
+                          cursor: canDelete ? "pointer" : "not-allowed",
+                          fontFamily:"var(--font)" }}>
+                        Delete forever
+                      </button>
+                    </div>
+                  </div>
+                );
+              })() : null}
             </div>
 
           </div>
