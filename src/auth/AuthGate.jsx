@@ -118,7 +118,6 @@ export default function AuthGate({ children }) {
     if (!currentSession) return;
     setFetchError(null);
     const userId = currentSession.user.id;
-    console.log('[auth] loadProfile start', userId);
 
     // Wire up an AbortController for this attempt. The watchdog calls abort()
     // if we sit in 'loading' for 8s, surfacing an error instead of leaving
@@ -161,7 +160,6 @@ export default function AuthGate({ children }) {
       return;
     }
     const next = data.handle_is_placeholder ? 'welcome' : 'app';
-    console.log('[auth] loadProfile done →', next);
     setProfile(data);
     setStatus(next);
   }, []);
@@ -170,7 +168,6 @@ export default function AuthGate({ children }) {
     // A single subscription handles INITIAL_SESSION (fires on mount with
     // restored session or null), SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED.
     const unsub = subscribeToAuth(async (event, newSession) => {
-      console.log('[auth] event:', event, 'has session:', !!newSession);
       if (event === 'TOKEN_REFRESHED') {
         setSession(newSession);
         return;
@@ -214,7 +211,6 @@ export default function AuthGate({ children }) {
         loadStateRef.current.userId === userId &&
         loadStateRef.current.phase !== 'idle'
       ) {
-        console.log('[auth] dedup', event, 'for', userId);
         setSession(newSession);
         return;
       }
@@ -266,7 +262,7 @@ export default function AuthGate({ children }) {
     // consumer effect, which surfaces an explicit "expired link" error on
     // failure). The generic watchdog isn't needed here and was causing a
     // brief ErrorScreen flash before recoveryMode && session could render
-    // the reset form on slow networks. See HANDOFF bug #5.
+    // the reset form on slow networks.
     if (recoveryMode) return;
     const timer = setTimeout(() => {
       console.warn('[auth] watchdog fired — stuck in loading for 8s');
