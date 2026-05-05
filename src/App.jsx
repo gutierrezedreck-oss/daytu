@@ -360,7 +360,7 @@ const visibilityIcon = (v) => {
   if (v === "people") return <span style={{...s, color:"#93c5fd"}} title="People"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>;
   return null;
 };
-const visibilityLabel = (v) => ({ private:"Only me", friends:"Friends", groups:"Groups", people:"People", inherit:"Calendar default" }[v] || v);
+const visibilityLabel = (v) => ({ private:"Only me", friends:"All friends", groups:"Groups", people:"Specific friends", inherit:"Calendar default" }[v] || v);
 const reminderLabel = (r) => ({ "0":"At event time", "10":"10 min before", "15":"15 min before", "30":"30 min before", "60":"1 hour before", "1440":"1 day before", "none":"No reminder" }[r] || "No reminder");
 
 const Icon = {
@@ -7249,7 +7249,7 @@ function NewEventSheet({ existing, calendars, groups, friends=[], allEvents=[], 
                 <div style={{ marginBottom:8 }}>
                   <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Visibility</div>
                   <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
-                    {[{v:"private",l:"Only me"},{v:"friends",l:"Friends"},{v:"groups",l:"Groups"},{v:"people",l:"People"}].map(opt=>(
+                    {[{v:"private",l:"Only me"},{v:"friends",l:"All friends"},{v:"groups",l:"Groups"},{v:"people",l:"Specific friends"}].map(opt=>(
                       <div key={opt.v} className={"chip"+(visibility===opt.v?" active":"")} onClick={()=>setVisibility(opt.v)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{opt.l}</div>
                     ))}
                   </div>
@@ -8278,7 +8278,7 @@ function MajorEventSheet({ existing, defaultDate, groups=[], friends=[], customC
             <div style={{ marginBottom:10 }}>
               <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Who can see this?</div>
               <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
-                {[{v:"private",l:"Only me"},{v:"friends",l:"Friends"},{v:"groups",l:"Groups"},{v:"people",l:"People"}].map(opt=>(
+                {[{v:"private",l:"Only me"},{v:"friends",l:"All friends"},{v:"groups",l:"Groups"},{v:"people",l:"Specific friends"}].map(opt=>(
                   <div key={opt.v} className={"chip"+(visibility===opt.v?" active":"")}
                     onClick={()=>setVisibility(opt.v)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{opt.l}</div>
                 ))}
