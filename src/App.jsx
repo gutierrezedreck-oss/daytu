@@ -734,7 +734,7 @@ export default function App({ userId, profile }) {
   const [weekLayout, setWeekLayout] = useState(() => _ls?.weekLayout ?? "columns");
   const [weekAnchor, setWeekAnchor] = useState(() => { const d = new Date(TODAY); d.setDate(d.getDate() - d.getDay()); return d; });
   const [calShiftFilter, setCalShiftFilter] = useState(null);
-  const [shiftOverrides, setShiftOverrides] = useState(new Set());
+  const [shiftOverrides, setShiftOverrides] = useState(() => new Set(_ls?.shiftOverrides ?? []));
   // Per-date time overrides for individual shifts, e.g. "half day this Thursday".
   // Keyed by `${shiftId}:${y}-${m}-${d}`, value `{ start: "HH:MM", end: "HH:MM" }`.
   const [shiftTimeOverrides, setShiftTimeOverrides] = useState(() => _ls?.shiftTimeOverrides ?? {});
@@ -1559,6 +1559,7 @@ export default function App({ userId, profile }) {
         hiddenCalendars:  [...hiddenCalendars],
         hiddenGroups:     [...hiddenGroups],
         holidayCountries: [...holidayCountries],
+        shiftOverrides:   [...shiftOverrides],
         dayNotes,
         homeOrder,
         themeMode, weekLayout, textSize, highContrast, viewMode, mapProvider, recentSearches,
@@ -1570,7 +1571,7 @@ export default function App({ userId, profile }) {
   }, [calendars, groups, groupMembers, shifts, majorEvents, friends,
       activityFeed, feedSeenAt, onboardingActive, onboardingCompletedAt,
       customColorRecents, customColorFavorites,
-      pinnedEvents, dismissedImportantEvents, hiddenCalendars, hiddenGroups, holidayCountries,
+      pinnedEvents, dismissedImportantEvents, hiddenCalendars, hiddenGroups, holidayCountries, shiftOverrides,
       dayNotes, homeOrder, themeMode, weekLayout, textSize, highContrast, viewMode, mapProvider, recentSearches, userProfile, shiftTimeOverrides, shiftNoticeDismissed, timeFormat, dismissedPlaceholders]);
   const openNewCalendar  = () => { setActiveCalendar(null); setSheet("editCalendar"); };
   const openEditCalendar = (cal) => { setActiveCalendar(cal); setSheet("editCalendar"); };
