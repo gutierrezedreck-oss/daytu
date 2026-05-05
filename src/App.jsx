@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback, useRef } from "react";
 import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner, diffAndWriteShares } from "./lib/events.js";
-import { loadMajorEventsFromSupabase, migrateLocalMajorEventsToSupabase, insertMajorEvent, updateMajorEventRow, deleteMajorEventRow } from "./lib/major_events.js";
+import { loadMajorEventsFromSupabase, migrateLocalMajorEventsToSupabase, insertMajorEvent, updateMajorEventRow, deleteMajorEventRow, diffAndWriteMajorEventShares } from "./lib/major_events.js";
 import { uploadAvatar } from "./lib/avatars.js";
 import {
   loadGroupsForViewer,
@@ -1583,11 +1583,22 @@ export default function App({ userId, profile }) {
     const copy = { ...me, id: newId, title: me.title + " (copy)" };
     setMajorEvents(prev => [...prev, copy]);
     closeSheet();
-    insertMajorEvent(copy, userId).then(({ error }) => {
+    insertMajorEvent(copy, userId).then(async ({ error }) => {
       if (error) {
         console.warn("[major_events] duplicate failed", error);
         setMajorEvents(prev => prev.filter(x => x.id !== newId));
         showToast("Couldn't duplicate — reverted", "err");
+        return;
+      }
+      const { error: shareErr } = await diffAndWriteMajorEventShares(
+        newId, [], [], copy.groupIds || [], copy.userIds || []
+      );
+      if (shareErr) {
+        console.warn("[major_events] share duplicate failed", shareErr);
+        setMajorEvents(prev => prev.map(x =>
+          x.id === newId ? { ...x, groupIds: [], userIds: [] } : x
+        ));
+        showToast("Major event saved — sharing didn't apply", "err");
       }
     });
   };
@@ -1994,11 +2005,22 @@ export default function App({ userId, profile }) {
     (saved.groupIds||[]).forEach(gid => addActivity(gid, "added", saved.title, startDate));
     closeSheet();
     showToast("Major event created");
-    insertMajorEvent(saved, userId).then(({ error }) => {
+    insertMajorEvent(saved, userId).then(async ({ error }) => {
       if (error) {
         console.warn("[major_events] insert failed", error);
         setMajorEvents(prev => prev.filter(x => x.id !== newId));
         showToast("Couldn't save — reverted", "err");
+        return;
+      }
+      const { error: shareErr } = await diffAndWriteMajorEventShares(
+        newId, [], [], saved.groupIds || [], saved.userIds || []
+      );
+      if (shareErr) {
+        console.warn("[major_events] share insert failed", shareErr);
+        setMajorEvents(prev => prev.map(x =>
+          x.id === newId ? { ...x, groupIds: [], userIds: [] } : x
+        ));
+        showToast("Major event saved — sharing didn't apply", "err");
       }
     });
   };
@@ -2011,11 +2033,24 @@ export default function App({ userId, profile }) {
     closeSheet();
     showToast("Major event updated");
     if (prior) {
-      updateMajorEventRow(me.id, me, userId).then(({ error }) => {
+      updateMajorEventRow(me.id, me, userId).then(async ({ error }) => {
         if (error) {
           console.warn("[major_events] update failed", error);
           setMajorEvents(prev => prev.map(x => x.id === me.id ? prior : x));
           showToast("Couldn't save — reverted", "err");
+          return;
+        }
+        const oldG = prior.groupIds || [];
+        const oldU = prior.userIds  || [];
+        const newG = me.groupIds || [];
+        const newU = me.userIds  || [];
+        const { error: shareErr } = await diffAndWriteMajorEventShares(me.id, oldG, oldU, newG, newU);
+        if (shareErr) {
+          console.warn("[major_events] share update failed", shareErr);
+          setMajorEvents(prev => prev.map(x =>
+            x.id === me.id ? { ...x, groupIds: oldG, userIds: oldU } : x
+          ));
+          showToast("Major event saved — share changes reverted", "err");
         }
       });
     }
