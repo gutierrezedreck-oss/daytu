@@ -3,6 +3,7 @@ import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner, diffAndWriteShares } from "./lib/events.js";
 import { loadMajorEventsFromSupabase, migrateLocalMajorEventsToSupabase, insertMajorEvent, updateMajorEventRow, deleteMajorEventRow, diffAndWriteMajorEventShares } from "./lib/major_events.js";
+import { loadShiftsFromSupabase } from "./lib/shifts.js";
 import { uploadAvatar } from "./lib/avatars.js";
 import {
   loadGroupsForViewer,
@@ -1272,6 +1273,29 @@ export default function App({ userId, profile }) {
     return { remoteMajorEventsCount: remote.length, migratedFlag: !!migratedFlag };
   }, [userId]);
 
+  // Phase 1 read-side for shifts. Silent swap-in mirroring major_events.
+  // Falls back to local when remote is empty AND the migration flag is
+  // unset. Loads shifts + share-targets + day-overrides + day-time-overrides
+  // in parallel; override loaders return rows for owned AND shared-with-viewer
+  // shifts (RLS permissive via can_see_shift).
+  const syncShiftsFromSupabase = useCallback(async () => {
+    if (!userId) return;
+    const { shifts: remote, shiftOverrides: remoteOverrides,
+            shiftTimeOverrides: remoteTimeOverrides, error }
+      = await loadShiftsFromSupabase();
+    if (error) {
+      console.warn("[shifts] load failed", error);
+      return;
+    }
+    const liveLs = lsLoad();
+    const migratedFlag = liveLs?.shifts_migrated_to_supabase;
+    if (remote.length > 0 || migratedFlag) {
+      setShifts(remote);
+      setShiftOverrides(remoteOverrides);
+      setShiftTimeOverrides(remoteTimeOverrides);
+    }
+  }, [userId]);
+
   // Crash safety: pre-stamp UUIDs and persist the remap to localStorage
   // BEFORE the upsert. If the page crashes mid-upsert, the next mount
   // reuses the same UUIDs (upsert with onConflict 'id' dedupes).
@@ -1457,6 +1481,8 @@ export default function App({ userId, profile }) {
   React.useEffect(() => { migrateEventsIfNeeded(); }, [migrateEventsIfNeeded]);
 
   React.useEffect(() => { migrateMajorEventsIfNeeded(); }, [migrateMajorEventsIfNeeded]);
+
+  React.useEffect(() => { syncShiftsFromSupabase(); }, [syncShiftsFromSupabase]);
 
   // Load groups + memberships from Supabase. Server-authoritative; pre-existing
   // local seed/demo data is overwritten on first successful sync.
