@@ -6027,8 +6027,8 @@ export default function App({ userId, profile }) {
             }}
           />
         )}
-        {sheet === "newShift" && <ShiftSheet onPreview={setPreviewShift} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addShift} onClose={() => { setPreviewShift(null); closeSheet(); }} />}
-        {sheet === "editShift" && activeShift && <ShiftSheet existing={activeShift} onPreview={setPreviewShift} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateShift} onDelete={deleteShift} onClose={() => { setPreviewShift(null); closeSheet(); }} />}
+        {sheet === "newShift" && <ShiftSheet groups={groups} friends={friends} onPreview={setPreviewShift} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addShift} onClose={() => { setPreviewShift(null); closeSheet(); }} />}
+        {sheet === "editShift" && activeShift && <ShiftSheet existing={activeShift} groups={groups} friends={friends} onPreview={setPreviewShift} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateShift} onDelete={deleteShift} onDuplicate={duplicateShift} onClose={() => { setPreviewShift(null); closeSheet(); }} />}
         {sheet === "guide" && <GuideSheet onClose={closeSheet} onStartTour={() => { closeSheet(); setTab("home"); setTourOpen(true); }} />}
       </div>
     </>
@@ -9040,7 +9040,7 @@ const PATTERN_TEMPLATES = [
   },
 ];
 
-function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPreview }) {
+function ShiftSheet({ existing, groups=[], friends=[], customColors, onSave, onDelete, onDuplicate, onClose, onPreview }) {
   const isEdit = !!existing;
   // Template picker: shown ONLY for NEW shifts (not edit mode), and only until a template is chosen
   const [showTemplates, setShowTemplates] = useState(!isEdit);
@@ -9055,6 +9055,11 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
   // Explicit "ends next day" lets a user say 1 AM → 5 AM crosses midnight,
   // which auto-detect (end ≤ start) can't express on its own.
   const [shiftEndsNextDay, setShiftEndsNextDay] = useState(existing?.config?.shiftTime?.endsNextDay??false);
+  const [visibility, setVisibility] = useState(existing?.visibility==="inherit" ? "private" : (existing?.visibility ?? "private"));
+  const [selGroups, setSelGroups] = useState(existing?.groupIds ?? []);
+  const [selUsers, setSelUsers]   = useState(existing?.userIds  ?? []);
+  const toggleGroup = id => setSelGroups(prev => prev.includes(id) ? prev.filter(g=>g!==id) : [...prev, id]);
+  const toggleUser  = id => setSelUsers (prev => prev.includes(id) ? prev.filter(u=>u!==id) : [...prev, id]);
   // Apply a template preset — fills in name, type, sequence/days
   const applyTemplate = (tpl) => {
     if (tpl.id === "blank") {
@@ -9101,7 +9106,12 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
     const parseLocal = s => { const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d); };
     const shiftTime={enabled:shiftEnabled,start:shiftStart,end:shiftEnd,endsNextDay:shiftEndsNextDay};
     const config=type==="rotation"?{sequence,startDate:parseLocal(cycleStart).toISOString(),shiftTime}:type==="monthly"?{months:{},shiftTime}:{days:weekDays,shiftTime};
-    const saved={name,type,color,config};
+    const saved={
+      name, type, color, config,
+      visibility,
+      groupIds: visibility === 'groups' ? selGroups : [],
+      userIds:  visibility === 'people' ? selUsers  : [],
+    };
     if (isEdit) saved.id=existing.id;
     onSave(saved);
   };
@@ -9287,6 +9297,59 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
             Shift duration: {shiftMetrics.durationHours} hours ({formatTime12h(shiftStart)} &ndash; {formatTime12h(shiftEnd)})
           </div>
         )}
+        {/* Visibility */}
+        {FEATURES.sharing && (() => {
+          const accepted = friends.filter(f => f.status === 'accepted');
+          return (
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Who can see this?</div>
+              <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
+                {[{v:"private",l:"Only me"},{v:"friends",l:"All friends"},{v:"groups",l:"Groups"},{v:"people",l:"Specific friends"}].map(opt=>(
+                  <div key={opt.v} className={"chip"+(visibility===opt.v?" active":"")}
+                    onClick={()=>setVisibility(opt.v)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{opt.l}</div>
+                ))}
+              </div>
+              {visibility==="groups" && (
+                groups.length === 0 ? (
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6, lineHeight:1.5 }}>You haven't created any groups yet — head to the Groups screen to add one.</div>
+                ) : (
+                  <>
+                    <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
+                      {groups.map(g => (
+                        <div key={g.id} className={"chip"+(selGroups.includes(g.id)?" active":"")}
+                          onClick={()=>toggleGroup(g.id)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{g.name}</div>
+                      ))}
+                    </div>
+                    {selGroups.length === 0 && (
+                      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:5, lineHeight:1.5 }}>Pick at least one group, or this shift stays private to you.</div>
+                    )}
+                  </>
+                )
+              )}
+              {visibility==="people" && (
+                accepted.length === 0 ? (
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6, lineHeight:1.5 }}>You haven't added any friends yet — head to the Add tab.</div>
+                ) : (
+                  <>
+                    <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
+                      {accepted.map(f => (
+                        <div key={f.id} className={"chip"+(selUsers.includes(f.userId)?" active":"")}
+                          onClick={() => toggleUser(f.userId)}
+                          style={{ fontSize:"0.6875rem", padding:"3px 8px", display:"flex", alignItems:"center", gap:5 }}>
+                          <MemberAvatar url={f.avatar} name={f.name} size={16} />
+                          {f.name}
+                        </div>
+                      ))}
+                    </div>
+                    {selUsers.length === 0 && (
+                      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:5, lineHeight:1.5 }}>Pick at least one person, or this shift stays private to you.</div>
+                    )}
+                  </>
+                )
+              )}
+            </div>
+          );
+        })()}
         <div style={{
           position:"sticky", bottom:-40,
           marginLeft:-20, marginRight:-20, marginTop:12, marginBottom:-40,
@@ -9296,7 +9359,18 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
           zIndex:2,
         }}>
           <button className="btn btn-primary" onClick={handleSave} style={{ opacity:name.trim()?1:0.5 }}>{isEdit?"Save Changes":"Save Shift"}</button>
-          {isEdit&&onDelete&&<button className="btn btn-secondary" onClick={()=>onDelete(existing.id)} style={{ width:"100%", marginTop:8, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>Delete Shift</button>}
+          {isEdit && (onDuplicate || onDelete) && (
+            <div style={{ display:"flex", gap:8, marginTop:8 }}>
+              {onDuplicate && (
+                <button className="btn btn-secondary" style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }} onClick={() => onDuplicate(existing)}>
+                  <span style={{ display:"flex", width:13, height:13 }}>{Icon.copy}</span> Duplicate
+                </button>
+              )}
+              {onDelete && (
+                <button className="btn btn-secondary" style={{ flex:1, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }} onClick={() => onDelete(existing.id)}>Delete</button>
+              )}
+            </div>
+          )}
         </div>
           </>
         )}
