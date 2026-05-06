@@ -3,7 +3,7 @@ import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner, diffAndWriteShares } from "./lib/events.js";
 import { loadMajorEventsFromSupabase, migrateLocalMajorEventsToSupabase, insertMajorEvent, updateMajorEventRow, deleteMajorEventRow, diffAndWriteMajorEventShares } from "./lib/major_events.js";
-import { loadShiftsFromSupabase, migrateLocalShiftsToSupabase, remapShiftOverridesKeys, remapShiftTimeOverridesKeys, insertShift, updateShiftRow, deleteShiftRow, deleteAllShiftsForOwner, reorderShifts, upsertShiftOverride, deleteShiftOverride, upsertShiftTimeOverride, deleteShiftTimeOverride } from "./lib/shifts.js";
+import { loadShiftsFromSupabase, migrateLocalShiftsToSupabase, remapShiftOverridesKeys, remapShiftTimeOverridesKeys, insertShift, updateShiftRow, deleteShiftRow, deleteAllShiftsForOwner, reorderShifts, upsertShiftOverride, deleteShiftOverride, upsertShiftTimeOverride, deleteShiftTimeOverride, diffAndWriteShiftShares } from "./lib/shifts.js";
 import { uploadAvatar } from "./lib/avatars.js";
 import {
   loadGroupsForViewer,
@@ -2338,11 +2338,22 @@ export default function App({ userId, profile }) {
     setShifts(prev => [...prev, saved]);
     closeSheet();
     showToast("Shift created");
-    insertShift(saved, userId).then(({ error }) => {
+    insertShift(saved, userId).then(async ({ error }) => {
       if (error) {
         console.warn("[shifts] insert failed", error);
         setShifts(prev => prev.filter(x => x.id !== newId));
         showToast("Couldn't save — reverted", "err");
+        return;
+      }
+      const { error: shareErr } = await diffAndWriteShiftShares(
+        newId, [], [], saved.groupIds || [], saved.userIds || []
+      );
+      if (shareErr) {
+        console.warn("[shifts] share insert failed", shareErr);
+        setShifts(prev => prev.map(x =>
+          x.id === newId ? { ...x, groupIds: [], userIds: [] } : x
+        ));
+        showToast("Shift saved — sharing didn't apply", "err");
       }
     });
   };
@@ -2353,11 +2364,24 @@ export default function App({ userId, profile }) {
     closeSheet();
     showToast("Shift updated");
     if (prior) {
-      updateShiftRow(s.id, s, userId).then(({ error }) => {
+      updateShiftRow(s.id, s, userId).then(async ({ error }) => {
         if (error) {
           console.warn("[shifts] update failed", error);
           setShifts(prev => prev.map(x => x.id === s.id ? prior : x));
           showToast("Couldn't save — reverted", "err");
+          return;
+        }
+        const oldG = prior.groupIds || [];
+        const oldU = prior.userIds  || [];
+        const newG = s.groupIds || [];
+        const newU = s.userIds  || [];
+        const { error: shareErr } = await diffAndWriteShiftShares(s.id, oldG, oldU, newG, newU);
+        if (shareErr) {
+          console.warn("[shifts] share update failed", shareErr);
+          setShifts(prev => prev.map(x =>
+            x.id === s.id ? { ...x, groupIds: oldG, userIds: oldU } : x
+          ));
+          showToast("Shift saved — share changes reverted", "err");
         }
       });
     }
@@ -2370,11 +2394,22 @@ export default function App({ userId, profile }) {
     setShifts(prev => [...prev, copy]);
     closeSheet();
     showToast("Shift duplicated");
-    insertShift(copy, userId).then(({ error }) => {
+    insertShift(copy, userId).then(async ({ error }) => {
       if (error) {
         console.warn("[shifts] duplicate failed", error);
         setShifts(prev => prev.filter(x => x.id !== newId));
         showToast("Couldn't duplicate — reverted", "err");
+        return;
+      }
+      const { error: shareErr } = await diffAndWriteShiftShares(
+        newId, [], [], copy.groupIds || [], copy.userIds || []
+      );
+      if (shareErr) {
+        console.warn("[shifts] share duplicate failed", shareErr);
+        setShifts(prev => prev.map(x =>
+          x.id === newId ? { ...x, groupIds: [], userIds: [] } : x
+        ));
+        showToast("Shift saved — sharing didn't apply", "err");
       }
     });
   };

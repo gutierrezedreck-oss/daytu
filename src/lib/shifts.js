@@ -427,3 +427,58 @@ export async function deleteShiftTimeOverride(shiftId, date) {
   return supabase.from('shift_day_time_overrides')
     .delete().eq('shift_id', shiftId).eq('date', dateToIso(date));
 }
+
+// Diff old/new share targets and write the four CRUD ops in parallel.
+// Returns the first error from the batch (Promise.allSettled), or null
+// on success / no-op.
+//
+// INSERT batches are filtered to UUID-only ids — belt-and-suspenders
+// against any future stale-state path where a non-UUID local id (e.g.
+// seed "g1") leaks into the picker. DELETE batches need no such filter;
+// matching on a non-existent id is a server-side no-op.
+//
+// Caller is App.jsx's addShift / duplicateShift / updateShift, which
+// fires this AFTER the shifts row write succeeds. Partial-failure
+// handling is the caller's concern; this helper just surfaces what
+// went wrong on the share write.
+export async function diffAndWriteShiftShares(
+  shiftId, oldGroupIds, oldUserIds, newGroupIds, newUserIds
+) {
+  const isUuid = (s) => typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+
+  const groupAdds    = newGroupIds.filter(id => !oldGroupIds.includes(id) && isUuid(id));
+  const groupRemoves = oldGroupIds.filter(id => !newGroupIds.includes(id));
+  const userAdds     = newUserIds.filter(id => !oldUserIds.includes(id) && isUuid(id));
+  const userRemoves  = oldUserIds.filter(id => !newUserIds.includes(id));
+
+  // No-op: nothing changed (or only non-UUID adds got stripped).
+  if (!groupAdds.length && !groupRemoves.length && !userAdds.length && !userRemoves.length) {
+    return { error: null };
+  }
+
+  const ops = [];
+  if (groupAdds.length) {
+    ops.push(supabase.from('shift_group_shares').insert(
+      groupAdds.map((group_id) => ({ shift_id: shiftId, group_id }))
+    ));
+  }
+  if (groupRemoves.length) {
+    ops.push(supabase.from('shift_group_shares')
+      .delete().eq('shift_id', shiftId).in('group_id', groupRemoves));
+  }
+  if (userAdds.length) {
+    ops.push(supabase.from('shift_user_shares').insert(
+      userAdds.map((user_id) => ({ shift_id: shiftId, user_id }))
+    ));
+  }
+  if (userRemoves.length) {
+    ops.push(supabase.from('shift_user_shares')
+      .delete().eq('shift_id', shiftId).in('user_id', userRemoves));
+  }
+
+  const results = await Promise.allSettled(ops);
+  const failed = results.find(r => r.status === 'rejected' || r.value?.error);
+  if (failed) return { error: failed.reason ?? failed.value.error };
+  return { error: null };
+}
