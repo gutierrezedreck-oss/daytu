@@ -25,6 +25,54 @@ function isoToClientKey(shiftId, isoDate) {
   return `${shiftId}:${y}-${m - 1}-${d}`;
 }
 
+// Inverse of isoToClientKey's date formatting: client (y, m, d) where m is
+// 0-indexed, unpadded → server ISO YYYY-MM-DD (1-indexed, padded). Used by
+// the row builders during migration / Phase 3 writes.
+function ymdToIso(y, m, d) {
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+// Parses a shiftOverrides Set entry or shiftTimeOverrides map key.
+// Format: `<shiftId>:<y>-<m>-<d>` for kind='off', or
+// `extra:<shiftId>:<y>-<m>-<d>` for kind='extra'. Used by the row builders
+// and remap helpers below; module-internal because the key format is a
+// client implementation detail.
+function parseClientKey(key) {
+  const isExtra = key.startsWith('extra:');
+  const stripped = isExtra ? key.slice(6) : key;
+  const colonIdx = stripped.indexOf(':');
+  const shiftId = stripped.slice(0, colonIdx);
+  const [y, m, d] = stripped.slice(colonIdx + 1).split('-').map(Number);
+  return { shiftId, y, m, d, isExtra };
+}
+
+// Defensive boundary filter — never write a value that would fail the
+// shifts.visibility CHECK constraint. The picker UI should already
+// normalize 'inherit' (UI sentinel) to 'private' on save, but we
+// belt-and-suspenders here so any future caller — or stale localStorage
+// — can't trip the constraint. 'full_access' is a legacy chip retired
+// in the Sharing migration; map it to 'friends' (broadest DB-valid)
+// rather than dropping the user's intent on the floor.
+function normalizeVisibility(v) {
+  if (v === 'inherit')     return 'private';
+  if (v === 'full_access') return 'friends';
+  if (v === 'private' || v === 'friends' || v === 'groups' || v === 'people') return v;
+  return 'private';
+}
+
+export function shiftToRow(s, ownerId) {
+  return {
+    id: s.id,
+    owner_id: ownerId,
+    name: s.name ?? null,
+    type: s.type ?? null,
+    color: s.color || null,
+    priority: s.priority ?? null,
+    config: s.config || {},
+    visibility: normalizeVisibility(s.visibility),
+  };
+}
+
 export function rowToShift(row) {
   const s = {
     id: row.id,
@@ -173,4 +221,133 @@ export async function loadTimeOverridesForVisibleShifts() {
     });
   }
   return { timeOverridesByShift, error: null };
+}
+
+// Iterate the shiftOverrides Set, parse each composite key, remap the
+// localShiftId → uuid via shiftIdRemap, and emit { shift_id, date, kind }
+// rows ready for upsert. Orphan keys (referencing shifts not in the remap)
+// are skipped — FK would reject them anyway.
+export function shiftOverridesToRows(shiftOverrides, shiftIdRemap) {
+  const rows = [];
+  for (const key of shiftOverrides) {
+    const { shiftId: localId, y, m, d, isExtra } = parseClientKey(key);
+    const newShiftId = shiftIdRemap[localId];
+    if (!newShiftId) continue;
+    rows.push({
+      shift_id: newShiftId,
+      date: ymdToIso(y, m, d),
+      kind: isExtra ? 'extra' : 'off',
+    });
+  }
+  return rows;
+}
+
+// Iterate the shiftTimeOverrides object, parse each key, remap shiftId,
+// emit { shift_id, date, start_time, end_time } rows. Orphan keys skipped.
+// 'extra:' prefix shouldn't appear on time-override keys (only the on/off
+// Set uses that prefix); defensive skip if encountered.
+export function shiftTimeOverridesToRows(shiftTimeOverrides, shiftIdRemap) {
+  const rows = [];
+  for (const [key, value] of Object.entries(shiftTimeOverrides)) {
+    const { shiftId: localId, y, m, d, isExtra } = parseClientKey(key);
+    if (isExtra) continue;
+    const newShiftId = shiftIdRemap[localId];
+    if (!newShiftId) continue;
+    rows.push({
+      shift_id: newShiftId,
+      date: ymdToIso(y, m, d),
+      start_time: value.start,
+      end_time: value.end,
+    });
+  }
+  return rows;
+}
+
+// Walk the Set, swap each key's localShiftId portion for its UUID. Date
+// portion preserved as-is (still client format: 0-indexed month, unpadded).
+// Orphan keys (referencing shifts not in the remap) preserved as-is —
+// matches the events Phase 2 `?? id` pattern so cleanup is decoupled
+// from migration.
+export function remapShiftOverridesKeys(shiftOverrides, shiftIdRemap) {
+  const next = new Set();
+  for (const key of shiftOverrides) {
+    const { shiftId: localId, y, m, d, isExtra } = parseClientKey(key);
+    const newShiftId = shiftIdRemap[localId];
+    if (!newShiftId) {
+      next.add(key);
+      continue;
+    }
+    const newKey = `${newShiftId}:${y}-${m}-${d}`;
+    next.add(isExtra ? `extra:${newKey}` : newKey);
+  }
+  return next;
+}
+
+// Walk the object, swap each key's localShiftId portion for its UUID.
+// Values copied by reference — the {start, end} objects don't need cloning.
+// Orphan keys preserved as-is.
+export function remapShiftTimeOverridesKeys(shiftTimeOverrides, shiftIdRemap) {
+  const next = {};
+  for (const [key, value] of Object.entries(shiftTimeOverrides)) {
+    const { shiftId: localId, y, m, d } = parseClientKey(key);
+    const newShiftId = shiftIdRemap[localId];
+    if (!newShiftId) {
+      next[key] = value;
+      continue;
+    }
+    next[`${newShiftId}:${y}-${m}-${d}`] = value;
+  }
+  return next;
+}
+
+// One-time migration helper. Generates a UUID for each local shift, builds
+// a remap (oldStringId → uuid), and pushes three streams to Supabase:
+// shifts (sequential, must land first for FK), then shift_day_overrides +
+// shift_day_time_overrides in parallel (both reference shifts; independent
+// of each other).
+//
+// Returns { remap, error }. If error is non-null, the caller MUST NOT set
+// the migrated flag; we want the next load to retry. Pre-stamped UUIDs
+// reused via the persisted remap make retries idempotent — already-inserted
+// rows dedupe by their pre-assigned UUID (shifts) or composite PK
+// (shift_id, date) (override tables).
+export async function migrateLocalShiftsToSupabase(
+  localShifts, localShiftOverrides, localShiftTimeOverrides, ownerId
+) {
+  if (!localShifts?.length) return { remap: {}, error: null };
+  const isUuid = (s) =>
+    typeof s === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+  const remap = {};
+  const shiftRows = localShifts.map((s) => {
+    const newId = isUuid(s.id) ? s.id : crypto.randomUUID();
+    remap[s.id] = newId;
+    return shiftToRow({ ...s, id: newId }, ownerId);
+  });
+
+  // Step 1: shifts must land first — FK from override tables references shifts.id.
+  const { error: shiftsError } = await supabase
+    .from('shifts')
+    .upsert(shiftRows, { onConflict: 'id' });
+  if (shiftsError) return { remap, error: shiftsError };
+
+  // Step 2: override tables in parallel — both depend on shifts but not each other.
+  const overrideRows = shiftOverridesToRows(localShiftOverrides, remap);
+  const timeOverrideRows = shiftTimeOverridesToRows(localShiftTimeOverrides, remap);
+
+  const ops = [];
+  if (overrideRows.length) {
+    ops.push(supabase.from('shift_day_overrides')
+      .upsert(overrideRows, { onConflict: 'shift_id,date' }));
+  }
+  if (timeOverrideRows.length) {
+    ops.push(supabase.from('shift_day_time_overrides')
+      .upsert(timeOverrideRows, { onConflict: 'shift_id,date' }));
+  }
+  if (!ops.length) return { remap, error: null };
+
+  const results = await Promise.allSettled(ops);
+  const failed = results.find(r => r.status === 'rejected' || r.value?.error);
+  if (failed) return { remap, error: failed.reason ?? failed.value.error };
+  return { remap, error: null };
 }

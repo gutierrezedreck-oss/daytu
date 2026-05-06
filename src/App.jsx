@@ -3,7 +3,7 @@ import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner, diffAndWriteShares } from "./lib/events.js";
 import { loadMajorEventsFromSupabase, migrateLocalMajorEventsToSupabase, insertMajorEvent, updateMajorEventRow, deleteMajorEventRow, diffAndWriteMajorEventShares } from "./lib/major_events.js";
-import { loadShiftsFromSupabase } from "./lib/shifts.js";
+import { loadShiftsFromSupabase, migrateLocalShiftsToSupabase, remapShiftOverridesKeys, remapShiftTimeOverridesKeys } from "./lib/shifts.js";
 import { uploadAvatar } from "./lib/avatars.js";
 import {
   loadGroupsForViewer,
@@ -1294,6 +1294,7 @@ export default function App({ userId, profile }) {
       setShiftOverrides(remoteOverrides);
       setShiftTimeOverrides(remoteTimeOverrides);
     }
+    return { remoteShiftsCount: remote.length, migratedFlag: !!migratedFlag };
   }, [userId]);
 
   // Crash safety: pre-stamp UUIDs and persist the remap to localStorage
@@ -1353,6 +1354,85 @@ export default function App({ userId, profile }) {
 
     await syncMajorEventsFromSupabase();
   }, [userId, syncMajorEventsFromSupabase]);
+
+  // Phase 2 orchestrator for shifts. Mirrors migrateMajorEventsIfNeeded with
+  // an extra step: after the upsert succeeds, the in-memory shiftOverrides
+  // Set and shiftTimeOverrides map are remapped (their keys contain the OLD
+  // string shift id; UUIDs replace it). All persistence — flag, remap clear,
+  // remapped Sets — lands in one synchronous lsSave to close the 300ms
+  // persist-effect debounce window.
+  //
+  // Cross-device case: if remote already has shifts, we set the flag and
+  // return. The owner's local overrides on this device are silently
+  // discarded — same trade-off as major_events Phase 2.
+  const migrateShiftsIfNeeded = useCallback(async () => {
+    if (!userId) return;
+    const liveLs = lsLoad() || {};
+    if (liveLs.shifts_migrated_to_supabase) {
+      await syncShiftsFromSupabase();
+      return;
+    }
+
+    const syncResult = await syncShiftsFromSupabase();
+    if (!syncResult) return;
+
+    if (syncResult.remoteShiftsCount > 0) {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur,
+               shifts_migrated_to_supabase: true,
+               shifts_pending_migration_remap: undefined });
+      return;
+    }
+
+    const localShifts = liveLs.shifts ?? [];
+    if (localShifts.length === 0) {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur, shifts_migrated_to_supabase: true });
+      return;
+    }
+
+    const localShiftOverrides     = new Set(liveLs.shiftOverrides ?? []);
+    const localShiftTimeOverrides = liveLs.shiftTimeOverrides ?? {};
+
+    const persistedRemap = liveLs.shifts_pending_migration_remap || {};
+    const localRemap = {};
+    const stamped = localShifts.map((s) => {
+      const newId = persistedRemap[s.id] || crypto.randomUUID();
+      localRemap[s.id] = newId;
+      return { ...s, id: newId };
+    });
+    {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur, shifts_pending_migration_remap: localRemap });
+    }
+
+    const { error } = await migrateLocalShiftsToSupabase(
+      stamped, localShiftOverrides, localShiftTimeOverrides, userId
+    );
+    if (error) {
+      console.warn("[shifts] migration failed", error);
+      return; // do NOT set flag; remap stays persisted for next attempt
+    }
+
+    // Remap in-memory Set/map keys: localShiftId → UUID. Date portion preserved.
+    const remappedOverrides = remapShiftOverridesKeys(localShiftOverrides, localRemap);
+    const remappedTimeOverrides = remapShiftTimeOverridesKeys(localShiftTimeOverrides, localRemap);
+    setShiftOverrides(remappedOverrides);
+    setShiftTimeOverrides(remappedTimeOverrides);
+
+    {
+      const cur = lsLoad() || {};
+      lsSave({
+        ...cur,
+        shiftOverrides: [...remappedOverrides],
+        shiftTimeOverrides: remappedTimeOverrides,
+        shifts_migrated_to_supabase: true,
+        shifts_pending_migration_remap: undefined,
+      });
+    }
+
+    await syncShiftsFromSupabase();
+  }, [userId, syncShiftsFromSupabase]);
 
   // Refs mirror these states at render-commit granularity. Two consumers:
   //   - The migration callback captures a fresh snapshot for remap without
@@ -1482,7 +1562,7 @@ export default function App({ userId, profile }) {
 
   React.useEffect(() => { migrateMajorEventsIfNeeded(); }, [migrateMajorEventsIfNeeded]);
 
-  React.useEffect(() => { syncShiftsFromSupabase(); }, [syncShiftsFromSupabase]);
+  React.useEffect(() => { migrateShiftsIfNeeded(); }, [migrateShiftsIfNeeded]);
 
   // Load groups + memberships from Supabase. Server-authoritative; pre-existing
   // local seed/demo data is overwritten on first successful sync.
