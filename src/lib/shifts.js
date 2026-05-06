@@ -351,3 +351,79 @@ export async function migrateLocalShiftsToSupabase(
   if (failed) return { remap, error: failed.reason ?? failed.value.error };
   return { remap, error: null };
 }
+
+// dateToIso wraps ymdToIso for the common case where callers have a JS Date.
+function dateToIso(date) {
+  return ymdToIso(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+// ── Shift row CRUD ───────────────────────────────────────────────────────────
+
+export async function insertShift(s, ownerId) {
+  return supabase.from('shifts').insert(shiftToRow(s, ownerId));
+}
+
+export async function updateShiftRow(id, s, ownerId) {
+  // Strip immutable cols from the patch — RLS rejects owner_id changes; id is
+  // the lookup key, not part of the update payload.
+  const { id: _id, owner_id: _o, ...patch } = shiftToRow(s, ownerId);
+  return supabase.from('shifts').update(patch).eq('id', id);
+}
+
+export async function deleteShiftRow(id) {
+  // FK cascades: shift_day_overrides, shift_day_time_overrides,
+  // shift_group_shares, shift_user_shares all auto-cleanup.
+  return supabase.from('shifts').delete().eq('id', id);
+}
+
+export async function deleteAllShiftsForOwner(ownerId) {
+  // Wipes the user's shifts AND (via FK cascade) all their override and
+  // share-target rows. Used by reset paths.
+  return supabase.from('shifts').delete().eq('owner_id', ownerId);
+}
+
+// Bulk priority update for drag-to-reorder. Fires N parallel UPDATEs rather
+// than a single upsert — PostgREST upsert sends the full row payload, which
+// would clobber unrelated columns. Returns first error from the batch or null.
+export async function reorderShifts(rows) {
+  if (!rows.length) return { error: null };
+  const ops = rows.map(({ id, priority }) =>
+    supabase.from('shifts').update({ priority }).eq('id', id)
+  );
+  const results = await Promise.allSettled(ops);
+  const failed = results.find(r => r.status === 'rejected' || r.value?.error);
+  if (failed) return { error: failed.reason ?? failed.value.error };
+  return { error: null };
+}
+
+// ── Override row CRUD ────────────────────────────────────────────────────────
+
+export async function upsertShiftOverride(shiftId, date, kind) {
+  return supabase.from('shift_day_overrides')
+    .upsert({ shift_id: shiftId, date: dateToIso(date), kind },
+            { onConflict: 'shift_id,date' });
+}
+
+// Filter by kind defensively — if local Set state diverged from server (rare
+// edge case, e.g. concurrent toggle from another tab landed a different kind),
+// don't over-delete the wrong-kind row. PK guarantees at most one row per
+// (shift_id, date), so the filter is belt-and-suspenders.
+export async function deleteShiftOverride(shiftId, date, kind) {
+  return supabase.from('shift_day_overrides')
+    .delete().eq('shift_id', shiftId).eq('date', dateToIso(date)).eq('kind', kind);
+}
+
+export async function upsertShiftTimeOverride(shiftId, date, startTime, endTime) {
+  return supabase.from('shift_day_time_overrides')
+    .upsert({
+      shift_id: shiftId,
+      date: dateToIso(date),
+      start_time: startTime,
+      end_time: endTime,
+    }, { onConflict: 'shift_id,date' });
+}
+
+export async function deleteShiftTimeOverride(shiftId, date) {
+  return supabase.from('shift_day_time_overrides')
+    .delete().eq('shift_id', shiftId).eq('date', dateToIso(date));
+}

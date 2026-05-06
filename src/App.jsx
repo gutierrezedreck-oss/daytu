@@ -3,7 +3,7 @@ import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner, diffAndWriteShares } from "./lib/events.js";
 import { loadMajorEventsFromSupabase, migrateLocalMajorEventsToSupabase, insertMajorEvent, updateMajorEventRow, deleteMajorEventRow, diffAndWriteMajorEventShares } from "./lib/major_events.js";
-import { loadShiftsFromSupabase, migrateLocalShiftsToSupabase, remapShiftOverridesKeys, remapShiftTimeOverridesKeys } from "./lib/shifts.js";
+import { loadShiftsFromSupabase, migrateLocalShiftsToSupabase, remapShiftOverridesKeys, remapShiftTimeOverridesKeys, insertShift, updateShiftRow, deleteShiftRow, deleteAllShiftsForOwner, reorderShifts, upsertShiftOverride, deleteShiftOverride, upsertShiftTimeOverride, deleteShiftTimeOverride } from "./lib/shifts.js";
 import { uploadAvatar } from "./lib/avatars.js";
 import {
   loadGroupsForViewer,
@@ -1028,9 +1028,24 @@ export default function App({ userId, profile }) {
   const now = nowClock;
 
   const overrideKey = (shiftId, date) => shiftId + ":" + date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
-  const toggleShiftOverride = (shiftId, date) => {
-    const key = overrideKey(shiftId, date);
+  const toggleShiftOverride = (shiftIdOrPrefixed, date) => {
+    if (!userId) return;
+    const isExtra = shiftIdOrPrefixed.startsWith('extra:');
+    const realShiftId = isExtra ? shiftIdOrPrefixed.slice(6) : shiftIdOrPrefixed;
+    const kind = isExtra ? 'extra' : 'off';
+    const key = overrideKey(shiftIdOrPrefixed, date);
+    const wasPresent = shiftOverridesRef.current.has(key);
     setShiftOverrides(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+    const promise = wasPresent
+      ? deleteShiftOverride(realShiftId, date, kind)
+      : upsertShiftOverride(realShiftId, date, kind);
+    promise.then(({ error }) => {
+      if (error) {
+        console.warn("[shifts] override toggle failed", error);
+        setShiftOverrides(prev => { const next = new Set(prev); if (wasPresent) next.add(key); else next.delete(key); return next; });
+        showToast("Couldn't save — reverted", "err");
+      }
+    });
   };
   const isOverridden = (shiftId, date) => shiftOverrides.has(overrideKey(shiftId, date));
   // Returns the effective shiftTime (override beats base config) for a given date.
@@ -1040,13 +1055,41 @@ export default function App({ userId, profile }) {
     return shift.config?.shiftTime || null;
   };
   const setShiftTimeForDate = (shiftId, date, start, end) => {
-    setShiftTimeOverrides(prev => ({ ...prev, [overrideKey(shiftId, date)]: { start, end } }));
+    if (!userId) return;
+    const key = overrideKey(shiftId, date);
+    const prior = shiftTimeOverridesRef.current[key];
+    setShiftTimeOverrides(prev => ({ ...prev, [key]: { start, end } }));
+    upsertShiftTimeOverride(shiftId, date, start, end).then(({ error }) => {
+      if (error) {
+        console.warn("[shifts] time override set failed", error);
+        setShiftTimeOverrides(prev => {
+          if (prior === undefined) {
+            const next = { ...prev };
+            delete next[key];
+            return next;
+          }
+          return { ...prev, [key]: prior };
+        });
+        showToast("Couldn't save — reverted", "err");
+      }
+    });
   };
   const clearShiftTimeForDate = (shiftId, date) => {
+    if (!userId) return;
+    const key = overrideKey(shiftId, date);
+    const prior = shiftTimeOverridesRef.current[key];
+    if (prior === undefined) return;
     setShiftTimeOverrides(prev => {
       const next = { ...prev };
-      delete next[overrideKey(shiftId, date)];
+      delete next[key];
       return next;
+    });
+    deleteShiftTimeOverride(shiftId, date).then(({ error }) => {
+      if (error) {
+        console.warn("[shifts] time override clear failed", error);
+        setShiftTimeOverrides(prev => ({ ...prev, [key]: prior }));
+        showToast("Couldn't restore — try again", "err");
+      }
     });
   };
   const hasShiftTimeOverride = (shiftId, date) => !!shiftTimeOverrides[overrideKey(shiftId, date)];
@@ -1097,9 +1140,13 @@ export default function App({ userId, profile }) {
   // Server-side event delete runs first; on error, abort without touching local state.
   const doSoftReset = async () => {
     if (!userId) return;
-    const { error } = await deleteAllEventsForOwner(userId);
-    if (error) {
-      console.warn("[events] soft reset failed", error);
+    const [eventsRes, shiftsRes] = await Promise.all([
+      deleteAllEventsForOwner(userId),
+      deleteAllShiftsForOwner(userId),
+    ]);
+    if (eventsRes.error || shiftsRes.error) {
+      if (eventsRes.error) console.warn("[events] soft reset failed", eventsRes.error);
+      if (shiftsRes.error) console.warn("[shifts] soft reset failed", shiftsRes.error);
       showToast("Couldn't reset — try again", "err");
       return;
     }
@@ -1127,9 +1174,13 @@ export default function App({ userId, profile }) {
   // Server-side event delete runs first; on error, abort without touching local state.
   const doFullReset = async () => {
     if (!userId) return;
-    const { error } = await deleteAllEventsForOwner(userId);
-    if (error) {
-      console.warn("[events] full reset failed", error);
+    const [eventsRes, shiftsRes] = await Promise.all([
+      deleteAllEventsForOwner(userId),
+      deleteAllShiftsForOwner(userId),
+    ]);
+    if (eventsRes.error || shiftsRes.error) {
+      if (eventsRes.error) console.warn("[events] full reset failed", eventsRes.error);
+      if (shiftsRes.error) console.warn("[shifts] full reset failed", shiftsRes.error);
       showToast("Couldn't reset — try again", "err");
       return;
     }
@@ -1448,6 +1499,9 @@ export default function App({ userId, profile }) {
   const groupMembersRef = useRef(groupMembers);
   const friendsRef = useRef(friends);
   const majorEventsRef = useRef(majorEvents);
+  const shiftsRef = useRef(shifts);
+  const shiftOverridesRef = useRef(shiftOverrides);
+  const shiftTimeOverridesRef = useRef(shiftTimeOverrides);
   React.useEffect(() => { eventsRef.current = events; }, [events]);
   React.useEffect(() => { pinnedEventsRef.current = pinnedEvents; }, [pinnedEvents]);
   React.useEffect(() => { dismissedImportantEventsRef.current = dismissedImportantEvents; }, [dismissedImportantEvents]);
@@ -1455,6 +1509,9 @@ export default function App({ userId, profile }) {
   React.useEffect(() => { groupMembersRef.current = groupMembers; }, [groupMembers]);
   React.useEffect(() => { friendsRef.current = friends; }, [friends]);
   React.useEffect(() => { majorEventsRef.current = majorEvents; }, [majorEvents]);
+  React.useEffect(() => { shiftsRef.current = shifts; }, [shifts]);
+  React.useEffect(() => { shiftOverridesRef.current = shiftOverrides; }, [shiftOverrides]);
+  React.useEffect(() => { shiftTimeOverridesRef.current = shiftTimeOverrides; }, [shiftTimeOverrides]);
 
   // One-time migration: push localStorage events up to Supabase the first
   // time a signed-in user loads the app post-Step-1. Runs the initial sync
@@ -2273,10 +2330,72 @@ export default function App({ userId, profile }) {
   const declineFriendRequest = (id) => _unfriendByLocalId(id, "Couldn't decline — reverted");
   const cancelFriendRequest  = (id) => _unfriendByLocalId(id, "Couldn't cancel — reverted");
   const removeFriend         = (id) => _unfriendByLocalId(id, "Couldn't remove — reverted");
-  const addShift = (p) => { setShifts(prev => { const maxP = prev.reduce((m,x) => Math.max(m, x.priority ?? 0), -1); return [...prev, { ...p, id: "p" + uid(), priority: maxP + 1 }]; }); closeSheet(); showToast("Shift created"); };
-  const updateShift = (p) => { setShifts(prev => prev.map(x => x.id === p.id ? p : x)); closeSheet(); showToast("Shift updated"); };
+  const addShift = (s) => {
+    if (!userId) return;
+    const newId = crypto.randomUUID();
+    const maxP = shiftsRef.current.reduce((m, x) => Math.max(m, x.priority ?? 0), -1);
+    const saved = { ...s, id: newId, priority: maxP + 1 };
+    setShifts(prev => [...prev, saved]);
+    closeSheet();
+    showToast("Shift created");
+    insertShift(saved, userId).then(({ error }) => {
+      if (error) {
+        console.warn("[shifts] insert failed", error);
+        setShifts(prev => prev.filter(x => x.id !== newId));
+        showToast("Couldn't save — reverted", "err");
+      }
+    });
+  };
+  const updateShift = (s) => {
+    if (!userId) return;
+    const prior = shiftsRef.current.find(x => x.id === s.id);
+    setShifts(prev => prev.map(x => x.id === s.id ? s : x));
+    closeSheet();
+    showToast("Shift updated");
+    if (prior) {
+      updateShiftRow(s.id, s, userId).then(({ error }) => {
+        if (error) {
+          console.warn("[shifts] update failed", error);
+          setShifts(prev => prev.map(x => x.id === s.id ? prior : x));
+          showToast("Couldn't save — reverted", "err");
+        }
+      });
+    }
+  };
+  const duplicateShift = (s) => {
+    if (!userId) return;
+    const newId = crypto.randomUUID();
+    const maxP = shiftsRef.current.reduce((m, x) => Math.max(m, x.priority ?? 0), -1);
+    const copy = { ...s, id: newId, name: (s.name || "") + " (copy)", priority: maxP + 1 };
+    setShifts(prev => [...prev, copy]);
+    closeSheet();
+    showToast("Shift duplicated");
+    insertShift(copy, userId).then(({ error }) => {
+      if (error) {
+        console.warn("[shifts] duplicate failed", error);
+        setShifts(prev => prev.filter(x => x.id !== newId));
+        showToast("Couldn't duplicate — reverted", "err");
+      }
+    });
+  };
 
-  const deleteShift = (id) => { setShifts(prev => prev.filter(p => p.id !== id)); closeSheet(); showToast("Shift deleted", "err"); };
+  const deleteShift = (id) => {
+    if (!userId) return;
+    const priorShifts = shiftsRef.current;
+    const prior = priorShifts.find(x => x.id === id);
+    setShifts(prev => prev.filter(p => p.id !== id));
+    closeSheet();
+    showToast("Shift deleted", "err");
+    if (prior) {
+      deleteShiftRow(id).then(({ error }) => {
+        if (error) {
+          console.warn("[shifts] delete failed", error);
+          setShifts(priorShifts);
+          showToast("Couldn't delete — restored", "err");
+        }
+      });
+    }
+  };
 
   const visibleEvents = useMemo(() => events.filter(e => {
     if (hiddenCalendars.has(e.calendarId)) return false;
@@ -2998,7 +3117,15 @@ export default function App({ userId, profile }) {
             textSize={textSize}
             setTextSize={setTextSize}
             customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }}
-            onFinish={({ name, color, startTour, startGuide }) => {
+            onFinish={async ({ name, color, startTour, startGuide }) => {
+              if (userId) {
+                const { error } = await deleteAllShiftsForOwner(userId);
+                if (error) {
+                  console.warn("[shifts] onboarding wipe failed", error);
+                  showToast("Setup hiccup — please try again", "err");
+                  return;
+                }
+              }
               setUserProfile(p => ({ ...p, name: name || "Friend" }));
               setCalendars(prev => {
                 const first = prev[0];
@@ -5039,10 +5166,21 @@ export default function App({ userId, profile }) {
                   labels={Object.fromEntries(shifts.map(p => [p.id, p.name]))}
                   colors={Object.fromEntries(shifts.map(p => [p.id, p.color || "#888"]))}
                   onReorder={(newOrder) => {
-                    setShifts(prev => newOrder.map((id, idx) => {
-                      const p = prev.find(x => x.id === id);
+                    if (!userId) return;
+                    const priorShifts = shiftsRef.current;
+                    const newShifts = newOrder.map((id, idx) => {
+                      const p = priorShifts.find(x => x.id === id);
                       return { ...p, priority: idx };
-                    }));
+                    });
+                    setShifts(newShifts);
+                    reorderShifts(newShifts.map(s => ({ id: s.id, priority: s.priority })))
+                      .then(({ error }) => {
+                        if (error) {
+                          console.warn("[shifts] reorder failed", error);
+                          setShifts(priorShifts);
+                          showToast("Couldn't reorder — reverted", "err");
+                        }
+                      });
                   }}
                 />
               </div>
@@ -5058,17 +5196,28 @@ export default function App({ userId, profile }) {
                 effectiveTimeToday={getEffectiveShiftTime(p, TODAY)}
                 hasTimeOverrideToday={hasShiftTimeOverride(p.id, TODAY)}
                 onAddManualDay={(shiftId, date) => {
+                  if (!userId) return;
                   const key = "extra:" + shiftId + ":" + date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
+                  if (shiftOverridesRef.current.has(key)) return; // idempotent no-op
                   setShiftOverrides(prev => { const next = new Set(prev); next.add(key); return next; });
+                  upsertShiftOverride(shiftId, date, 'extra').then(({ error }) => {
+                    if (error) {
+                      console.warn("[shifts] add manual day failed", error);
+                      setShiftOverrides(prev => { const next = new Set(prev); next.delete(key); return next; });
+                      showToast("Couldn't save — reverted", "err");
+                    }
+                  });
                 }}
                 onToggleMonthDay={(shiftId, year, month, day) => {
-                  setShifts(prev => prev.map(pat => {
-                    if (pat.id !== shiftId) return pat;
-                    const key = `${year}-${month}`;
-                    const existing = pat.config?.months?.[key] || [];
-                    const next = existing.includes(day) ? existing.filter(d=>d!==day) : [...existing, day].sort((a,b)=>a-b);
-                    return { ...pat, config: { ...pat.config, months: { ...pat.config.months, [key]: next } } };
-                  }));
+                  // Pre-existing bypass of updateShift fixed in shifts Phase 3
+                  // — go through updateShift so the config edit round-trips
+                  // to Supabase like onToggleDay does for weekly shifts.
+                  const pat = shiftsRef.current.find(x => x.id === shiftId);
+                  if (!pat) return;
+                  const key = `${year}-${month}`;
+                  const existing = pat.config?.months?.[key] || [];
+                  const next = existing.includes(day) ? existing.filter(d=>d!==day) : [...existing, day].sort((a,b)=>a-b);
+                  updateShift({ ...pat, config: { ...pat.config, months: { ...pat.config.months, [key]: next } } });
                 }}
                 onToggleDay={(dow) => {
                   if (p.type !== "weekly") return;
