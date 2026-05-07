@@ -367,13 +367,19 @@ export async function updateShiftRow(id, s, ownerId) {
   // Strip immutable cols from the patch — RLS rejects owner_id changes; id is
   // the lookup key, not part of the update payload.
   const { id: _id, owner_id: _o, ...patch } = shiftToRow(s, ownerId);
-  return supabase.from('shifts').update(patch).eq('id', id);
+  const { data, error } = await supabase.from('shifts').update(patch).eq('id', id).select();
+  if (error) return { data, error };
+  if (!data || data.length === 0) return { data, error: new Error('shifts: 0 rows updated (RLS-rejected or row missing)') };
+  return { data, error: null };
 }
 
 export async function deleteShiftRow(id) {
   // FK cascades: shift_day_overrides, shift_day_time_overrides,
   // shift_group_shares, shift_user_shares all auto-cleanup.
-  return supabase.from('shifts').delete().eq('id', id);
+  const { data, error } = await supabase.from('shifts').delete().eq('id', id).select();
+  if (error) return { data, error };
+  if (!data || data.length === 0) return { data, error: new Error('shifts: 0 rows deleted (RLS-rejected or row missing)') };
+  return { data, error: null };
 }
 
 export async function deleteAllShiftsForOwner(ownerId) {

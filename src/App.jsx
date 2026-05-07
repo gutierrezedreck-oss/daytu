@@ -1311,13 +1311,19 @@ export default function App({ userId, profile }) {
 
   const closeSheet = () => { setSheet(null); setActiveEvent(null); setActiveShift(null); setActiveGroup(null); setActiveMajorEvent(null); setPreviewEvent(null); setPreviewShift(null); setPreviewMajor(null); };
   const openEvent = (ev) => { setActiveEvent(ev); setSheet("eventDetail"); };
-  const openEditEvent = (ev) => { setActiveEvent(ev); setSheet("editEvent"); };
+  const openEditEvent = (ev) => {
+    if (ev._sharePath !== 'own') return;
+    setActiveEvent(ev); setSheet("editEvent");
+  };
   const openNewEvent = () => setSheet("newEvent");
   const openNewImportantEvent = () => setSheet("newImportantEvent");
   // Double-tap/click on a calendar cell opens a small chooser — event vs major event
   const openAddChooser = (date) => { setSelectedDate(date); setSheet("addChooser"); };
   const openEditGroup = (g) => { setActiveGroup(g); setSheet("editGroup"); };
-  const openEditShift = (p) => { setActiveShift(p); setSheet("editShift"); };
+  const openEditShift = (p) => {
+    if (p._sharePath !== 'own') return;
+    setActiveShift(p); setSheet("editShift");
+  };
   const addCalendar    = (cal) => { setCalendars(prev => [...prev, { ...cal, id: "c" + uid() }]); closeSheet(); showToast("Calendar created"); };
   const updateCalendar = (cal) => { setCalendars(prev => prev.map(c => c.id === cal.id ? cal : c)); closeSheet(); showToast("Calendar updated"); };
   const deleteCalendar = (id) => {
@@ -1954,7 +1960,10 @@ export default function App({ userId, profile }) {
   const openNewCalendar  = () => { setActiveCalendar(null); setSheet("editCalendar"); };
   const openEditCalendar = (cal) => { setActiveCalendar(cal); setSheet("editCalendar"); };
   const openNewMajorEvent = () => setSheet("newMajorEvent");
-  const openEditMajorEvent = (me) => { setActiveMajorEvent(me); setSheet("editMajorEvent"); };
+  const openEditMajorEvent = (me) => {
+    if (me._sharePath !== 'own') return;
+    setActiveMajorEvent(me); setSheet("editMajorEvent");
+  };
   const openMajorEventDetail = (me) => { setActiveMajorEvent(me); setSheet("majorEventDetail"); };
   const duplicateMajorEvent = (me) => {
     if (!userId) return;
@@ -7346,7 +7355,13 @@ function ShiftCard({ shift, onEdit, shiftOverrides, onToggleDay, onAddManualDay,
           </button>
         )}
         <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontFamily:"var(--mono)" }}>{shift.type==="rotation"?cycleLen+"-day":shift.type==="monthly"?"monthly":"weekly"}</div>
-        <button className="btn btn-secondary" style={{ fontSize:"0.75rem", padding:"5px 10px" }} onClick={onEdit}>Edit</button>
+        {shift._sharePath === 'own' ? (
+          <button className="btn btn-secondary" style={{ fontSize:"0.75rem", padding:"5px 10px" }} onClick={onEdit}>Edit</button>
+        ) : (
+          <span style={{ fontSize:"0.6875rem", color:"var(--muted)", fontStyle:"italic" }}>
+            {shift._ownerName ? `Shared by ${shift._ownerName}` : 'Shared'}
+          </span>
+        )}
       </div>
 
       <div style={{ display:"flex", alignItems:"center", gap:8, padding:"9px 12px", borderRadius:10, marginBottom:12,
@@ -8308,10 +8323,12 @@ function EventDetailSheet({ ev, cal, groups, friends=[], onDelete, onEdit, onClo
         {ev.notes&&<div className="card card-sm" style={{ marginBottom:12 }}><div className="section-label" style={{ marginBottom:4 }}>Notes</div><div style={{ fontSize:"0.875rem" }}>{ev.notes}</div></div>}
         {!confirmDelete && (
           <>
-            <div style={{ display:"flex", gap:8, marginBottom:8 }}>
-              <button className="btn btn-secondary" style={{ flex:1 }} onClick={onEdit}>Edit</button>
-              <button className="btn btn-secondary" style={{ flex:1, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }} onClick={()=>setConfirmDelete(true)}>Delete</button>
-            </div>
+            {ev._sharePath === 'own' && (
+              <div style={{ display:"flex", gap:8, marginBottom:8 }}>
+                <button className="btn btn-secondary" style={{ flex:1 }} onClick={onEdit}>Edit</button>
+                <button className="btn btn-secondary" style={{ flex:1, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }} onClick={()=>setConfirmDelete(true)}>Delete</button>
+              </div>
+            )}
             <div style={{ display:"flex", gap:8, marginTop:0 }}>
               <button className="btn btn-secondary" onClick={()=>onDuplicate(ev)} style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
                 <span style={{ display:"flex", width:13, height:13 }}>{Icon.copy}</span> Duplicate
@@ -8320,6 +8337,11 @@ function EventDetailSheet({ ev, cal, groups, friends=[], onDelete, onEdit, onClo
                 <span style={{ display:"flex", width:13, height:13 }}>{Icon.pin2}</span> {isPinned?"Pinned":"Pin"}
               </button>
             </div>
+            {ev._sharePath !== 'own' && ev._ownerName && (
+              <div style={{ marginTop: 12, fontSize: "0.75rem", color: "var(--muted)", textAlign: "center" }}>
+                Shared by {ev._ownerName}
+              </div>
+            )}
           </>
         )}
         {confirmDelete && (
@@ -8909,14 +8931,23 @@ function MajorEventDetailSheet({ me, groups=[], friends=[], onEdit, onDelete, on
                 </button>
               )}
               <div style={{ display:"flex", gap:8 }}>
-                <button className="btn btn-secondary" style={{ flex:1 }} onClick={onEdit}>Edit</button>
+                {me._sharePath === 'own' && (
+                  <button className="btn btn-secondary" style={{ flex:1 }} onClick={onEdit}>Edit</button>
+                )}
                 {onDuplicate && (
                   <button className="btn btn-secondary" style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }} onClick={() => onDuplicate(me)}>
                     <span style={{ display:"flex", width:13, height:13 }}>{Icon.copy}</span> Copy
                   </button>
                 )}
-                <button className="btn btn-secondary" style={{ flex:1, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }} onClick={() => setConfirmDelete(true)}>Delete</button>
+                {me._sharePath === 'own' && (
+                  <button className="btn btn-secondary" style={{ flex:1, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }} onClick={() => setConfirmDelete(true)}>Delete</button>
+                )}
               </div>
+              {me._sharePath !== 'own' && me._ownerName && (
+                <div style={{ marginTop: 12, fontSize: "0.75rem", color: "var(--muted)", textAlign: "center" }}>
+                  Shared by {me._ownerName}
+                </div>
+              )}
             </>
           )}
           {confirmDelete && (

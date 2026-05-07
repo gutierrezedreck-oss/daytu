@@ -229,11 +229,20 @@ export async function updateEventRow(eventId, event, ownerId) {
   // Strip immutable cols from the patch — RLS rejects owner_id changes; id is
   // the lookup key, not part of the update payload.
   const { id: _id, owner_id: _o, ...patch } = eventToRow(event, ownerId);
-  return supabase.from('events').update(patch).eq('id', eventId);
+  const { data, error } = await supabase.from('events').update(patch).eq('id', eventId).select();
+  if (error) return { data, error };
+  // RLS-filtered UPDATE returns 0 rows with no error — surface as an explicit
+  // error so the caller's revert path fires. Without this, a non-owner UPDATE
+  // appears to succeed locally while the server is unchanged.
+  if (!data || data.length === 0) return { data, error: new Error('events: 0 rows updated (RLS-rejected or row missing)') };
+  return { data, error: null };
 }
 
 export async function deleteEventRow(eventId) {
-  return supabase.from('events').delete().eq('id', eventId);
+  const { data, error } = await supabase.from('events').delete().eq('id', eventId).select();
+  if (error) return { data, error };
+  if (!data || data.length === 0) return { data, error: new Error('events: 0 rows deleted (RLS-rejected or row missing)') };
+  return { data, error: null };
 }
 
 export async function deleteAllEventsForOwner(ownerId) {

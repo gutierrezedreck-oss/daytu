@@ -124,11 +124,17 @@ export async function updateMajorEventRow(id, me, ownerId) {
   // Strip immutable cols from the patch — RLS rejects owner_id changes; id is
   // the lookup key, not part of the update payload.
   const { id: _id, owner_id: _o, ...patch } = majorEventToRow(me, ownerId);
-  return supabase.from('major_events').update(patch).eq('id', id);
+  const { data, error } = await supabase.from('major_events').update(patch).eq('id', id).select();
+  if (error) return { data, error };
+  if (!data || data.length === 0) return { data, error: new Error('major_events: 0 rows updated (RLS-rejected or row missing)') };
+  return { data, error: null };
 }
 
 export async function deleteMajorEventRow(id) {
-  return supabase.from('major_events').delete().eq('id', id);
+  const { data, error } = await supabase.from('major_events').delete().eq('id', id).select();
+  if (error) return { data, error };
+  if (!data || data.length === 0) return { data, error: new Error('major_events: 0 rows deleted (RLS-rejected or row missing)') };
+  return { data, error: null };
 }
 
 // Diff old/new share targets and write the four CRUD ops in parallel.
