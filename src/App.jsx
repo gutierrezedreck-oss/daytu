@@ -3874,13 +3874,19 @@ export default function App({ userId, profile }) {
               const now2 = new Date();
               if (id === "major") {
                 const visible = visibleMajorEvents
-                  .filter(me => { const e=new Date(me.endDate); e.setHours(23,59,59,999); return now2 <= e; })
+                  .filter(me => {
+                    const [ey,em,ed] = me.endDate.slice(0,10).split("-").map(Number);
+                    const e = new Date(ey, em-1, ed, 23, 59, 59, 999);
+                    return now2 <= e;
+                  })
                   .sort((a, b) => {
                     // Pinned events first, then earliest start date (ongoing events
                     // have start in the past, so they naturally sort above upcoming).
                     const pinDelta = (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
                     if (pinDelta !== 0) return pinDelta;
-                    return new Date(a.startDate) - new Date(b.startDate);
+                    const aYmd = (a.startDate || "").slice(0,10);
+                    const bYmd = (b.startDate || "").slice(0,10);
+                    return aYmd < bYmd ? -1 : aYmd > bYmd ? 1 : 0;
                   });
                 if (visible.length === 0) {
                   if (canShowPlaceholder("major") && majorEvents.length === 0) {
@@ -8942,7 +8948,11 @@ function MajorEventDetailSheet({ me, groups=[], friends=[], onEdit, onDelete, on
 function MajorEventSheet({ existing, defaultDate, groups=[], friends=[], customColors, onSave, onDelete, onClose, onPreview }) {
   const isEdit = !!existing;
   const pad = n => String(n).padStart(2,"0");
-  const fmtForInput = d => { const dt=new Date(d); return dt.getFullYear()+"-"+pad(dt.getMonth()+1)+"-"+pad(dt.getDate()); };
+  const fmtForInput = d => {
+    if (!d) return todayStr();
+    if (typeof d === 'string') return d.slice(0, 10);   // pre-formatted YMD passes through, no UTC parse
+    return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate());  // Date → local YMD
+  };
   const todayStr = () => { const d=new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); };
   const initialDate = defaultDate ? fmtForInput(defaultDate) : todayStr();
 
