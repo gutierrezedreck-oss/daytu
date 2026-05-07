@@ -94,3 +94,45 @@ export async function deleteMyAccount() {
   const { error } = await supabase.rpc('delete_my_account');
   return { error };
 }
+
+// Detect whether a user has any data on the server. Used at App mount to
+// distinguish "truly new user" (seed local data, empty server) from
+// "existing user, fresh cache" (no local data, full server). The latter
+// case must skip onboarding — running onboarding's onFinish wipe path
+// against an existing user's data is catastrophic (see commit history
+// for the May 2026 incident).
+//
+// Counts rows across the four signals of user activity: shifts, events,
+// major_events, and group memberships. group_members rather than groups
+// because group ownership is via role='owner' on the membership row,
+// not a direct column; any membership at all (owner or otherwise) means
+// the user has been active.
+//
+// Fail-safe on error: returns true (assume existing user). Trade-off
+// favors data preservation — a true new user with a transient network
+// error doesn't see onboarding and lands in the main app with empty
+// state, recoverable via Settings. The inverse (assume new and wipe)
+// is the catastrophe we're preventing.
+export async function hasServerData(userId) {
+  if (!userId) return false;
+  try {
+    const [shiftsRes, eventsRes, majorRes, membershipRes] = await Promise.all([
+      supabase.from('shifts').select('id', { count: 'exact', head: true }).eq('owner_id', userId),
+      supabase.from('events').select('id', { count: 'exact', head: true }).eq('owner_id', userId),
+      supabase.from('major_events').select('id', { count: 'exact', head: true }).eq('owner_id', userId),
+      supabase.from('group_members').select('group_id', { count: 'exact', head: true }).eq('user_id', userId),
+    ]);
+    if (shiftsRes.error || eventsRes.error || majorRes.error || membershipRes.error) {
+      console.warn('[account] hasServerData query failed; assuming existing user (fail-safe)',
+        shiftsRes.error || eventsRes.error || majorRes.error || membershipRes.error);
+      return true;
+    }
+    return (shiftsRes.count || 0) > 0
+        || (eventsRes.count || 0) > 0
+        || (majorRes.count  || 0) > 0
+        || (membershipRes.count || 0) > 0;
+  } catch (e) {
+    console.warn('[account] hasServerData threw; assuming existing user (fail-safe)', e);
+    return true;
+  }
+}

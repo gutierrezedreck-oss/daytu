@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback, useRef } from "react";
 import { signOut } from "./lib/auth.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner, diffAndWriteShares } from "./lib/events.js";
-import { loadMajorEventsFromSupabase, migrateLocalMajorEventsToSupabase, insertMajorEvent, updateMajorEventRow, deleteMajorEventRow, diffAndWriteMajorEventShares } from "./lib/major_events.js";
+import { loadMajorEventsFromSupabase, migrateLocalMajorEventsToSupabase, insertMajorEvent, updateMajorEventRow, deleteMajorEventRow, deleteAllMajorEventsForOwner, diffAndWriteMajorEventShares } from "./lib/major_events.js";
 import { loadShiftsFromSupabase, migrateLocalShiftsToSupabase, remapShiftOverridesKeys, remapShiftTimeOverridesKeys, insertShift, updateShiftRow, deleteShiftRow, deleteAllShiftsForOwner, reorderShifts, upsertShiftOverride, deleteShiftOverride, upsertShiftTimeOverride, deleteShiftTimeOverride, diffAndWriteShiftShares } from "./lib/shifts.js";
 import { uploadAvatar } from "./lib/avatars.js";
 import {
@@ -23,7 +23,7 @@ import {
   acceptFriendRequestRpc,
   unfriendRpc,
 } from "./lib/friends.js";
-import { loadDeletionPreflight, deleteMyAccount } from "./lib/account.js";
+import { loadDeletionPreflight, deleteMyAccount, hasServerData } from "./lib/account.js";
 
 // Inline logo — bar color reacts to light/dark mode via .daytu-logo-eye CSS.
 // Canonical SVG source: src/assets/daytu-logo.svg (dark) + daytu-logo-light.svg.
@@ -1206,6 +1206,28 @@ export default function App({ userId, profile }) {
   });
   // Onboarding: true the very first time the app runs. Once finished it's stored as false permanently.
   const [onboardingActive, setOnboardingActive] = useState(() => _ls?.onboardingComplete !== true);
+  // Server-data check that distinguishes "truly new user" from "existing user
+  // with cleared cache." null = pending, 'new' = server empty at mount,
+  // 'existing' = server had data at mount. The 'new' value gates the
+  // server-side wipe in onFinish — anchored to mount time so the migration
+  // race (seed pushed to server during onboarding) doesn't fool the wipe
+  // gate into skipping. The 'existing' value flips onboardingActive false
+  // and routes the user straight to the main app.
+  const [onboardingCheckResult, setOnboardingCheckResult] = useState(null);
+  React.useEffect(() => {
+    if (!userId || !onboardingActive) return;
+    let cancelled = false;
+    hasServerData(userId).then(hasData => {
+      if (cancelled) return;
+      if (hasData) {
+        setOnboardingCheckResult('existing');
+        setOnboardingActive(false);
+      } else {
+        setOnboardingCheckResult('new');
+      }
+    });
+    return () => { cancelled = true; };
+  }, [userId, onboardingActive]);
   // Timestamp of when onboarding finished — used to fade the home ? icon after 7 days
   const [onboardingCompletedAt, setOnboardingCompletedAt] = useState(() => _ls?.onboardingCompletedAt ?? null);
   // Is the on-demand tour modal currently open
@@ -3365,6 +3387,23 @@ export default function App({ userId, profile }) {
   const prevWeek = () => setWeekAnchor(d => { const n = new Date(d); n.setDate(n.getDate() - 7); return n; });
   const nextWeek = () => setWeekAnchor(d => { const n = new Date(d); n.setDate(n.getDate() + 7); return n; });
 
+  // Layer 1 splash: while the server-data check is pending, render a brief
+  // loading screen instead of the onboarding flow. Prevents a flash of the
+  // onboarding sheet for existing users with cleared cache.
+  if (onboardingActive && onboardingCheckResult === null) {
+    return (
+      <>
+        <style>{css}</style>
+        <div className={"app" + (darkMode ? "" : " light-mode") + (highContrast ? " hc-mode" : "")}>
+          <div style={{
+            minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: 'var(--muted)', fontSize: 14, fontFamily: 'var(--font)',
+          }}>Loading…</div>
+        </div>
+      </>
+    );
+  }
+
   if (onboardingActive) {
     return (
       <>
@@ -3377,10 +3416,24 @@ export default function App({ userId, profile }) {
             setTextSize={setTextSize}
             customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }}
             onFinish={async ({ name, color, startTour, startGuide }) => {
-              if (userId) {
-                const { error } = await deleteAllShiftsForOwner(userId);
-                if (error) {
-                  console.warn("[shifts] onboarding wipe failed", error);
+              // Layer 2 + 3: only wipe server-side when Layer 1 confirmed
+              // mount-time server-empty (genuine new user). For existing
+              // users with cleared cache, Layer 1 should have flipped
+              // onboardingActive to false and we'd never reach here — but
+              // belt-and-suspenders, gate the wipe on the state value too.
+              // Symmetric across shifts + events + major_events: any seed
+              // data that migrated to server during onboarding gets cleaned.
+              // Groups skipped — group ownership invariants make safe wipe
+              // more involved (ownership-transfer or sole-owner refusal).
+              if (userId && onboardingCheckResult === 'new') {
+                const [shiftsRes, eventsRes, majorRes] = await Promise.all([
+                  deleteAllShiftsForOwner(userId),
+                  deleteAllEventsForOwner(userId),
+                  deleteAllMajorEventsForOwner(userId),
+                ]);
+                if (shiftsRes.error || eventsRes.error || majorRes.error) {
+                  console.warn("[onboarding] new-user wipe failed",
+                    shiftsRes.error || eventsRes.error || majorRes.error);
                   showToast("Setup hiccup — please try again", "err");
                   return;
                 }

@@ -137,6 +137,12 @@ export async function deleteMajorEventRow(id) {
   return { data, error: null };
 }
 
+export async function deleteAllMajorEventsForOwner(ownerId) {
+  // Wipes the user's major events AND (via FK cascade) their share-target
+  // rows. Used by reset paths and onboarding's new-user wipe.
+  return supabase.from('major_events').delete().eq('owner_id', ownerId);
+}
+
 // Diff old/new share targets and write the four CRUD ops in parallel.
 // Returns the first error from the batch (Promise.allSettled), or null
 // on success / no-op.
