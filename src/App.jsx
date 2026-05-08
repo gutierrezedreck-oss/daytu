@@ -1,17 +1,259 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback, useRef } from "react";
+import { signOut } from "./lib/auth.js";
+import { LS_KEY, clearLocalPrefs } from "./lib/localPrefs.js";
+import { formatShareLabel } from "./lib/shareLabel.js";
+import { supabase } from "./lib/supabase.js";
+import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner, diffAndWriteShares } from "./lib/events.js";
+import { loadMajorEventsFromSupabase, migrateLocalMajorEventsToSupabase, insertMajorEvent, updateMajorEventRow, deleteMajorEventRow, deleteAllMajorEventsForOwner, diffAndWriteMajorEventShares } from "./lib/major_events.js";
+import { loadShiftsFromSupabase, migrateLocalShiftsToSupabase, remapShiftOverridesKeys, remapShiftTimeOverridesKeys, insertShift, updateShiftRow, deleteShiftRow, deleteAllShiftsForOwner, reorderShifts, upsertShiftOverride, deleteShiftOverride, upsertShiftTimeOverride, deleteShiftTimeOverride, diffAndWriteShiftShares } from "./lib/shifts.js";
+import { uploadAvatar } from "./lib/avatars.js";
+import {
+  loadGroupsForViewer,
+  findUserByHandle,
+  createGroup,
+  updateGroup as updateGroupRow,
+  deleteGroupRow,
+  addMember,
+  removeMember,
+  updateMemberRole,
+  transferOwnership,
+  leaveGroup,
+} from "./lib/groups.js";
+import {
+  loadFriendsForViewer,
+  sendFriendRequestRpc,
+  acceptFriendRequestRpc,
+  unfriendRpc,
+} from "./lib/friends.js";
+import { loadDeletionPreflight, deleteMyAccount, hasServerData } from "./lib/account.js";
 
-// Inline logo — lets the "eyes" react to light/dark mode via .daytu-logo-eye CSS.
-// SVG source still lives at src/assets/daytu-logo.svg (used for the favicon).
+// Inline logo — bar color reacts to light/dark mode via .daytu-logo-eye CSS.
+// Canonical SVG source: src/assets/daytu-logo.svg (dark) + daytu-logo-light.svg.
 const DaytuLogo = ({ size = 48, style }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width={size} height={size} style={style} aria-label="Daytu">
-    <path d="M 620 40 L 860 40 A 100 100 0 0 1 960 140 L 960 860 A 100 100 0 0 1 860 960 L 140 960 A 100 100 0 0 1 40 860 L 40 140 A 100 100 0 0 1 140 40 L 380 40"
-      fill="none" stroke="#5a3fbf" strokeWidth="40" strokeLinecap="butt" />
-    <path d="M 610 120 L 780 120 A 90 90 0 0 1 870 210 L 870 790 A 90 90 0 0 1 780 880 L 220 880 A 90 90 0 0 1 130 790 L 130 210 A 90 90 0 0 1 220 120 L 390 120"
-      fill="none" stroke="#6b4fd0" strokeWidth="40" strokeLinecap="butt" />
-    <path d="M 600 200 L 700 200 A 80 80 0 0 1 780 280 L 780 720 A 80 80 0 0 1 700 800 L 300 800 A 80 80 0 0 1 220 720 L 220 280 A 80 80 0 0 1 300 200 L 400 200"
-      fill="none" stroke="#b49cf0" strokeWidth="40" strokeLinecap="butt" />
-    <rect x="390" y="370" width="24" height="240" rx="12" className="daytu-logo-eye" />
-    <rect x="586" y="370" width="24" height="240" rx="12" className="daytu-logo-eye" />
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1172 1177" width={size} height={size} style={style} aria-label="Daytu">
+    <path fill="#6e3de1" d={`
+      M 287.71 45.14
+      L 414.24 45.11
+      C 422.94 44.81 428.30 45.44 436.14 48.98
+      Q 443.17 52.15 447.83 58.63
+      Q 456.13 70.17 453.27 84.81
+      C 450.76 97.62 440.24 108.90 427.22 110.73
+      Q 421.45 111.54 412.00 111.42
+      C 387.98 111.11 367.81 111.45 342.92 111.35
+      Q 327.63 111.28 291.91 111.22
+      Q 265.98 111.18 254.42 112.95
+      Q 220.90 118.11 192.93 135.18
+      Q 172.97 147.37 156.05 165.77
+      C 131.04 192.97 115.37 229.46 113.43 266.75
+      C 112.87 277.44 113.24 287.33 113.24 300.73
+      Q 113.21 774.19 113.12 894.50
+      C 113.12 908.11 114.64 919.78 117.81 932.99
+      C 122.32 951.77 130.70 969.51 141.39 985.54
+      Q 142.10 986.59 150.27 997.15
+      Q 155.00 1003.25 159.78 1008.06
+      Q 181.93 1030.29 208.77 1042.95
+      Q 214.71 1045.75 225.45 1049.63
+      C 237.29 1053.92 250.38 1056.00 262.65 1057.43
+      Q 269.89 1058.28 282.87 1058.03
+      C 312.09 1057.46 346.64 1057.94 380.81 1057.92
+      Q 540.24 1057.83 674.37 1057.96
+      Q 693.00 1057.97 710.20 1057.89
+      Q 741.39 1057.72 746.00 1057.73
+      Q 810.35 1057.81 896.00 1057.93
+      Q 918.42 1057.96 944.52 1049.94
+      Q 970.80 1041.87 993.33 1024.99
+      C 1002.38 1018.22 1011.00 1009.69 1018.16 1001.88
+      Q 1019.00 1000.97 1024.92 993.33
+      C 1042.43 970.76 1053.45 944.72 1057.40 916.55
+      Q 1058.78 906.74 1058.77 885.37
+      Q 1058.65 402.30 1058.99 278.76
+      Q 1059.05 255.34 1053.72 235.05
+      Q 1042.67 192.95 1012.68 161.81
+      Q 1011.94 161.04 1001.90 151.82
+      C 988.72 139.71 973.23 130.59 955.96 123.52
+      Q 926.20 111.34 894.94 111.33
+      Q 778.00 111.29 754.01 111.32
+      C 744.98 111.34 736.10 109.14 729.31 103.24
+      C 709.48 86.03 717.02 53.24 742.41 46.44
+      Q 746.77 45.27 756.28 45.21
+      Q 763.27 45.16 770.30 45.11
+      L 899.19 45.20
+      C 958.40 46.66 1015.07 70.85 1057.05 112.45
+      Q 1062.72 118.08 1070.53 126.98
+      C 1084.56 142.97 1095.72 161.56 1104.54 181.00
+      C 1109.39 191.68 1114.49 205.79 1117.62 217.69
+      Q 1121.87 233.82 1123.86 251.40
+      Q 1125.20 263.17 1125.17 285.65
+      Q 1125.00 405.16 1125.00 492.23
+      Q 1125.01 581.84 1124.88 610.50
+      Q 1124.73 646.54 1125.00 682.25
+      Q 1125.05 688.74 1125.05 698.00
+      Q 1125.07 795.45 1124.88 881.80
+      Q 1124.82 908.44 1123.84 918.16
+      Q 1122.06 935.73 1117.11 953.86
+      Q 1115.07 961.33 1110.30 974.51
+      Q 1106.25 985.71 1101.77 994.48
+      Q 1085.55 1026.20 1064.31 1049.28
+      C 1037.11 1078.86 1000.89 1102.30 961.75 1113.88
+      Q 927.08 1124.14 893.50 1124.05
+      Q 789.15 1123.77 687.00 1123.77
+      Q 665.31 1123.77 433.50 1123.83
+      Q 371.93 1123.85 279.00 1123.91
+      Q 259.60 1123.93 245.32 1121.62
+      Q 234.16 1119.81 221.46 1117.44
+      A 0.11 0.10 -3.6 0 1 221.37 1117.37
+      L 221.27 1117.08
+      A 0.17 0.16 86.6 0 0 221.15 1116.97
+      Q 207.88 1113.38 205.87 1112.60
+      Q 197.48 1109.33 194.29 1108.16
+      C 181.75 1103.55 168.60 1096.73 158.45 1090.56
+      Q 122.94 1068.94 95.52 1034.48
+      Q 93.89 1032.43 87.69 1023.79
+      Q 83.40 1017.80 80.36 1012.76
+      Q 51.69 965.22 47.33 909.24
+      Q 46.60 899.81 46.76 884.75
+      C 47.07 855.24 46.65 806.18 46.81 774.76
+      C 46.92 751.70 46.70 730.52 46.74 708.75
+      Q 46.93 605.52 46.87 590.25
+      Q 46.71 548.16 46.70 535.00
+      Q 46.64 474.34 46.80 414.17
+      C 46.93 361.71 46.20 317.74 47.23 271.51
+      Q 47.96 238.64 57.27 208.76
+      Q 62.07 193.35 69.28 177.41
+      Q 73.29 168.56 76.15 164.27
+      C 79.92 158.61 82.22 153.51 86.49 147.35
+      Q 93.97 136.56 100.72 128.36
+      C 105.11 123.03 109.18 119.41 113.71 114.17
+      Q 114.47 113.28 119.23 108.78
+      Q 147.00 82.48 181.91 66.44
+      Q 185.87 64.62 194.76 60.87
+      Q 201.33 58.11 207.90 56.06
+      C 233.74 48.03 260.63 44.78 287.71 45.14
+      Z`} />
+    <path fill="#7d5dec" d={`
+      M 447.20 187.22
+      C 442.74 194.02 430.32 199.43 422.00 199.44
+      Q 310.89 199.69 283.90 199.41
+      Q 270.65 199.27 263.22 200.84
+      Q 244.55 204.77 230.24 216.15
+      Q 206.78 234.82 201.90 265.38
+      Q 200.87 271.84 200.90 284.28
+      Q 200.99 315.61 200.94 512.78
+      Q 200.86 838.22 200.90 889.80
+      C 200.90 895.35 201.05 902.02 202.08 906.98
+      Q 203.64 914.47 206.82 922.95
+      C 208.88 928.45 211.69 932.59 215.36 938.13
+      Q 219.21 943.92 222.63 946.78
+      C 227.53 950.86 231.20 954.48 235.82 957.51
+      Q 248.14 965.61 262.58 968.77
+      Q 269.14 970.20 288.09 970.20
+      Q 578.77 970.11 893.75 970.11
+      Q 912.44 970.11 928.90 961.87
+      C 935.40 958.61 943.51 952.60 948.96 947.09
+      Q 971.17 924.64 971.14 890.26
+      Q 971.06 775.41 971.13 279.00
+      Q 971.13 263.30 965.79 248.87
+      Q 963.41 242.44 959.24 235.97
+      Q 953.90 227.66 950.65 224.22
+      Q 947.23 220.60 941.03 215.38
+      C 931.46 207.33 918.18 202.55 906.07 200.20
+      Q 903.02 199.61 896.35 199.61
+      Q 826.04 199.63 749.31 199.46
+      Q 742.71 199.45 736.26 195.68
+      C 730.89 192.55 726.31 189.56 723.17 184.10
+      C 718.13 175.33 715.99 163.51 720.39 154.06
+      Q 723.63 147.07 726.85 143.89
+      Q 733.43 137.37 742.17 134.50
+      Q 746.40 133.10 755.01 133.14
+      Q 774.41 133.23 883.00 132.96
+      Q 894.27 132.93 904.10 133.51
+      Q 915.67 134.18 924.92 136.44
+      Q 939.78 140.07 953.75 146.26
+      C 964.79 151.15 973.86 157.32 983.09 164.44
+      Q 989.82 169.63 995.27 175.24
+      Q 1019.76 200.46 1030.57 233.71
+      Q 1036.65 252.43 1037.12 273.51
+      C 1037.52 291.45 1037.14 308.19 1037.14 327.43
+      Q 1037.21 697.23 1037.12 896.95
+      Q 1037.11 914.24 1031.25 933.55
+      Q 1025.24 953.36 1014.19 970.70
+      Q 1008.10 980.26 997.16 992.13
+      C 987.04 1003.09 975.20 1011.68 962.42 1018.81
+      Q 951.30 1025.01 938.61 1028.94
+      C 924.31 1033.37 910.87 1036.02 896.57 1036.04
+      Q 842.05 1036.13 287.98 1036.11
+      Q 267.22 1036.11 258.16 1034.71
+      Q 237.22 1031.49 218.50 1023.23
+      Q 211.52 1020.15 199.12 1012.37
+      Q 192.78 1008.40 187.73 1003.99
+      Q 177.79 995.32 176.81 994.37
+      Q 173.31 990.97 166.25 982.48
+      C 156.07 970.24 148.17 954.95 143.02 939.95
+      Q 138.30 926.20 136.19 911.91
+      Q 135.02 903.96 135.03 883.05
+      Q 135.13 666.16 135.06 278.00
+      Q 135.05 266.77 136.45 256.25
+      Q 137.43 248.84 141.51 234.46
+      Q 144.39 224.30 149.86 213.72
+      Q 158.16 197.65 165.61 188.30
+      C 178.28 172.40 194.66 158.38 212.52 149.27
+      Q 221.86 144.50 233.73 140.33
+      Q 254.14 133.17 277.75 133.12
+      Q 342.61 132.99 411.75 133.12
+      Q 418.44 133.13 423.93 133.37
+      C 430.46 133.66 436.56 136.90 441.68 140.35
+      C 448.02 144.61 453.57 154.96 454.03 162.61
+      C 454.51 170.73 452.04 179.85 447.20 187.22
+      Z`} />
+    <path fill="#9f89ef" d={`
+      M 881.93 287.55
+      Q 880.47 287.38 874.75 287.38
+      Q 800.84 287.34 750.25 287.41
+      C 743.40 287.42 737.27 284.77 731.63 280.93
+      C 722.52 274.73 717.16 263.44 718.24 252.25
+      C 718.76 246.87 719.46 241.97 722.38 237.42
+      Q 729.25 226.72 741.11 223.02
+      Q 745.65 221.61 755.54 221.59
+      Q 824.94 221.49 873.75 221.53
+      Q 885.33 221.54 889.27 221.37
+      Q 899.35 220.93 904.68 222.12
+      C 913.15 224.03 922.50 227.47 928.83 233.42
+      C 934.13 238.41 939.29 243.64 942.35 249.74
+      Q 945.92 256.86 947.90 265.49
+      Q 949.01 270.36 949.00 282.13
+      Q 948.79 763.91 949.03 891.51
+      Q 949.06 908.08 941.94 920.49
+      C 933.77 934.74 920.21 944.12 904.25 947.35
+      Q 900.39 948.14 889.20 948.14
+      Q 335.29 948.16 278.25 948.19
+      Q 271.57 948.19 267.69 947.31
+      C 256.84 944.84 245.94 939.67 238.62 931.96
+      Q 231.53 924.49 227.31 915.43
+      Q 226.61 913.94 224.25 904.88
+      C 222.34 897.58 222.68 890.10 222.68 882.00
+      Q 222.68 467.97 222.73 283.65
+      Q 222.73 270.68 224.15 265.00
+      Q 226.11 257.18 229.18 250.78
+      Q 231.96 245.00 237.97 238.59
+      C 247.11 228.85 261.76 221.46 275.76 221.50
+      Q 308.82 221.59 424.57 221.54
+      C 430.73 221.53 438.58 226.11 443.30 229.76
+      C 450.86 235.61 455.03 247.66 453.96 257.37
+      Q 452.10 274.19 436.61 283.37
+      Q 429.31 287.70 421.98 287.50
+      Q 418.22 287.40 412.39 287.40
+      Q 344.17 287.39 303.00 287.33
+      Q 297.37 287.33 289.34 287.57
+      A 0.78 0.78 0.0 0 0 288.58 288.35
+      L 288.58 881.38
+      A 0.70 0.70 0.0 0 0 289.28 882.08
+      L 882.35 882.08
+      A 0.68 0.68 0.0 0 0 883.03 881.40
+      L 883.03 288.77
+      A 1.23 1.23 0.0 0 0 881.93 287.55
+      Z`} />
+    <rect x="690.52" y="459.04" width="56.12" height="275.12" rx="27.46" className="daytu-logo-eye" />
+    <rect x="426.09" y="459.03" width="55.90" height="275.22" rx="27.35" className="daytu-logo-eye" />
   </svg>
 );
 
@@ -19,9 +261,9 @@ const DaytuLogo = ({ size = 48, style }) => (
 // Hidden until a proper backend supports them.
 // Flip to true when ready — everything comes back, no re-work.
 const FEATURES = {
-  groups:       false, // Groups tab, group sharing, group events
-  sharing:      false, // Event visibility field, share to groups
-  friends:      false, // Friend list, requests, discoverable users
+  groups:       true,  // Groups tab, group sharing, group events
+  sharing:      true,  // Event visibility field, share to groups
+  friends:      true,  // Friend list, requests, discoverable users
   activityFeed: false, // Who did what in a group (requires multi-user)
   attendees:    false, // Event attendees (can't invite anyone without backend)
 };
@@ -37,11 +279,11 @@ const seed = {
     { id: "g3", name: "Roommates", owner: "u1", color: "#10b981" },
   ],
   groupMembers: [
-    { groupId: "g1", userId: "u2", name: "Jordan", role: "viewer" },
+    { groupId: "g1", userId: "u2", name: "Jordan", role: "member" },
     { groupId: "g1", userId: "u3", name: "Casey", role: "editor" },
     { groupId: "g2", userId: "u4", name: "Riley", role: "editor" },
-    { groupId: "g2", userId: "u5", name: "Sam", role: "viewer" },
-    { groupId: "g3", userId: "u6", name: "Drew", role: "viewer" },
+    { groupId: "g2", userId: "u5", name: "Sam", role: "member" },
+    { groupId: "g3", userId: "u6", name: "Drew", role: "member" },
   ],
   calendars: [
     { id: "c1", name: "Personal", color: "#6366f1" },
@@ -113,9 +355,9 @@ const seed = {
     ];
   })(),
   friends: [
-    { id: "f1", userId: "u2", name: "Jordan Lee",   handle: "@jordanlee",   avatar: "JL", mutualGroups: 1, status: "accepted" },
-    { id: "f2", userId: "u3", name: "Casey Rivera", handle: "@caseyrivera", avatar: "CR", mutualGroups: 2, status: "accepted" },
-    { id: "f3", userId: "d3", name: "Riley Patel",  handle: "@rileypatel",  avatar: "RP", mutualGroups: 0, status: "pending_received" },
+    { id: "f1", userId: "u2", name: "Jordan Lee",   handle: "@jordanlee",   avatar: null, mutualGroups: 1, status: "accepted" },
+    { id: "f2", userId: "u3", name: "Casey Rivera", handle: "@caseyrivera", avatar: null, mutualGroups: 2, status: "accepted" },
+    { id: "f3", userId: "d3", name: "Riley Patel",  handle: "@rileypatel",  avatar: null, mutualGroups: 0, status: "pending_received" },
   ],
   discoverableUsers: [
     { id: "d1", name: "Taylor Kim",   handle: "@taylorkim",   avatar: "TK" },
@@ -333,11 +575,12 @@ function shiftTimeLabel(config) {
 const visibilityIcon = (v) => {
   const s = { display:"inline-flex", width:13, height:13, verticalAlign:"middle" };
   if (v === "private") return <span style={{...s, color:"#a0a0b8"}} title="Only me"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>;
+  if (v === "friends") return <span style={{...s, color:"#fda4af"}} title="Friends"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></span>;
   if (v === "groups") return <span style={{...s, color:"#6ee7b7"}} title="Groups"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>;
-  if (v === "full_access") return <span style={{...s, color:"#93c5fd"}} title="Public"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>;
+  if (v === "people") return <span style={{...s, color:"#93c5fd"}} title="People"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>;
   return null;
 };
-const visibilityLabel = (v) => ({ private:"Only me", groups:"Groups", full_access:"Everyone", inherit:"Calendar default" }[v] || v);
+const visibilityLabel = (v) => ({ private:"Only me", friends:"All friends", groups:"Groups", people:"Specific friends", inherit:"Calendar default" }[v] || v);
 const reminderLabel = (r) => ({ "0":"At event time", "10":"10 min before", "15":"15 min before", "30":"30 min before", "60":"1 hour before", "1440":"1 day before", "none":"No reminder" }[r] || "No reminder");
 
 const Icon = {
@@ -388,7 +631,8 @@ function ImportantBadge({ size = 14, color = "#f59e0b", style }) {
 }
 
 // ── LOCALSTORAGE HELPERS ─────────────────────────────────
-const LS_KEY = "daytu_v1";
+// LS_KEY is imported from ./lib/localPrefs.js so AuthGate can share the
+// constant without circular imports.
 const SCHEMA_VERSION = 2;
 
 // Migrations: each key is the FROM version; the function returns data at FROM+1.
@@ -676,12 +920,22 @@ function computeHolidays(year) {
   ].map(h => ({ ...h, year }));
 }
 
-export default function App() {
+export default function App({ userId, profile }) {
   const [tab, setTab] = useState("home");
   // Load persisted data once — fallback to seed data
   const _ls = React.useMemo(() => lsLoad(), []);
   // Close fab menu on tab switch — handled inline in nav buttons
-  const [events, setEvents] = useState(() => _ls?.events ? reviveEvents(_ls.events) : seed.events);
+  // Initial state comes from localStorage so unmigrated users see a populated
+  // calendar before the Supabase load resolves. seed.events is no longer used
+  // as a fallback — <AuthGate> is mandatory, so a freshly authed user with
+  // empty localStorage should start with an empty calendar.
+  const [events, setEvents] = useState(() => _ls?.events ? reviveEvents(_ls.events) : []);
+  // Inline indicator state for the Supabase events sync.
+  const [eventsSyncing, setEventsSyncing] = useState(false);
+  const [eventsSyncError, setEventsSyncError] = useState(null);
+  // Distinguishes the one-time migration phase from regular sync, so the
+  // banner can show "Setting up your events…" vs "Syncing your events…".
+  const [eventsMigrationPhase, setEventsMigrationPhase] = useState(false);
   const [calendars, setCalendars] = useState(() => _ls?.calendars ?? seed.calendars);
   const [groups, setGroups] = useState(() => _ls?.groups ?? seed.groups);
   const [groupMembers, setGroupMembers] = useState(() => _ls?.groupMembers ?? seed.groupMembers);
@@ -699,7 +953,7 @@ export default function App() {
   const [weekLayout, setWeekLayout] = useState(() => _ls?.weekLayout ?? "columns");
   const [weekAnchor, setWeekAnchor] = useState(() => { const d = new Date(TODAY); d.setDate(d.getDate() - d.getDay()); return d; });
   const [calShiftFilter, setCalShiftFilter] = useState(null);
-  const [shiftOverrides, setShiftOverrides] = useState(new Set());
+  const [shiftOverrides, setShiftOverrides] = useState(() => new Set(_ls?.shiftOverrides ?? []));
   // Per-date time overrides for individual shifts, e.g. "half day this Thursday".
   // Keyed by `${shiftId}:${y}-${m}-${d}`, value `{ start: "HH:MM", end: "HH:MM" }`.
   const [shiftTimeOverrides, setShiftTimeOverrides] = useState(() => _ls?.shiftTimeOverrides ?? {});
@@ -710,7 +964,9 @@ export default function App() {
   const [shiftNoticeDismissed, setShiftNoticeDismissed] = useState(() => _ls?.shiftNoticeDismissed ?? null);
   const [majorEvents, setMajorEvents] = useState(() => _ls?.majorEvents ?? seed.majorEvents);
   const [friends, setFriends] = useState(() => _ls?.friends ?? seed.friends);
-  const [friendSearch, setFriendSearch] = useState("");
+  const [handleQuery, setHandleQuery] = useState("");
+  const [handleResult, setHandleResult] = useState({ state: 'idle' });
+  const handleSearchDebounceRef = useRef(null);
   const [groupsSubTab, setGroupsSubTab] = useState("groups");
   const [feedSeenAt, setFeedSeenAt] = useState(() => _ls?.feedSeenAt ? new Date(_ls.feedSeenAt) : new Date(0));
   const [activityFeed, setActivityFeed] = useState(() => _ls?.activityFeed
@@ -840,40 +1096,6 @@ export default function App() {
     return () => Object.values(notifTimers.current).forEach(clearTimeout);
   }, [events, notifPermission]);
 
-  // Schedule a one-off notification at the start of a shift that has a time
-  // override for today, so the user gets a heads-up of the adjusted hours.
-  React.useEffect(() => {
-    if (notifPermission !== "granted") return;
-    Object.values(shiftNotifTimers.current).forEach(clearTimeout);
-    shiftNotifTimers.current = {};
-    const today = new Date();
-    const ymdKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
-    shifts.forEach(p => {
-      const key = p.id+":"+ymdKey;
-      if (!shiftTimeOverrides[key]) return;
-      const isNatural = p.type === "rotation" ? getRotationStatus(p, today) === "work"
-        : p.type === "monthly" ? isMonthlyWorkDay(p, today)
-        : (p.config?.days ?? []).includes(today.getDay());
-      const isHidden = shiftOverrides.has(key);
-      const isExtra = shiftOverrides.has("extra:" + key);
-      const isWorkToday = (isNatural && !isHidden) || (!isNatural && isExtra);
-      if (!isWorkToday) return;
-      const eff = shiftTimeOverrides[key];
-      const [sh, sm] = eff.start.split(":").map(Number);
-      const fireAt = new Date(today); fireAt.setHours(sh, sm, 0, 0);
-      const delay = fireAt.getTime() - Date.now();
-      if (delay < 0) return;
-      shiftNotifTimers.current[p.id] = setTimeout(() => {
-        new Notification(p.name + " starts now", {
-          body: `Today's shift: ${fmtClock(eff.start)} – ${fmtClock(eff.end)}. You're off at ${fmtClock(eff.end)}.`,
-          icon: "/favicon.ico",
-          tag: "shift-override-"+p.id+"-"+ymdKey,
-        });
-      }, delay);
-    });
-    return () => Object.values(shiftNotifTimers.current).forEach(clearTimeout);
-  }, [shifts, shiftOverrides, shiftTimeOverrides, notifPermission]);
-
   // Keep darkMode in sync with themeMode on every change:
   //   "dark"  → always dark
   //   "light" → always light
@@ -923,7 +1145,7 @@ export default function App() {
   ], []);
   const [holidayCountries, setHolidayCountries] = useState(() => new Set(_ls?.holidayCountries ?? ["US","GLOBAL"]));
   const [findTimeGroup, setFindTimeGroup] = useState(null); // groupId or null
-  const [pinnedEvents, setPinnedEvents] = useState(() => new Set(_ls?.pinnedEvents ?? seed.events.filter(e=>e.pinned).map(e=>e.id)));
+  const [pinnedEvents, setPinnedEvents] = useState(() => new Set(_ls?.pinnedEvents ?? []));
   // Dismissal keys are `<baseEventId>:<YYYY-MM-DD>` so recurring occurrences dismiss individually.
   const [dismissedImportantEvents, setDismissedImportantEvents] = useState(() => new Set(_ls?.dismissedImportantEvents ?? []));
   const [importantExpanded, setImportantExpanded] = useState(false);
@@ -948,11 +1170,33 @@ export default function App() {
   const [userProfile, setUserProfile] = useState(() => {
     const loaded = _ls?.userProfile ?? { name: "Alex Morgan", email: "", handle: "", defaultCalendar: "c1", defaultReminder: "15", avatar: null };
     // Ensure badges sub-object exists for users with older localStorage
-    if (!loaded.badges) loaded.badges = { friendRequests: true, feed: true, todayEvents: true };
+    if (!loaded.badges) loaded.badges = { todayEvents: true, friendRequests: true };
     return loaded;
   });
   // Onboarding: true the very first time the app runs. Once finished it's stored as false permanently.
   const [onboardingActive, setOnboardingActive] = useState(() => _ls?.onboardingComplete !== true);
+  // Server-data check that distinguishes "truly new user" from "existing user
+  // with cleared cache." null = pending, 'new' = server empty at mount,
+  // 'existing' = server had data at mount. The 'new' value gates the
+  // server-side wipe in onFinish — anchored to mount time so the migration
+  // race (seed pushed to server during onboarding) doesn't fool the wipe
+  // gate into skipping. The 'existing' value flips onboardingActive false
+  // and routes the user straight to the main app.
+  const [onboardingCheckResult, setOnboardingCheckResult] = useState(null);
+  React.useEffect(() => {
+    if (!userId || !onboardingActive) return;
+    let cancelled = false;
+    hasServerData(userId).then(hasData => {
+      if (cancelled) return;
+      if (hasData) {
+        setOnboardingCheckResult('existing');
+        setOnboardingActive(false);
+      } else {
+        setOnboardingCheckResult('new');
+      }
+    });
+    return () => { cancelled = true; };
+  }, [userId, onboardingActive]);
   // Timestamp of when onboarding finished — used to fade the home ? icon after 7 days
   const [onboardingCompletedAt, setOnboardingCompletedAt] = useState(() => _ls?.onboardingCompletedAt ?? null);
   // Is the on-demand tour modal currently open
@@ -990,9 +1234,24 @@ export default function App() {
   const now = nowClock;
 
   const overrideKey = (shiftId, date) => shiftId + ":" + date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
-  const toggleShiftOverride = (shiftId, date) => {
-    const key = overrideKey(shiftId, date);
+  const toggleShiftOverride = (shiftIdOrPrefixed, date) => {
+    if (!userId) return;
+    const isExtra = shiftIdOrPrefixed.startsWith('extra:');
+    const realShiftId = isExtra ? shiftIdOrPrefixed.slice(6) : shiftIdOrPrefixed;
+    const kind = isExtra ? 'extra' : 'off';
+    const key = overrideKey(shiftIdOrPrefixed, date);
+    const wasPresent = shiftOverridesRef.current.has(key);
     setShiftOverrides(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+    const promise = wasPresent
+      ? deleteShiftOverride(realShiftId, date, kind)
+      : upsertShiftOverride(realShiftId, date, kind);
+    promise.then(({ error }) => {
+      if (error) {
+        console.warn("[shifts] override toggle failed", error);
+        setShiftOverrides(prev => { const next = new Set(prev); if (wasPresent) next.add(key); else next.delete(key); return next; });
+        showToast("Couldn't save — reverted", "err");
+      }
+    });
   };
   const isOverridden = (shiftId, date) => shiftOverrides.has(overrideKey(shiftId, date));
   // Returns the effective shiftTime (override beats base config) for a given date.
@@ -1002,43 +1261,107 @@ export default function App() {
     return shift.config?.shiftTime || null;
   };
   const setShiftTimeForDate = (shiftId, date, start, end) => {
-    setShiftTimeOverrides(prev => ({ ...prev, [overrideKey(shiftId, date)]: { start, end } }));
+    if (!userId) return;
+    const key = overrideKey(shiftId, date);
+    const prior = shiftTimeOverridesRef.current[key];
+    setShiftTimeOverrides(prev => ({ ...prev, [key]: { start, end } }));
+    upsertShiftTimeOverride(shiftId, date, start, end).then(({ error }) => {
+      if (error) {
+        console.warn("[shifts] time override set failed", error);
+        setShiftTimeOverrides(prev => {
+          if (prior === undefined) {
+            const next = { ...prev };
+            delete next[key];
+            return next;
+          }
+          return { ...prev, [key]: prior };
+        });
+        showToast("Couldn't save — reverted", "err");
+      }
+    });
   };
   const clearShiftTimeForDate = (shiftId, date) => {
+    if (!userId) return;
+    const key = overrideKey(shiftId, date);
+    const prior = shiftTimeOverridesRef.current[key];
+    if (prior === undefined) return;
     setShiftTimeOverrides(prev => {
       const next = { ...prev };
-      delete next[overrideKey(shiftId, date)];
+      delete next[key];
       return next;
+    });
+    deleteShiftTimeOverride(shiftId, date).then(({ error }) => {
+      if (error) {
+        console.warn("[shifts] time override clear failed", error);
+        setShiftTimeOverrides(prev => ({ ...prev, [key]: prior }));
+        showToast("Couldn't restore — try again", "err");
+      }
     });
   };
   const hasShiftTimeOverride = (shiftId, date) => !!shiftTimeOverrides[overrideKey(shiftId, date)];
 
   const closeSheet = () => { setSheet(null); setActiveEvent(null); setActiveShift(null); setActiveGroup(null); setActiveMajorEvent(null); setPreviewEvent(null); setPreviewShift(null); setPreviewMajor(null); };
   const openEvent = (ev) => { setActiveEvent(ev); setSheet("eventDetail"); };
-  const openEditEvent = (ev) => { setActiveEvent(ev); setSheet("editEvent"); };
+  const openEditEvent = (ev) => {
+    if (ev._sharePath !== 'own') return;
+    setActiveEvent(ev); setSheet("editEvent");
+  };
   const openNewEvent = () => setSheet("newEvent");
   const openNewImportantEvent = () => setSheet("newImportantEvent");
   // Double-tap/click on a calendar cell opens a small chooser — event vs major event
   const openAddChooser = (date) => { setSelectedDate(date); setSheet("addChooser"); };
   const openEditGroup = (g) => { setActiveGroup(g); setSheet("editGroup"); };
-  const openEditShift = (p) => { setActiveShift(p); setSheet("editShift"); };
+  const openEditShift = (p) => {
+    if (p._sharePath !== 'own') return;
+    setActiveShift(p); setSheet("editShift");
+  };
   const addCalendar    = (cal) => { setCalendars(prev => [...prev, { ...cal, id: "c" + uid() }]); closeSheet(); showToast("Calendar created"); };
   const updateCalendar = (cal) => { setCalendars(prev => prev.map(c => c.id === cal.id ? cal : c)); closeSheet(); showToast("Calendar updated"); };
   const deleteCalendar = (id) => {
-    // Move events to first remaining calendar
+    if (!userId) return;
     const fallback = calendars.find(c => c.id !== id)?.id;
+    const priorEvents = eventsRef.current;
+    const priorCalendars = calendars;
+    const affected = fallback ? priorEvents.filter(e => e.calendarId === id) : [];
     if (fallback) setEvents(prev => prev.map(e => e.calendarId === id ? { ...e, calendarId: fallback } : e));
     setCalendars(prev => prev.filter(c => c.id !== id));
     closeSheet();
+    if (affected.length === 0) return;
+    Promise.all(
+      affected.map(ev => updateEventRow(ev.id, { ...ev, calendarId: fallback }, userId))
+    ).then(results => {
+      const failed = results.find(r => r.error);
+      if (!failed) return;
+      console.warn("[calendars] event re-assign failed", failed.error);
+      setEvents(priorEvents);
+      setCalendars(priorCalendars);
+      showToast("Couldn't move events — restored", "err");
+    });
   };
   const [activeCalendar, setActiveCalendar] = useState(null);
   const [homeOrderExpanded, setHomeOrderExpanded] = useState(false);
   const [confirmSoftReset, setConfirmSoftReset] = useState(false);
   const [confirmFullReset, setConfirmFullReset] = useState(false);
   const [fullResetInput, setFullResetInput] = useState("");
+  const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false);
+  const [deleteAccountInput, setDeleteAccountInput] = useState("");
+  // null | 'loading' | 'error' | { ownedGroups, eventCount, friendshipCount }
+  const [deletionPreflight, setDeletionPreflight] = useState(null);
 
-  // Soft reset: clears user-generated data, keeps name/color/theme and onboarding
-  const doSoftReset = () => {
+  // Soft reset: clears user-generated data, keeps name/color/theme and onboarding.
+  // Server-side event delete runs first; on error, abort without touching local state.
+  const doSoftReset = async () => {
+    if (!userId) return;
+    const [eventsRes, shiftsRes] = await Promise.all([
+      deleteAllEventsForOwner(userId),
+      deleteAllShiftsForOwner(userId),
+    ]);
+    if (eventsRes.error || shiftsRes.error) {
+      if (eventsRes.error) console.warn("[events] soft reset failed", eventsRes.error);
+      if (shiftsRes.error) console.warn("[shifts] soft reset failed", shiftsRes.error);
+      showToast("Couldn't reset — try again", "err");
+      return;
+    }
     setEvents([]);
     setMajorEvents([]);
     setShifts([]);
@@ -1059,10 +1382,22 @@ export default function App() {
     setTab("home");
   };
 
-  // Full reset: nukes everything including onboarding — user starts completely fresh
-  const doFullReset = () => {
+  // Full reset: nukes everything including onboarding — user starts completely fresh.
+  // Server-side event delete runs first; on error, abort without touching local state.
+  const doFullReset = async () => {
+    if (!userId) return;
+    const [eventsRes, shiftsRes] = await Promise.all([
+      deleteAllEventsForOwner(userId),
+      deleteAllShiftsForOwner(userId),
+    ]);
+    if (eventsRes.error || shiftsRes.error) {
+      if (eventsRes.error) console.warn("[events] full reset failed", eventsRes.error);
+      if (shiftsRes.error) console.warn("[shifts] full reset failed", shiftsRes.error);
+      showToast("Couldn't reset — try again", "err");
+      return;
+    }
     // Clear localStorage — if the browser blocks it, we silently continue with in-memory reset
-    try { localStorage.removeItem(LS_KEY); } catch {}
+    clearLocalPrefs();
     // Reset all persisted state directly so we don't depend on a page reload
     setEvents([]);
     setCalendars(seed.calendars);
@@ -1082,7 +1417,7 @@ export default function App() {
     setShiftOverrides(new Set());
     setHomeOrder(["shiftstatus","status","important","pinned","nextup","major","freetime"]);
     setThemeMode("auto");
-    setUserProfile({ name: "Alex Morgan", email: "", handle: "", defaultCalendar: "c1", defaultReminder: "15", avatar: null, badges: { friendRequests: true, feed: true, todayEvents: true } });
+    setUserProfile({ name: "Alex Morgan", email: "", handle: "", defaultCalendar: "c1", defaultReminder: "15", avatar: null, badges: { todayEvents: true, friendRequests: true } });
     // Trigger onboarding to run fresh
     setCustomColorRecents([]);
     setCustomColorFavorites([]);
@@ -1093,12 +1428,500 @@ export default function App() {
     setFullResetInput("");
   };
 
+  // Account deletion. Three-state expand: loading → preflight → either
+  // owned-groups gating (refuse path) or confirm-form (destructive path).
+  // Server-side cascade is delegated entirely to delete_my_account RPC.
+  const expandDeleteAccount = async () => {
+    if (!userId) return;
+    setConfirmDeleteAccount(true);
+    setDeletionPreflight('loading');
+    const res = await loadDeletionPreflight(userId);
+    if (res.error) {
+      console.warn("[account] preflight failed", res.error);
+      setDeletionPreflight('error');
+      return;
+    }
+    setDeletionPreflight(res);
+  };
+  const collapseDeleteAccount = () => {
+    setConfirmDeleteAccount(false);
+    setDeleteAccountInput("");
+    setDeletionPreflight(null);
+  };
+  // Owned-group click: collapse the danger zone first so the next
+  // re-expand re-fires preflight with fresh server state — the user
+  // is about to transfer or delete the group, which moves them off
+  // the gate. Then route them to the group's edit sheet where the
+  // Transfer / Delete actions live.
+  const handleOwnedGroupClick = (g) => {
+    collapseDeleteAccount();
+    openEditGroup(g);
+  };
+  const doDeleteAccount = async () => {
+    if (!userId) return;
+    const expected = (userProfile.handle || '').replace(/^@+/, '').toLowerCase();
+    const entered  = deleteAccountInput.replace(/^@+/, '').toLowerCase();
+    if (!expected || entered !== expected) return;
+    const { error } = await deleteMyAccount();
+    if (error) {
+      console.warn("[account] delete failed", error);
+      // RPC's owned-group raise is the backstop for a race where
+      // ownership changed mid-session. Re-fetch preflight so the
+      // user sees the new gating state instead of a stale form.
+      if (/owned group/i.test(error.message || '')) {
+        showToast("You still own groups — list refreshed", "err");
+        const fresh = await loadDeletionPreflight(userId);
+        if (!fresh.error) setDeletionPreflight(fresh);
+        return;
+      }
+      showToast("Couldn't delete account — try again", "err");
+      return;
+    }
+    // Success. signOut() clears the supabase-js session; reload tears
+    // down any zombie React state referring to a now-deleted userId.
+    await signOut();
+    window.location.reload();
+  };
+
+  // Load events from Supabase. Supabase is authoritative — remote always wins.
+  // The migratedFlag return value is consumed by migrateEventsIfNeeded below.
+  const syncEventsFromSupabase = useCallback(async () => {
+    if (!userId) {
+      console.warn("[events] no userId; skipping Supabase sync");
+      return;
+    }
+    setEventsSyncing(true);
+    setEventsSyncError(null);
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      setEventsSyncError("Sync timed out — showing local data.");
+      setEventsSyncing(false);
+    }, 10000);
+    const { events: remoteEvents, error } = await loadEventsFromSupabase();
+    if (timedOut) return;
+    clearTimeout(timeoutId);
+    if (error) {
+      console.warn("[events] load failed", error);
+      setEventsSyncError("Couldn't sync — showing local data.");
+      setEventsSyncing(false);
+      return;
+    }
+    // Read flag fresh — _ls is captured at mount and may be stale after
+    // a same-session migration completes.
+    const liveLs = lsLoad();
+    const migratedFlag = liveLs?.events_migrated_to_supabase;
+    setEvents(remoteEvents);
+    setEventsSyncing(false);
+    return { remoteEventsCount: remoteEvents.length, migratedFlag: !!migratedFlag };
+  }, [userId]);
+
+  // Phase 1 read-side for major events. Silent swap-in: local state shows
+  // immediately on mount; remote state replaces it when ready. Falls back
+  // to local state when remote is empty AND the migration flag is unset,
+  // so a pre-migration user doesn't see a blank list. Phase 2 will run the
+  // migration and flip the flag.
+  const syncMajorEventsFromSupabase = useCallback(async () => {
+    if (!userId) return;
+    const { majorEvents: remote, error } = await loadMajorEventsFromSupabase();
+    if (error) {
+      console.warn("[major_events] load failed", error);
+      return;
+    }
+    const liveLs = lsLoad();
+    const migratedFlag = liveLs?.major_events_migrated_to_supabase;
+    if (remote.length > 0 || migratedFlag) {
+      setMajorEvents(remote);
+    }
+    return { remoteMajorEventsCount: remote.length, migratedFlag: !!migratedFlag };
+  }, [userId]);
+
+  // Phase 1 read-side for shifts. Silent swap-in mirroring major_events.
+  // Falls back to local when remote is empty AND the migration flag is
+  // unset. Loads shifts + share-targets + day-overrides + day-time-overrides
+  // in parallel; override loaders return rows for owned AND shared-with-viewer
+  // shifts (RLS permissive via can_see_shift).
+  const syncShiftsFromSupabase = useCallback(async () => {
+    if (!userId) return;
+    const { shifts: remote, shiftOverrides: remoteOverrides,
+            shiftTimeOverrides: remoteTimeOverrides, error }
+      = await loadShiftsFromSupabase();
+    if (error) {
+      console.warn("[shifts] load failed", error);
+      return;
+    }
+    const liveLs = lsLoad();
+    const migratedFlag = liveLs?.shifts_migrated_to_supabase;
+    if (remote.length > 0 || migratedFlag) {
+      setShifts(remote);
+      setShiftOverrides(remoteOverrides);
+      setShiftTimeOverrides(remoteTimeOverrides);
+    }
+    return { remoteShiftsCount: remote.length, migratedFlag: !!migratedFlag };
+  }, [userId]);
+
+  // Crash safety: pre-stamp UUIDs and persist the remap to localStorage
+  // BEFORE the upsert. If the page crashes mid-upsert, the next mount
+  // reuses the same UUIDs (upsert with onConflict 'id' dedupes).
+  const migrateMajorEventsIfNeeded = useCallback(async () => {
+    if (!userId) return;
+    const liveLs = lsLoad() || {};
+    if (liveLs.major_events_migrated_to_supabase) {
+      await syncMajorEventsFromSupabase();
+      return;
+    }
+
+    const syncResult = await syncMajorEventsFromSupabase();
+    if (!syncResult) return;
+
+    if (syncResult.remoteMajorEventsCount > 0) {
+      // Cross-device or already-caught-up case: set flag, clear remap.
+      const cur = lsLoad() || {};
+      lsSave({ ...cur,
+               major_events_migrated_to_supabase: true,
+               major_events_pending_migration_remap: undefined });
+      return;
+    }
+
+    const localMajorEvents = liveLs.majorEvents ?? [];
+    if (localMajorEvents.length === 0) {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur, major_events_migrated_to_supabase: true });
+      return;
+    }
+
+    const persistedRemap = liveLs.major_events_pending_migration_remap || {};
+    const localRemap = {};
+    const stamped = localMajorEvents.map((me) => {
+      const newId = persistedRemap[me.id] || crypto.randomUUID();
+      localRemap[me.id] = newId;
+      return { ...me, id: newId };
+    });
+    {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur, major_events_pending_migration_remap: localRemap });
+    }
+
+    const { error } = await migrateLocalMajorEventsToSupabase(stamped, userId);
+    if (error) {
+      console.warn("[major_events] migration failed", error);
+      return; // do NOT set flag; remap stays persisted for next attempt
+    }
+
+    {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur,
+               major_events_migrated_to_supabase: true,
+               major_events_pending_migration_remap: undefined });
+    }
+
+    await syncMajorEventsFromSupabase();
+  }, [userId, syncMajorEventsFromSupabase]);
+
+  // Phase 2 orchestrator for shifts. Mirrors migrateMajorEventsIfNeeded with
+  // an extra step: after the upsert succeeds, the in-memory shiftOverrides
+  // Set and shiftTimeOverrides map are remapped (their keys contain the OLD
+  // string shift id; UUIDs replace it). All persistence — flag, remap clear,
+  // remapped Sets — lands in one synchronous lsSave to close the 300ms
+  // persist-effect debounce window.
+  //
+  // Cross-device case: if remote already has shifts, we set the flag and
+  // return. The owner's local overrides on this device are silently
+  // discarded — same trade-off as major_events Phase 2.
+  const migrateShiftsIfNeeded = useCallback(async () => {
+    if (!userId) return;
+    const liveLs = lsLoad() || {};
+    if (liveLs.shifts_migrated_to_supabase) {
+      await syncShiftsFromSupabase();
+      return;
+    }
+
+    const syncResult = await syncShiftsFromSupabase();
+    if (!syncResult) return;
+
+    if (syncResult.remoteShiftsCount > 0) {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur,
+               shifts_migrated_to_supabase: true,
+               shifts_pending_migration_remap: undefined });
+      return;
+    }
+
+    const localShifts = liveLs.shifts ?? [];
+    if (localShifts.length === 0) {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur, shifts_migrated_to_supabase: true });
+      return;
+    }
+
+    const localShiftOverrides     = new Set(liveLs.shiftOverrides ?? []);
+    const localShiftTimeOverrides = liveLs.shiftTimeOverrides ?? {};
+
+    const persistedRemap = liveLs.shifts_pending_migration_remap || {};
+    const localRemap = {};
+    const stamped = localShifts.map((s) => {
+      const newId = persistedRemap[s.id] || crypto.randomUUID();
+      localRemap[s.id] = newId;
+      return { ...s, id: newId };
+    });
+    {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur, shifts_pending_migration_remap: localRemap });
+    }
+
+    const { error } = await migrateLocalShiftsToSupabase(
+      stamped, localShiftOverrides, localShiftTimeOverrides, userId
+    );
+    if (error) {
+      console.warn("[shifts] migration failed", error);
+      return; // do NOT set flag; remap stays persisted for next attempt
+    }
+
+    // Remap in-memory Set/map keys: localShiftId → UUID. Date portion preserved.
+    const remappedOverrides = remapShiftOverridesKeys(localShiftOverrides, localRemap);
+    const remappedTimeOverrides = remapShiftTimeOverridesKeys(localShiftTimeOverrides, localRemap);
+    setShiftOverrides(remappedOverrides);
+    setShiftTimeOverrides(remappedTimeOverrides);
+
+    {
+      const cur = lsLoad() || {};
+      lsSave({
+        ...cur,
+        shiftOverrides: [...remappedOverrides],
+        shiftTimeOverrides: remappedTimeOverrides,
+        shifts_migrated_to_supabase: true,
+        shifts_pending_migration_remap: undefined,
+      });
+    }
+
+    await syncShiftsFromSupabase();
+  }, [userId, syncShiftsFromSupabase]);
+
+  // Refs mirror these states at render-commit granularity. Two consumers:
+  //   - The migration callback captures a fresh snapshot for remap without
+  //     polluting useCallback deps with the underlying state.
+  //   - Optimistic mutation paths read the latest committed state to
+  //     snapshot `prior` for revert, without relying on React 18's
+  //     eager-state evaluation (which only kicks in when the fiber's
+  //     update queue is empty).
+  const eventsRef = useRef(events);
+  const pinnedEventsRef = useRef(pinnedEvents);
+  const dismissedImportantEventsRef = useRef(dismissedImportantEvents);
+  const groupsRef = useRef(groups);
+  const groupMembersRef = useRef(groupMembers);
+  const friendsRef = useRef(friends);
+  const majorEventsRef = useRef(majorEvents);
+  const shiftsRef = useRef(shifts);
+  const shiftOverridesRef = useRef(shiftOverrides);
+  const shiftTimeOverridesRef = useRef(shiftTimeOverrides);
+  React.useEffect(() => { eventsRef.current = events; }, [events]);
+  React.useEffect(() => { pinnedEventsRef.current = pinnedEvents; }, [pinnedEvents]);
+  React.useEffect(() => { dismissedImportantEventsRef.current = dismissedImportantEvents; }, [dismissedImportantEvents]);
+  React.useEffect(() => { groupsRef.current = groups; }, [groups]);
+  React.useEffect(() => { groupMembersRef.current = groupMembers; }, [groupMembers]);
+  React.useEffect(() => { friendsRef.current = friends; }, [friends]);
+  React.useEffect(() => { majorEventsRef.current = majorEvents; }, [majorEvents]);
+  React.useEffect(() => { shiftsRef.current = shifts; }, [shifts]);
+  React.useEffect(() => { shiftOverridesRef.current = shiftOverrides; }, [shiftOverrides]);
+  React.useEffect(() => { shiftTimeOverridesRef.current = shiftTimeOverrides; }, [shiftTimeOverrides]);
+
+  // One-time migration: push localStorage events up to Supabase the first
+  // time a signed-in user loads the app post-Step-1. Runs the initial sync
+  // first to learn whether remote already has rows for this user (cross-
+  // device case → skip migration, set the flag).
+  //
+  // Crash safety: pre-stamp UUIDs and persist the remap to localStorage
+  // BEFORE the upsert. If the page crashes mid-upsert, the next mount
+  // reuses the same UUIDs — the upsert (onConflict: 'id') becomes a true
+  // no-op rather than producing duplicate rows.
+  //
+  // Multi-tab race during migration is documented as accepted in HANDOFF #3.
+  const migrateEventsIfNeeded = useCallback(async () => {
+    if (!userId) return;
+    const liveLs = lsLoad() || {};
+    if (liveLs.events_migrated_to_supabase) {
+      // Already migrated; just run the regular sync and return.
+      await syncEventsFromSupabase();
+      return;
+    }
+
+    // Run the initial sync first — its return value tells us the remote/flag
+    // state and seeds React state with whatever Step 1 decides to adopt.
+    const syncResult = await syncEventsFromSupabase();
+    if (!syncResult) return; // sync errored or timed out; banner shows error
+
+    // Defensive: if remote already has rows (migrated on another device, or
+    // a partial run from a previous session caught up on its own), set the
+    // flag and skip — re-uploading would create duplicates with fresh UUIDs.
+    if (syncResult.remoteEventsCount > 0) {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur,
+               events_migrated_to_supabase: true,
+               events_pending_migration_remap: undefined });
+      return;
+    }
+
+    const localEvents = liveLs.events ? reviveEvents(liveLs.events) : [];
+    if (localEvents.length === 0) {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur, events_migrated_to_supabase: true });
+      return;
+    }
+
+    // Pre-stamp UUIDs (reusing any persisted remap from a prior crashed run)
+    // and write the remap before the upsert.
+    const persistedRemap = liveLs.events_pending_migration_remap || {};
+    const localRemap = {};
+    const stamped = localEvents.map((ev) => {
+      const newId = persistedRemap[ev.id] || crypto.randomUUID();
+      localRemap[ev.id] = newId;
+      return { ...ev, id: newId };
+    });
+    {
+      const cur = lsLoad() || {};
+      lsSave({ ...cur, events_pending_migration_remap: localRemap });
+    }
+
+    setEventsMigrationPhase(true);
+    setEventsSyncing(true);
+    setEventsSyncError(null);
+
+    const { error } = await migrateLocalEventsToSupabase(stamped, userId);
+    if (error) {
+      console.warn("[events] migration failed", error);
+      setEventsSyncError("Couldn't set up your events. Tap Retry.");
+      setEventsSyncing(false);
+      setEventsMigrationPhase(false);
+      return; // do NOT set flag; remap stays persisted for next attempt
+    }
+
+    // Snapshot the React-state-truth for both ID-keyed sets, remap once,
+    // and use the same arrays for both setState (value form) and lsSave.
+    // Refs are kept in sync via the effects above, so .current is fresh.
+    const remappedPinned = new Set(
+      [...pinnedEventsRef.current].map((id) => localRemap[id] ?? id)
+    );
+    const remappedDismissed = new Set(
+      [...dismissedImportantEventsRef.current].map((id) => localRemap[id] ?? id)
+    );
+
+    setPinnedEvents(remappedPinned);
+    setDismissedImportantEvents(remappedDismissed);
+
+    // Synchronous flag write + remap clear + remapped sets persisted, all in
+    // one shot. Closes the 300ms persist-effect debounce window. The persist
+    // effect will re-write 300ms later with identical data — harmless no-op.
+    {
+      const cur = lsLoad() || {};
+      lsSave({
+        ...cur,
+        pinnedEvents: [...remappedPinned],
+        dismissedImportantEvents: [...remappedDismissed],
+        events_migrated_to_supabase: true,
+        events_pending_migration_remap: undefined,
+      });
+    }
+
+    setEventsMigrationPhase(false);
+    // Re-sync to pull the just-uploaded rows back as UUID-id'd events.
+    await syncEventsFromSupabase();
+  }, [userId, syncEventsFromSupabase]);
+
+  React.useEffect(() => { migrateEventsIfNeeded(); }, [migrateEventsIfNeeded]);
+
+  React.useEffect(() => { migrateMajorEventsIfNeeded(); }, [migrateMajorEventsIfNeeded]);
+
+  React.useEffect(() => { migrateShiftsIfNeeded(); }, [migrateShiftsIfNeeded]);
+
+  // Load groups + memberships from Supabase. Server-authoritative; pre-existing
+  // local seed/demo data is overwritten on first successful sync.
+  //
+  // NOTE: groups may include ones owned by OTHER users (the existing local
+  // addGroup hardcodes `owner: "u1"`, which is wrong against multi-user
+  // data). UI is gated off behind FEATURES.groups in Phase 1, so any
+  // owner-assumes-self logic in the existing Groups UI is dormant for now.
+  // Phase 3 adds ownership-aware gating (Owner badge, Delete button, role
+  // mutations all owner-only).
+  const syncGroupsFromSupabase = useCallback(async () => {
+    if (!userId) return;
+    const { groups: remoteGroups, members: remoteMembers, error } = await loadGroupsForViewer();
+    if (error) {
+      console.warn("[groups] load failed", error);
+      return;
+    }
+    setGroups(remoteGroups);
+    setGroupMembers(remoteMembers);
+  }, [userId]);
+
+  React.useEffect(() => { syncGroupsFromSupabase(); }, [syncGroupsFromSupabase]);
+
+  // Load friendships from Supabase. Server-authoritative; pre-existing
+  // local seed/demo data is overwritten on first successful sync. UI is
+  // gated off behind FEATURES.friends in Phase 1 — writes still mutate
+  // local state only. Phase 2 wires the action handlers to RPCs.
+  const syncFriendsFromSupabase = useCallback(async () => {
+    if (!userId) return;
+    const { friends: remoteFriends, error } = await loadFriendsForViewer(userId);
+    if (error) {
+      console.warn("[friends] load failed", error);
+      return;
+    }
+    setFriends(remoteFriends);
+  }, [userId]);
+
+  React.useEffect(() => { syncFriendsFromSupabase(); }, [syncFriendsFromSupabase]);
+
+  // Add sub-tab handle search. 250ms debounce + 3-char minimum mirrors
+  // NewGroupSheet's pattern. Effect emits only "did we resolve a profile";
+  // the relationship branch (yourself / already-friends / already-pending-* /
+  // found) is derived in render from live friends[], so accept/decline/cancel
+  // from this surface refresh the card without re-querying. findUserByHandle
+  // is reused from groups.js per the Phase 2 decision not to refactor it out.
+  React.useEffect(() => {
+    if (handleSearchDebounceRef.current) clearTimeout(handleSearchDebounceRef.current);
+    const cleaned = handleQuery.replace(/^@+/, '').toLowerCase().trim();
+    if (cleaned.length < 3) { setHandleResult({ state: 'idle' }); return; }
+    setHandleResult({ state: 'searching' });
+    handleSearchDebounceRef.current = setTimeout(async () => {
+      const { user, error } = await findUserByHandle(cleaned);
+      if (error) { setHandleResult({ state: 'error' });     return; }
+      if (!user) { setHandleResult({ state: 'not-found' }); return; }
+      setHandleResult({ state: 'resolved', user });
+    }, 250);
+    return () => { if (handleSearchDebounceRef.current) clearTimeout(handleSearchDebounceRef.current); };
+  }, [handleQuery]);
+
+  // Hydrate server-authoritative profile fields into local userProfile.
+  // handle, name, and avatar_url are all pushed to the server by
+  // EditProfileSheet on save and hydrated here on next mount. Avatar
+  // special: a server null OVERWRITES local (intentional — clears pre-
+  // Storage-upload data URIs that were never migrated to the bucket).
+  React.useEffect(() => {
+    if (!profile) return;
+    setUserProfile(prev => {
+      const next = { ...prev };
+      if (profile.handle != null && profile.handle !== prev.handle) next.handle = profile.handle;
+      if (profile.name != null && profile.name !== prev.name) next.name = profile.name;
+      if (profile.avatar_url !== prev.avatar) next.avatar = profile.avatar_url;
+      return next;
+    });
+  }, [profile?.handle, profile?.name, profile?.avatar_url]);
+
   // Persist all data to localStorage on any relevant change
   React.useEffect(() => {
     // Debounced save — avoids sync localStorage writes on every keystroke
     const saveHandle = setTimeout(() => {
+      // Spread the live localStorage blob first so fields that are NOT in
+      // React state (e.g. events_migrated_to_supabase,
+      // events_pending_migration_remap) survive this reconstruction. Without
+      // this spread, every persist tick wipes any localStorage-only key.
       lsSave({
-        events,
+        ...(lsLoad() || {}),
+        // Stamp the userId this LS blob belongs to. AuthGate reads this on
+        // SIGNED_IN to detect a different user signing in on the same browser
+        // and purge the prior user's prefs. Placed AFTER the spread so a
+        // stale boundUserId pulled in from disk is overridden by the live one.
+        boundUserId: userId,
         calendars,
         groups,
         groupMembers,
@@ -1116,6 +1939,7 @@ export default function App() {
         hiddenCalendars:  [...hiddenCalendars],
         hiddenGroups:     [...hiddenGroups],
         holidayCountries: [...holidayCountries],
+        shiftOverrides:   [...shiftOverrides],
         dayNotes,
         homeOrder,
         themeMode, weekLayout, textSize, highContrast, viewMode, mapProvider, recentSearches,
@@ -1124,32 +1948,80 @@ export default function App() {
       });
     }, 300);
     return () => clearTimeout(saveHandle);
-  }, [events, calendars, groups, groupMembers, shifts, majorEvents, friends,
+  }, [userId, calendars, groups, groupMembers, shifts, majorEvents, friends,
       activityFeed, feedSeenAt, onboardingActive, onboardingCompletedAt,
       customColorRecents, customColorFavorites,
-      pinnedEvents, dismissedImportantEvents, hiddenCalendars, hiddenGroups, holidayCountries,
+      pinnedEvents, dismissedImportantEvents, hiddenCalendars, hiddenGroups, holidayCountries, shiftOverrides,
       dayNotes, homeOrder, themeMode, weekLayout, textSize, highContrast, viewMode, mapProvider, recentSearches, userProfile, shiftTimeOverrides, shiftNoticeDismissed, timeFormat, dismissedPlaceholders]);
   const openNewCalendar  = () => { setActiveCalendar(null); setSheet("editCalendar"); };
   const openEditCalendar = (cal) => { setActiveCalendar(cal); setSheet("editCalendar"); };
   const openNewMajorEvent = () => setSheet("newMajorEvent");
-  const openEditMajorEvent = (me) => { setActiveMajorEvent(me); setSheet("editMajorEvent"); };
+  const openEditMajorEvent = (me) => {
+    if (me._sharePath !== 'own') return;
+    setActiveMajorEvent(me); setSheet("editMajorEvent");
+  };
   const openMajorEventDetail = (me) => { setActiveMajorEvent(me); setSheet("majorEventDetail"); };
   const duplicateMajorEvent = (me) => {
-    const copy = { ...me, id: "m" + uid(), title: me.title + " (copy)" };
+    if (!userId) return;
+    const newId = crypto.randomUUID();
+    const copy = { ...me, id: newId, title: me.title + " (copy)", _sharePath: 'own' };
     setMajorEvents(prev => [...prev, copy]);
     closeSheet();
+    insertMajorEvent(copy, userId).then(async ({ error }) => {
+      if (error) {
+        console.warn("[major_events] duplicate failed", error);
+        setMajorEvents(prev => prev.filter(x => x.id !== newId));
+        showToast("Couldn't duplicate — reverted", "err");
+        return;
+      }
+      const { error: shareErr } = await diffAndWriteMajorEventShares(
+        newId, [], [], copy.groupIds || [], copy.userIds || []
+      );
+      if (shareErr) {
+        console.warn("[major_events] share duplicate failed", shareErr);
+        setMajorEvents(prev => prev.map(x =>
+          x.id === newId ? { ...x, groupIds: [], userIds: [] } : x
+        ));
+        showToast("Major event saved — sharing didn't apply", "err");
+      }
+    });
   };
 
   const addEvent = (ev) => {
-    const newId = "e" + uid();
-    setEvents(prev => [...prev, { ...ev, id: newId }]);
+    if (!userId) return;
+    const newId = crypto.randomUUID();
+    const newEv = { ...ev, id: newId, _sharePath: 'own' };
+    setEvents(prev => [...prev, newEv]);
     if (ev.important) setPinnedEvents(prev => { const n = new Set(prev); n.add(newId); return n; });
     (ev.groupIds||[]).forEach(gid => addActivity(gid, "added", ev.title, ev.start));
     closeSheet();
     showToast("Event created");
+    insertEvent(newEv, userId).then(async ({ error }) => {
+      if (error) {
+        console.warn("[events] insert failed", error);
+        setEvents(prev => prev.filter(e => e.id !== newId));
+        if (ev.important) setPinnedEvents(prev => { const n = new Set(prev); n.delete(newId); return n; });
+        showToast("Couldn't save event — reverted", "err");
+        return;
+      }
+      // Event row saved. Now write share rows. Partial-failure: event
+      // stays saved with empty shares; toast surfaces the divergence.
+      const { error: shareErr } = await diffAndWriteShares(
+        newId, [], [], ev.groupIds || [], ev.userIds || []
+      );
+      if (shareErr) {
+        console.warn("[events] share insert failed", shareErr);
+        setEvents(prev => prev.map(e =>
+          e.id === newId ? { ...e, groupIds: [], userIds: [] } : e
+        ));
+        showToast("Event saved — sharing didn't apply", "err");
+      }
+    });
   };
   const deleteEvent = (id, opts = {}) => {
+    if (!userId) return;
     const base = baseEventId(id);
+    const prior = eventsRef.current.find(e => e.id === base);
     // Scope: "instance" deletes a single occurrence via override; "series" (default) deletes the whole event.
     if (opts.scope === "instance" && opts.dateKey) {
       setEvents(prev => prev.map(e => {
@@ -1158,27 +2030,69 @@ export default function App() {
       }));
       closeSheet();
       showToast("Occurrence removed", "err");
+      // Instance-skip is encoded in client_extras.overrides — persist as an UPDATE, not a DELETE.
+      if (prior) {
+        const nextParent = { ...prior, overrides: { ...(prior.overrides||{}), [opts.dateKey]: { skip: true } } };
+        updateEventRow(base, nextParent, userId).then(({ error }) => {
+          if (!error) return;
+          console.warn("[events] instance-delete failed", error);
+          setEvents(prev => prev.map(e => e.id === base ? prior : e));
+          showToast("Couldn't remove — restored", "err");
+        });
+      }
       return;
     }
-    setEvents(prev => {
-      const ev = prev.find(e => e.id === base);
-      if (ev) (ev.groupIds||[]).forEach(gid => addActivity(gid, "deleted", ev.title, ev.start));
-      return prev.filter(e => e.id !== base);
-    });
+    // Snapshot full prior array so revert restores position. Clobbers any
+    // concurrent in-flight optimistic state on revert — preferred over silently reordering.
+    const priorEvents = eventsRef.current;
+    setEvents(prev => prev.filter(e => e.id !== base));
+    if (prior) (prior.groupIds||[]).forEach(gid => addActivity(gid, "deleted", prior.title, prior.start));
     closeSheet();
     showToast("Event deleted", "err");
+    if (prior) {
+      deleteEventRow(base).then(({ error }) => {
+        if (!error) return;
+        console.warn("[events] delete failed", error);
+        setEvents(priorEvents);
+        showToast("Couldn't delete — restored", "err");
+      });
+    }
   };
   const duplicateEvent = (ev) => {
-    const newEv = { ...ev, id: "e" + uid(), title: ev.title + " (copy)" };
+    if (!userId) return;
+    const newId = crypto.randomUUID();
+    const newEv = { ...ev, id: newId, title: ev.title + " (copy)", _sharePath: 'own' };
     setEvents(prev => [...prev, newEv]);
     closeSheet();
     showToast("Event duplicated");
+    insertEvent(newEv, userId).then(async ({ error }) => {
+      if (error) {
+        console.warn("[events] duplicate failed", error);
+        setEvents(prev => prev.filter(e => e.id !== newId));
+        showToast("Couldn't duplicate — reverted", "err");
+        return;
+      }
+      // Source's shares carry over via the spread; mirror addEvent's
+      // partial-failure semantics.
+      const { error: shareErr } = await diffAndWriteShares(
+        newId, [], [], ev.groupIds || [], ev.userIds || []
+      );
+      if (shareErr) {
+        console.warn("[events] share duplicate failed", shareErr);
+        setEvents(prev => prev.map(e =>
+          e.id === newId ? { ...e, groupIds: [], userIds: [] } : e
+        ));
+        showToast("Event saved — sharing didn't apply", "err");
+      }
+    });
   };
   const updateEvent = (ev, opts = {}) => {
+    if (!userId) return;
     const base = baseEventId(ev.id);
+    const prior = eventsRef.current.find(e => e.id === base);
     // Sync pin state when the important flag flips. ON → auto-pin; OFF after
     // being ON → auto-unpin. Manual pins on non-important events are preserved.
-    const wasImportant = !!events.find(e => e.id === base)?.important;
+    const wasImportant = !!prior?.important;
     const nowImportant = !!ev.important;
     if (wasImportant !== nowImportant) {
       setPinnedEvents(prev => {
@@ -1198,92 +2112,632 @@ export default function App() {
       }));
       closeSheet();
       showToast("Occurrence updated");
+      if (prior) {
+        const nextParent = { ...prior, overrides: { ...(prior.overrides||{}), [opts.dateKey]: override } };
+        updateEventRow(base, nextParent, userId).then(({ error }) => {
+          if (!error) return;
+          console.warn("[events] instance-update failed", error);
+          setEvents(prev => prev.map(e => e.id === base ? prior : e));
+          if (wasImportant !== nowImportant) {
+            setPinnedEvents(prev => { const n = new Set(prev); if (wasImportant) n.add(base); else n.delete(base); return n; });
+          }
+          showToast("Couldn't save — reverted", "err");
+        });
+      }
       return;
     }
     // Series edit from an occurrence: preserve the base series' anchor dates but carry time-of-day
     // and other fields forward. Otherwise the series would jump to the edited occurrence's date.
     const { _seriesId, _occurrenceKey, ...clean } = ev;
-    setEvents(prev => prev.map(e => {
-      if (e.id !== base) return e;
-      const saved = { ...clean, id: base };
-      if (opts.scope === "series" && _occurrenceKey && e.start && e.end) {
-        const baseStart = new Date(e.start);
-        const baseEnd = new Date(e.end);
-        baseStart.setHours(ev.start.getHours(), ev.start.getMinutes(), 0, 0);
-        baseEnd.setHours(ev.end.getHours(), ev.end.getMinutes(), 0, 0);
-        saved.start = baseStart;
-        saved.end = baseEnd;
-      }
-      return saved;
-    }));
+    const saved = { ...clean, id: base };
+    if (opts.scope === "series" && _occurrenceKey && prior?.start && prior?.end) {
+      const baseStart = new Date(prior.start);
+      const baseEnd = new Date(prior.end);
+      baseStart.setHours(ev.start.getHours(), ev.start.getMinutes(), 0, 0);
+      baseEnd.setHours(ev.end.getHours(), ev.end.getMinutes(), 0, 0);
+      saved.start = baseStart;
+      saved.end = baseEnd;
+    }
+    setEvents(prev => prev.map(e => e.id === base ? saved : e));
     (ev.groupIds||[]).forEach(gid => addActivity(gid, "updated", ev.title, ev.start));
     closeSheet();
     showToast("Event updated");
+    if (prior) {
+      updateEventRow(base, saved, userId).then(async ({ error }) => {
+        if (error) {
+          console.warn("[events] update failed", error);
+          setEvents(prev => prev.map(e => e.id === base ? prior : e));
+          if (wasImportant !== nowImportant) {
+            setPinnedEvents(prev => { const n = new Set(prev); if (wasImportant) n.add(base); else n.delete(base); return n; });
+          }
+          showToast("Couldn't save — reverted", "err");
+          return;
+        }
+        // Event row updated. Diff and apply share changes; on share
+        // failure, revert just the share fields to prior (event row
+        // update stands).
+        const oldG = prior.groupIds || [];
+        const oldU = prior.userIds  || [];
+        const newG = saved.groupIds || [];
+        const newU = saved.userIds  || [];
+        const { error: shareErr } = await diffAndWriteShares(base, oldG, oldU, newG, newU);
+        if (shareErr) {
+          console.warn("[events] share update failed", shareErr);
+          setEvents(prev => prev.map(e =>
+            e.id === base ? { ...e, groupIds: oldG, userIds: oldU } : e
+          ));
+          showToast("Event saved — share changes reverted", "err");
+        }
+      });
+    }
   };
-  const addGroup = (g) => { setGroups(prev => [...prev, { ...g, id: "g" + uid(), owner: "u1" }]); closeSheet(); showToast("Group created"); };
+  // Resolves the current user's role for a given group: 'owner' if they
+  // own it, otherwise their group_members.role ('editor' | 'member'),
+  // otherwise null. Used by NewGroupSheet for owner-aware UI gating
+  // and in Commit 2 for the transfer/leave action surface.
+  const myGroupRole = (g) => g?.owner === userId
+    ? 'owner'
+    : groupMembersRef.current.find(m => m.groupId === g?.id && m.userId === userId)?.role
+      ?? null;
+  // Sync round-trip: only adds to local state once the server returns
+  // the real UUID, so subsequent member-add operations have a valid
+  // group_id to FK against. Rare-but-possible double-click footgun
+  // (two RPCs in flight) is accepted; mitigations are UI polish.
+  const addGroup = async (g, members = []) => {
+    if (!userId) return;
+    const { groupId, error } = await createGroup({ name: g.name, color: g.color });
+    if (error) {
+      console.warn("[groups] create failed", error);
+      showToast("Couldn't create group", "err");
+      return;
+    }
+    setGroups(prev => [...prev, {
+      id: groupId,
+      name: g.name,
+      color: g.color,
+      owner: userId,
+      ownerName: userProfile.name,
+      ownerHandle: userProfile.handle,
+      ownerAvatar: userProfile.avatar,
+      memberListHidden: false,
+    }]);
+    closeSheet();
+    showToast("Group created");
+    // Privacy + member writes ride as parallel follow-ups. Group stays
+    // created on partial failure; user can reopen Edit to retry.
+    const followUps = [];
+    if (g.memberListHidden) followUps.push(updateGroupRow(groupId, { member_list_hidden: true }));
+    for (const m of members) followUps.push(addMember(groupId, m.userId, m.role));
+    if (!followUps.length) return;
+    const results = await Promise.allSettled(followUps);
+    const failed = results.find(r => r.status === 'rejected' || r.value?.error);
+    if (!failed) {
+      if (members.length) {
+        setGroupMembers(prev => [...prev, ...members.map(m => ({ ...m, groupId }))]);
+      }
+      if (g.memberListHidden) {
+        setGroups(prev => prev.map(x => x.id === groupId ? { ...x, memberListHidden: true } : x));
+      }
+      return;
+    }
+    console.warn("[groups] follow-up failures", results);
+    showToast("Group created — some settings didn't apply", "err");
+  };
   const updateGroup = (g, members) => {
+    if (!userId) return;
+    const priorGroups = groupsRef.current;
+    const priorMembers = groupMembersRef.current;
+    const priorGroup = priorGroups.find(x => x.id === g.id);
+    if (!priorGroup) return;
+    const priorOfThis = priorMembers.filter(m => m.groupId === g.id);
+
+    // Optimistic local apply — same shape as the pre-Supabase function.
     setGroups(prev => prev.map(x => x.id === g.id ? { ...x, ...g } : x));
-    setGroupMembers(prev => [...prev.filter(m => m.groupId !== g.id), ...members.map(m => ({ ...m, groupId: g.id }))]);
+    setGroupMembers(prev => [
+      ...prev.filter(m => m.groupId !== g.id),
+      ...members.map(m => ({ ...m, groupId: g.id })),
+    ]);
     closeSheet();
     showToast("Group updated");
+
+    // Group-fields patch — only changed columns. Field names are
+    // server-shape (snake_case) per the helper's allowlist.
+    const groupPatch = {};
+    if (priorGroup.name !== g.name) groupPatch.name = g.name;
+    if (priorGroup.color !== g.color) groupPatch.color = g.color;
+    if (g.memberListHidden !== undefined && priorGroup.memberListHidden !== g.memberListHidden) {
+      groupPatch.member_list_hidden = g.memberListHidden;
+    }
+
+    // Member diff — UUID-userIds only. The "+ Add member" path in
+    // NewGroupSheet creates visual-only stubs with userId="u"+uid2();
+    // those aren't real profile rows so the server would FK-fail.
+    // Phase 3's @handle resolution makes this filter moot.
+    const isUuid = (s) => typeof s === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+    const oldMap = new Map(priorOfThis.filter(m => isUuid(m.userId)).map(m => [m.userId, m]));
+    const newMap = new Map(members.filter(m => isUuid(m.userId)).map(m => [m.userId, m]));
+
+    const ops = [];
+    if (Object.keys(groupPatch).length) {
+      ops.push(updateGroupRow(g.id, groupPatch));
+    }
+    // Adds. Concurrent-add edge case: two tabs adding the same member
+    // both succeed locally; one server INSERT wins, the other fails
+    // the (group_id, user_id) PK and triggers the loser's revert.
+    // Loser's UI is briefly stale until next syncGroupsFromSupabase.
+    for (const [uid, m] of newMap) {
+      if (!oldMap.has(uid)) ops.push(addMember(g.id, uid, m.role));
+    }
+    // Removes
+    for (const [uid] of oldMap) {
+      if (!newMap.has(uid)) ops.push(removeMember(g.id, uid));
+    }
+    // Role changes
+    for (const [uid, m] of newMap) {
+      const prev = oldMap.get(uid);
+      if (prev && prev.role !== m.role) ops.push(updateMemberRole(g.id, uid, m.role));
+    }
+
+    if (!ops.length) return;
+    Promise.allSettled(ops).then(results => {
+      const failed = results.find(r => r.status === 'rejected' || r.value?.error);
+      if (!failed) return;
+      console.warn("[groups] update failed", failed);
+      setGroups(priorGroups);
+      setGroupMembers(priorMembers);
+      showToast("Couldn't save group — reverted", "err");
+    });
   };
-  const deleteGroup = (id) => { setGroups(prev => prev.filter(g => g.id !== id)); setGroupMembers(prev => prev.filter(m => m.groupId !== id)); closeSheet(); showToast("Group deleted", "err"); };
-  const toggleMemberRole = (groupId, userId) => {
-    setGroupMembers(prev => prev.map(m => m.groupId === groupId && m.userId === userId ? { ...m, role: m.role === "editor" ? "viewer" : "editor" } : m));
+  const deleteGroup = (id) => {
+    if (!userId) return;
+    const priorGroups = groupsRef.current;
+    const priorMembers = groupMembersRef.current;
+    setGroups(prev => prev.filter(g => g.id !== id));
+    setGroupMembers(prev => prev.filter(m => m.groupId !== id));
+    closeSheet();
+    showToast("Group deleted", "err");
+    // Server cascades wipe group_members + the three share tables;
+    // local revert just re-applies prior group + member arrays.
+    deleteGroupRow(id).then(({ error }) => {
+      if (!error) return;
+      console.warn("[groups] delete failed", error);
+      setGroups(priorGroups);
+      setGroupMembers(priorMembers);
+      showToast("Couldn't delete — restored", "err");
+    });
+  };
+  // Param renamed userId → targetUserId to avoid shadowing the App-prop
+  // userId used by the pre-flight guard. Cycles editor ↔ member; owners
+  // are read-only here (managed via transferOwnership in Phase 3 UI).
+  const toggleMemberRole = (groupId, targetUserId) => {
+    if (!userId) return;
+    const priorMembers = groupMembersRef.current;
+    const cur = priorMembers.find(m => m.groupId === groupId && m.userId === targetUserId);
+    if (!cur || cur.role === 'owner') return;
+    const nextRole = cur.role === 'editor' ? 'member' : 'editor';
+    setGroupMembers(prev => prev.map(m =>
+      m.groupId === groupId && m.userId === targetUserId
+        ? { ...m, role: nextRole }
+        : m
+    ));
+    updateMemberRole(groupId, targetUserId, nextRole).then(({ error }) => {
+      if (!error) return;
+      console.warn("[groups] role change failed", error);
+      setGroupMembers(priorMembers);
+      showToast("Couldn't change role — reverted", "err");
+    });
+  };
+  // Transfer ownership: caller (current owner) → newOwnerId.
+  // Wait-on-success — destructive enough that optimistic apply + revert
+  // would flicker visibly. After server confirms, we update three pieces
+  // of local state in lock-step:
+  //   - groups[].owner + owner-profile fields → reflect new owner
+  //   - groupMembers: remove new-owner row (owner is excluded from this
+  //     array per loadGroupsForViewer convention), add caller back as
+  //     editor (per the RPC's owner→editor demotion)
+  // Then close the sheet — simpler than refreshing activeGroup mid-flight,
+  // and the user can re-open to verify.
+  const transferGroupOwnership = (groupId, newOwnerId) => {
+    if (!userId) return;
+    transferOwnership(groupId, newOwnerId).then(({ error }) => {
+      if (error) {
+        console.warn("[groups] transfer failed", error);
+        showToast("Couldn't transfer — try again", "err");
+        return;
+      }
+      const newOwnerRow = groupMembersRef.current.find(
+        m => m.groupId === groupId && m.userId === newOwnerId
+      );
+      setGroups(prev => prev.map(g => g.id === groupId ? {
+        ...g,
+        owner: newOwnerId,
+        ownerName:   newOwnerRow?.name   ?? g.ownerName,
+        ownerHandle: newOwnerRow?.handle ?? g.ownerHandle,
+        ownerAvatar: newOwnerRow?.avatar ?? g.ownerAvatar,
+      } : g));
+      setGroupMembers(prev => {
+        const withoutNewOwner = prev.filter(
+          m => !(m.groupId === groupId && m.userId === newOwnerId)
+        );
+        return [...withoutNewOwner, {
+          groupId,
+          userId,
+          name: userProfile.name || (userProfile.handle ? `@${userProfile.handle}` : 'Unknown'),
+          handle: userProfile.handle,
+          avatar: userProfile.avatar,
+          role: 'editor',
+        }];
+      });
+      closeSheet();
+      showToast("Ownership transferred");
+    });
+  };
+  // Leave a group. Wait-on-success — like transfer, optimistic-revert on
+  // a destructive op would flicker. Sole-owner refusal is server-side
+  // (leave_group RPC raises 'sole owner cannot leave; transfer ownership
+  // first'); UI also gates Leave to non-owners but the substring match
+  // here is belt-and-suspenders for race / bypass.
+  const leaveGroupAction = (groupId) => {
+    if (!userId) return;
+    const group = groupsRef.current.find(g => g.id === groupId);
+    const groupName = group?.name ?? "this group";
+    leaveGroup(groupId).then(({ error }) => {
+      if (error) {
+        console.warn("[groups] leave failed", error);
+        const msg = error.message || "";
+        if (msg.includes("sole owner cannot leave")) {
+          showToast(`You're the only owner of ${groupName}. Transfer first or delete the group instead.`, "err");
+        } else {
+          showToast("Couldn't leave — try again", "err");
+        }
+        return;
+      }
+      setGroups(prev => prev.filter(g => g.id !== groupId));
+      setGroupMembers(prev => prev.filter(m => m.groupId !== groupId));
+      closeSheet();
+      showToast(`Left ${groupName}`);
+    });
   };
   const addMajorEvent = (me) => {
-    const saved = { ...me, id: "m" + uid() };
+    if (!userId) return;
+    const newId = crypto.randomUUID();
+    const saved = { ...me, id: newId, _sharePath: 'own' };
     setMajorEvents(prev => [...prev, saved]);
     const startDate = typeof saved.startDate === "string" ? new Date(saved.startDate) : saved.startDate;
     (saved.groupIds||[]).forEach(gid => addActivity(gid, "added", saved.title, startDate));
     closeSheet();
     showToast("Major event created");
+    insertMajorEvent(saved, userId).then(async ({ error }) => {
+      if (error) {
+        console.warn("[major_events] insert failed", error);
+        setMajorEvents(prev => prev.filter(x => x.id !== newId));
+        showToast("Couldn't save — reverted", "err");
+        return;
+      }
+      const { error: shareErr } = await diffAndWriteMajorEventShares(
+        newId, [], [], saved.groupIds || [], saved.userIds || []
+      );
+      if (shareErr) {
+        console.warn("[major_events] share insert failed", shareErr);
+        setMajorEvents(prev => prev.map(x =>
+          x.id === newId ? { ...x, groupIds: [], userIds: [] } : x
+        ));
+        showToast("Major event saved — sharing didn't apply", "err");
+      }
+    });
   };
   const updateMajorEvent = (me) => {
+    if (!userId) return;
+    const prior = majorEventsRef.current.find(x => x.id === me.id);
     setMajorEvents(prev => prev.map(x => x.id === me.id ? me : x));
     const startDate = typeof me.startDate === "string" ? new Date(me.startDate) : me.startDate;
     (me.groupIds||[]).forEach(gid => addActivity(gid, "updated", me.title, startDate));
     closeSheet();
     showToast("Major event updated");
+    if (prior) {
+      updateMajorEventRow(me.id, me, userId).then(async ({ error }) => {
+        if (error) {
+          console.warn("[major_events] update failed", error);
+          setMajorEvents(prev => prev.map(x => x.id === me.id ? prior : x));
+          showToast("Couldn't save — reverted", "err");
+          return;
+        }
+        const oldG = prior.groupIds || [];
+        const oldU = prior.userIds  || [];
+        const newG = me.groupIds || [];
+        const newU = me.userIds  || [];
+        const { error: shareErr } = await diffAndWriteMajorEventShares(me.id, oldG, oldU, newG, newU);
+        if (shareErr) {
+          console.warn("[major_events] share update failed", shareErr);
+          setMajorEvents(prev => prev.map(x =>
+            x.id === me.id ? { ...x, groupIds: oldG, userIds: oldU } : x
+          ));
+          showToast("Major event saved — share changes reverted", "err");
+        }
+      });
+    }
   };
   // Quick pin/unpin without opening the edit form — used by the detail sheet.
   const toggleMajorPin = (id) => {
-    setMajorEvents(prev => prev.map(me => me.id === id ? { ...me, pinned: !me.pinned } : me));
+    if (!userId) return;
+    const prior = majorEventsRef.current.find(x => x.id === id);
+    if (!prior) return;
+    const next = { ...prior, pinned: !prior.pinned };
+    setMajorEvents(prev => prev.map(me => me.id === id ? next : me));
+    updateMajorEventRow(id, next, userId).then(({ error }) => {
+      if (error) {
+        console.warn("[major_events] pin toggle failed", error);
+        setMajorEvents(prev => prev.map(me => me.id === id ? prior : me));
+        showToast("Couldn't save pin — reverted", "err");
+      }
+    });
   };
 
   const deleteMajorEvent = (id) => {
-    setMajorEvents(prev => {
-      const me = prev.find(x => x.id === id);
-      if (me) {
-        const startDate = typeof me.startDate === "string" ? new Date(me.startDate) : me.startDate;
-        (me.groupIds||[]).forEach(gid => addActivity(gid, "deleted", me.title, startDate));
-      }
-      return prev.filter(x => x.id !== id);
-    });
+    if (!userId) return;
+    const priorMajorEvents = majorEventsRef.current;
+    const prior = priorMajorEvents.find(x => x.id === id);
+    setMajorEvents(prev => prev.filter(x => x.id !== id));
+    if (prior) {
+      const startDate = typeof prior.startDate === "string" ? new Date(prior.startDate) : prior.startDate;
+      (prior.groupIds||[]).forEach(gid => addActivity(gid, "deleted", prior.title, startDate));
+    }
     closeSheet();
     showToast("Major event deleted", "err");
+    if (prior) {
+      deleteMajorEventRow(id).then(({ error }) => {
+        if (error) {
+          console.warn("[major_events] delete failed", error);
+          setMajorEvents(priorMajorEvents);
+          showToast("Couldn't delete — restored", "err");
+        }
+      });
+    }
   };
-  const sendFriendRequest = (user) => { setFriends(prev => [...prev, { id: "f" + uid(), userId: user.id, name: user.name, handle: user.handle, avatar: user.avatar, mutualGroups: 0, status: "pending_sent" }]); setGroupsSubTab("friends"); };
-  const acceptFriendRequest = (id) => setFriends(prev => prev.map(f => f.id === id ? { ...f, status: "accepted" } : f));
-  const declineFriendRequest = (id) => setFriends(prev => prev.filter(f => f.id !== id));
-  const cancelFriendRequest = (id) => setFriends(prev => prev.filter(f => f.id !== id));
-  const removeFriend = (id) => setFriends(prev => prev.filter(f => f.id !== id));
-  const addShift = (p) => { setShifts(prev => { const maxP = prev.reduce((m,x) => Math.max(m, x.priority ?? 0), -1); return [...prev, { ...p, id: "p" + uid(), priority: maxP + 1 }]; }); closeSheet(); showToast("Shift created"); };
-  const updateShift = (p) => { setShifts(prev => prev.map(x => x.id === p.id ? p : x)); closeSheet(); showToast("Shift updated"); };
+  // Friends Phase 2: optimistic-with-revert against three RPCs (send,
+  // accept, unfriend). The existing local-only behavior is preserved on
+  // the happy path; revert restores the prior friends[] snapshot from
+  // friendsRef on RPC failure. UI is still flag-gated behind
+  // FEATURES.friends — these handlers fire only when the gate is open.
+  const sendFriendRequest = (user) => {
+    if (!userId) return;
+    const priorFriends = friendsRef.current;
+    // Defensive dedup. The Add sub-tab already filters its discoverable
+    // list against friends[], but a rapid double-tap could fire two
+    // optimistic adds before either RPC returns; the second is a no-op.
+    if (priorFriends.some(f => f.userId === user.id)) return;
+    setFriends(prev => [...prev, {
+      id: "f" + uid(),
+      userId: user.id,
+      name: user.name,
+      handle: user.handle,
+      avatar: user.avatar,
+      mutualGroups: 0,
+      status: "pending_sent",
+      requestedAt: new Date().toISOString(),
+      acceptedAt: null,
+    }]);
+    setGroupsSubTab("friends");
+    sendFriendRequestRpc(user.id).then(({ error }) => {
+      if (!error) return;
+      console.warn("[friends] send failed", error);
+      setFriends(priorFriends);
+      showToast("Couldn't send request — reverted", "err");
+    });
+  };
+  const acceptFriendRequest = (id) => {
+    if (!userId) return;
+    const priorFriends = friendsRef.current;
+    const row = priorFriends.find(f => f.id === id);
+    if (!row || row.status !== "pending_received") return;
+    setFriends(prev => prev.map(f => f.id === id
+      ? { ...f, status: "accepted", acceptedAt: new Date().toISOString() }
+      : f
+    ));
+    acceptFriendRequestRpc(row.userId).then(({ error }) => {
+      if (!error) return;
+      console.warn("[friends] accept failed", error);
+      setFriends(priorFriends);
+      // 'no pending request to accept' = stale local state (race: other
+      // side cancelled or accepted via another tab). Sync to reconcile
+      // rather than leaving a phantom pending_received row.
+      if (/no pending request/i.test(error.message || "")) {
+        showToast("Request no longer available — refresh", "err");
+        syncFriendsFromSupabase();
+      } else {
+        showToast("Couldn't accept — reverted", "err");
+      }
+    });
+  };
+  // Decline / cancel / remove are byte-identical server-side (all DELETE
+  // the pair row via unfriend RPC). One internal helper, three thin
+  // adapters that differ only in error-toast text.
+  const _unfriendByLocalId = (id, errToast) => {
+    if (!userId) return;
+    const priorFriends = friendsRef.current;
+    const row = priorFriends.find(f => f.id === id);
+    if (!row) return;
+    setFriends(prev => prev.filter(f => f.id !== id));
+    unfriendRpc(row.userId).then(({ error }) => {
+      if (!error) return;
+      console.warn("[friends] unfriend failed", error);
+      setFriends(priorFriends);
+      showToast(errToast, "err");
+    });
+  };
+  const declineFriendRequest = (id) => _unfriendByLocalId(id, "Couldn't decline — reverted");
+  const cancelFriendRequest  = (id) => _unfriendByLocalId(id, "Couldn't cancel — reverted");
+  const removeFriend         = (id) => _unfriendByLocalId(id, "Couldn't remove — reverted");
+  const addShift = (s) => {
+    if (!userId) return;
+    const newId = crypto.randomUUID();
+    const maxP = shiftsRef.current.reduce((m, x) => Math.max(m, x.priority ?? 0), -1);
+    const saved = { ...s, id: newId, priority: maxP + 1, _sharePath: 'own' };
+    setShifts(prev => [...prev, saved]);
+    closeSheet();
+    showToast("Shift created");
+    insertShift(saved, userId).then(async ({ error }) => {
+      if (error) {
+        console.warn("[shifts] insert failed", error);
+        setShifts(prev => prev.filter(x => x.id !== newId));
+        showToast("Couldn't save — reverted", "err");
+        return;
+      }
+      const { error: shareErr } = await diffAndWriteShiftShares(
+        newId, [], [], saved.groupIds || [], saved.userIds || []
+      );
+      if (shareErr) {
+        console.warn("[shifts] share insert failed", shareErr);
+        setShifts(prev => prev.map(x =>
+          x.id === newId ? { ...x, groupIds: [], userIds: [] } : x
+        ));
+        showToast("Shift saved — sharing didn't apply", "err");
+      }
+    });
+  };
+  const updateShift = (s) => {
+    if (!userId) return;
+    const prior = shiftsRef.current.find(x => x.id === s.id);
+    setShifts(prev => prev.map(x => x.id === s.id ? s : x));
+    closeSheet();
+    showToast("Shift updated");
+    if (prior) {
+      updateShiftRow(s.id, s, userId).then(async ({ error }) => {
+        if (error) {
+          console.warn("[shifts] update failed", error);
+          setShifts(prev => prev.map(x => x.id === s.id ? prior : x));
+          showToast("Couldn't save — reverted", "err");
+          return;
+        }
+        const oldG = prior.groupIds || [];
+        const oldU = prior.userIds  || [];
+        const newG = s.groupIds || [];
+        const newU = s.userIds  || [];
+        const { error: shareErr } = await diffAndWriteShiftShares(s.id, oldG, oldU, newG, newU);
+        if (shareErr) {
+          console.warn("[shifts] share update failed", shareErr);
+          setShifts(prev => prev.map(x =>
+            x.id === s.id ? { ...x, groupIds: oldG, userIds: oldU } : x
+          ));
+          showToast("Shift saved — share changes reverted", "err");
+        }
+      });
+    }
+  };
+  const duplicateShift = (s) => {
+    if (!userId) return;
+    const newId = crypto.randomUUID();
+    const maxP = shiftsRef.current.reduce((m, x) => Math.max(m, x.priority ?? 0), -1);
+    const copy = { ...s, id: newId, name: (s.name || "") + " (copy)", priority: maxP + 1, _sharePath: 'own' };
+    setShifts(prev => [...prev, copy]);
+    closeSheet();
+    showToast("Shift duplicated");
+    insertShift(copy, userId).then(async ({ error }) => {
+      if (error) {
+        console.warn("[shifts] duplicate failed", error);
+        setShifts(prev => prev.filter(x => x.id !== newId));
+        showToast("Couldn't duplicate — reverted", "err");
+        return;
+      }
+      const { error: shareErr } = await diffAndWriteShiftShares(
+        newId, [], [], copy.groupIds || [], copy.userIds || []
+      );
+      if (shareErr) {
+        console.warn("[shifts] share duplicate failed", shareErr);
+        setShifts(prev => prev.map(x =>
+          x.id === newId ? { ...x, groupIds: [], userIds: [] } : x
+        ));
+        showToast("Shift saved — sharing didn't apply", "err");
+      }
+    });
+  };
 
-  const deleteShift = (id) => { setShifts(prev => prev.filter(p => p.id !== id)); closeSheet(); showToast("Shift deleted", "err"); };
+  const deleteShift = (id) => {
+    if (!userId) return;
+    const priorShifts = shiftsRef.current;
+    const prior = priorShifts.find(x => x.id === id);
+    setShifts(prev => prev.filter(p => p.id !== id));
+    closeSheet();
+    showToast("Shift deleted", "err");
+    if (prior) {
+      deleteShiftRow(id).then(({ error }) => {
+        if (error) {
+          console.warn("[shifts] delete failed", error);
+          setShifts(priorShifts);
+          showToast("Couldn't delete — restored", "err");
+        }
+      });
+    }
+  };
 
   const visibleEvents = useMemo(() => events.filter(e => {
     if (hiddenCalendars.has(e.calendarId)) return false;
-    // Hide if ALL groups the event belongs to are hidden (or event has groups and they're all hidden)
+    // Owned content: hide if I shared with groups and I've hidden ALL of them.
+    // groupIds is empty for shared-with-me content (RLS restricts the share-row
+    // read to events I own), so this branch only fires for own events.
     if (e.groupIds && e.groupIds.length > 0 && e.groupIds.every(id => hiddenGroups.has(id))) return false;
+    // Shared-with-me content: hide if it reached me via a group I've hidden.
+    // _shareGroupId is the single group the RPC picks (earliest-joined match);
+    // null on 'people' / 'friends' paths.
+    // TODO(post-merge): a viewer in multiple groups that all received the same
+    // share only sees one — hiding the reported group hides the share even when
+    // other receiving groups remain visible. Fix needs either an RPC change to
+    // return all matching groups, or a wider RLS read on event_group_shares.
+    if (e._shareGroupId && hiddenGroups.has(e._shareGroupId)) return false;
     return true;
   }), [events, hiddenCalendars, hiddenGroups]);
   const visibleMajorEvents = useMemo(() => majorEvents.filter(me => {
-    // Hide if ALL groups the major event belongs to are hidden
+    // Same two-branch rule as visibleEvents above; see the TODO there for the
+    // multi-group-share edge case.
     if (me.groupIds && me.groupIds.length > 0 && me.groupIds.every(id => hiddenGroups.has(id))) return false;
+    if (me._shareGroupId && hiddenGroups.has(me._shareGroupId)) return false;
     return true;
   }), [majorEvents, hiddenGroups]);
+  const visibleShifts = useMemo(() => shifts.filter(s => {
+    // Same two-branch rule as visibleEvents above; see the TODO there for the
+    // multi-group-share edge case.
+    if (s.groupIds && s.groupIds.length > 0 && s.groupIds.every(id => hiddenGroups.has(id))) return false;
+    if (s._shareGroupId && hiddenGroups.has(s._shareGroupId)) return false;
+    return true;
+  }), [shifts, hiddenGroups]);
+
+  // Schedule a one-off notification at the start of a shift that has a time
+  // override for today, so the user gets a heads-up of the adjusted hours.
+  // Lives below visibleShifts so the deps array can reference the filtered
+  // list — hidden-group shifts shouldn't fire notifications.
+  React.useEffect(() => {
+    if (notifPermission !== "granted") return;
+    Object.values(shiftNotifTimers.current).forEach(clearTimeout);
+    shiftNotifTimers.current = {};
+    const today = new Date();
+    const ymdKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+    visibleShifts.forEach(p => {
+      const key = p.id+":"+ymdKey;
+      if (!shiftTimeOverrides[key]) return;
+      const isNatural = p.type === "rotation" ? getRotationStatus(p, today) === "work"
+        : p.type === "monthly" ? isMonthlyWorkDay(p, today)
+        : (p.config?.days ?? []).includes(today.getDay());
+      const isHidden = shiftOverrides.has(key);
+      const isExtra = shiftOverrides.has("extra:" + key);
+      const isWorkToday = (isNatural && !isHidden) || (!isNatural && isExtra);
+      if (!isWorkToday) return;
+      const eff = shiftTimeOverrides[key];
+      const [sh, sm] = eff.start.split(":").map(Number);
+      const fireAt = new Date(today); fireAt.setHours(sh, sm, 0, 0);
+      const delay = fireAt.getTime() - Date.now();
+      if (delay < 0) return;
+      shiftNotifTimers.current[p.id] = setTimeout(() => {
+        new Notification(p.name + " starts now", {
+          body: `Today's shift: ${fmtClock(eff.start)} – ${fmtClock(eff.end)}. You're off at ${fmtClock(eff.end)}.`,
+          icon: "/favicon.ico",
+          tag: "shift-override-"+p.id+"-"+ymdKey,
+        });
+      }, delay);
+    });
+    return () => Object.values(shiftNotifTimers.current).forEach(clearTimeout);
+  }, [visibleShifts, shiftOverrides, shiftTimeOverrides, notifPermission]);
+
   const todayEvents = useMemo(() => {
     const from = new Date(TODAY); from.setHours(0,0,0,0);
     const to = new Date(TODAY); to.setHours(23,59,59,999);
@@ -1528,8 +2982,8 @@ export default function App() {
       .filter(ev => !ev.allDay)
       .map(ev => [Math.max(ev.start.getTime(), fromMs),
                   Math.min(ev.end.getTime(), winEndMs)]);
-    for (var pi = 0; pi < shifts.length; pi++) {
-      const p = shifts[pi];
+    for (var pi = 0; pi < visibleShifts.length; pi++) {
+      const p = visibleShifts[pi];
       // Use per-day override when present so half-days etc. reflect correctly.
       var st = getEffectiveShiftTime(p, dayStart);
       if (!st?.enabled) continue;
@@ -1559,7 +3013,7 @@ export default function App() {
       if (j<merged.length) cursor=Math.max(cursor,merged[j][1]);
     }
     return gaps;
-  }, [events, shifts, shiftOverrides]);
+  }, [events, visibleShifts, shiftOverrides]);
 
   // Parse free time query and return a plain-language answer
   const freeTimeAnswer = useMemo(() => {
@@ -1982,6 +3436,23 @@ export default function App() {
   const prevWeek = () => setWeekAnchor(d => { const n = new Date(d); n.setDate(n.getDate() - 7); return n; });
   const nextWeek = () => setWeekAnchor(d => { const n = new Date(d); n.setDate(n.getDate() + 7); return n; });
 
+  // Layer 1 splash: while the server-data check is pending, render a brief
+  // loading screen instead of the onboarding flow. Prevents a flash of the
+  // onboarding sheet for existing users with cleared cache.
+  if (onboardingActive && onboardingCheckResult === null) {
+    return (
+      <>
+        <style>{css}</style>
+        <div className={"app" + (darkMode ? "" : " light-mode") + (highContrast ? " hc-mode" : "")}>
+          <div style={{
+            minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: 'var(--muted)', fontSize: 14, fontFamily: 'var(--font)',
+          }}>Loading…</div>
+        </div>
+      </>
+    );
+  }
+
   if (onboardingActive) {
     return (
       <>
@@ -1993,7 +3464,29 @@ export default function App() {
             textSize={textSize}
             setTextSize={setTextSize}
             customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }}
-            onFinish={({ name, color, startTour, startGuide }) => {
+            onFinish={async ({ name, color, startTour, startGuide }) => {
+              // Layer 2 + 3: only wipe server-side when Layer 1 confirmed
+              // mount-time server-empty (genuine new user). For existing
+              // users with cleared cache, Layer 1 should have flipped
+              // onboardingActive to false and we'd never reach here — but
+              // belt-and-suspenders, gate the wipe on the state value too.
+              // Symmetric across shifts + events + major_events: any seed
+              // data that migrated to server during onboarding gets cleaned.
+              // Groups skipped — group ownership invariants make safe wipe
+              // more involved (ownership-transfer or sole-owner refusal).
+              if (userId && onboardingCheckResult === 'new') {
+                const [shiftsRes, eventsRes, majorRes] = await Promise.all([
+                  deleteAllShiftsForOwner(userId),
+                  deleteAllEventsForOwner(userId),
+                  deleteAllMajorEventsForOwner(userId),
+                ]);
+                if (shiftsRes.error || eventsRes.error || majorRes.error) {
+                  console.warn("[onboarding] new-user wipe failed",
+                    shiftsRes.error || eventsRes.error || majorRes.error);
+                  showToast("Setup hiccup — please try again", "err");
+                  return;
+                }
+              }
               setUserProfile(p => ({ ...p, name: name || "Friend" }));
               setCalendars(prev => {
                 const first = prev[0];
@@ -2001,7 +3494,6 @@ export default function App() {
                 return [{ ...first, color }, ...prev.slice(1)];
               });
               // Clear ALL seed data — blank slate for real first-time users
-              setEvents([]);
               setMajorEvents([]);
               setShifts([]);
               setGroups([]);
@@ -2039,21 +3531,52 @@ export default function App() {
           </div>
         )}
 
+        {/* Events sync status. Subtle while syncing, slightly louder on error
+            with a Retry. App-shell level so it renders on every tab. */}
+        {(eventsSyncing || eventsSyncError) && (
+          <div style={{
+            padding: "6px 16px",
+            fontSize: 12,
+            textAlign: "center",
+            background: eventsSyncError ? "#fef3c7" : "var(--surface2)",
+            color: eventsSyncError ? "#92400e" : "var(--muted)",
+            borderBottom: "1px solid rgba(0,0,0,0.06)",
+          }}>
+            {eventsSyncError ? (
+              <>
+                {eventsSyncError}{" "}
+                <button
+                  onClick={migrateEventsIfNeeded}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "#92400e",
+                    textDecoration: "underline",
+                    cursor: "pointer",
+                    fontSize: 12,
+                    padding: 0,
+                  }}
+                >
+                  Retry
+                </button>
+              </>
+            ) : (
+              eventsMigrationPhase ? "Setting up your events…" : "Syncing your events…"
+            )}
+          </div>
+        )}
+
         {/* Desktop sidebar — renders in both desktop (full) and split (icon-only) modes */}
         {(isDesktop || isSplit) && (() => {
           const todayHasEvents = todayEvents.length > 0;
           const hasConflicts = getConflicts(todayEvents).size > 0;
           const shiftOverrideCount = shiftOverrides.size;
-          const friendRequestsRaw = friends.filter(f => f.status === "pending_received").length;
-          const feedUnseenRaw = activityFeed.filter(a => a.userId !== "u1" && a.ts > feedSeenAt).length;
-          const friendRequests = userProfile.badges?.friendRequests !== false ? friendRequestsRaw : 0;
-          const feedUnseen = userProfile.badges?.feed !== false ? feedUnseenRaw : 0;
-          const groupsBadge = friendRequests + feedUnseen;
+          const hasFriendRequests = friends.some(f => f.status === "pending_received");
           // In split mode, calendar is the right panel — so we drop it from the nav
           const navItems = [
             { id:"home", label:"Home", icon:Icon.home, dot: hasConflicts ? "#ef4444" : null },
             ...(!isSplit ? [{ id:"calendar", label:"Calendar", icon:Icon.calendar, dot: (todayHasEvents && userProfile.badges?.todayEvents !== false) ? "var(--accent2)" : null }] : []),
-            ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups, badge: groupsBadge }] : []),
+            ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups, dot: (hasFriendRequests && userProfile.badges?.friendRequests !== false) ? "#ef4444" : null }] : []),
             { id:"shifts", label:"Shifts", icon:Icon.shifts, dot: shiftOverrideCount > 0 ? "#f59e0b" : null },
             { id:"settings", label:"Settings", icon:Icon.settings },
           ];
@@ -2071,8 +3594,7 @@ export default function App() {
                     onClick={() => { setTab(n.id); setFabOpen(false); }}>
                     <div style={{ position:"relative", display:"inline-flex" }}>
                       {n.icon}
-                      {n.badge > 0 && <div style={{ position:"absolute", top:-5, right:-5, minWidth:14, height:14, borderRadius:7, background:"#ef4444", fontSize:"0.6875rem", fontWeight:700, color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", padding:"0 2px" }}>{n.badge}</div>}
-                      {!n.badge && n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:7, height:7, borderRadius:"50%", background:n.dot, border:"1.5px solid var(--surface)" }} />}
+                      {n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:7, height:7, borderRadius:"50%", background:n.dot, border:"1.5px solid var(--surface)" }} />}
                     </div>
                   </button>
                 ))}
@@ -2099,8 +3621,7 @@ export default function App() {
                   onClick={() => { setTab(n.id); setFabOpen(false); }}>
                   <div style={{ position:"relative", display:"inline-flex" }}>
                     {n.icon}
-                    {n.badge > 0 && <div style={{ position:"absolute", top:-5, right:-5, minWidth:14, height:14, borderRadius:7, background:"#ef4444", fontSize:"0.6875rem", fontWeight:700, color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", padding:"0 2px" }}>{n.badge}</div>}
-                    {!n.badge && n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:7, height:7, borderRadius:"50%", background:n.dot, border:"1.5px solid var(--surface)" }} />}
+                    {n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:7, height:7, borderRadius:"50%", background:n.dot, border:"1.5px solid var(--surface)" }} />}
                   </div>
                   <span>{n.label}</span>
                 </button>
@@ -2458,13 +3979,19 @@ export default function App() {
               const now2 = new Date();
               if (id === "major") {
                 const visible = visibleMajorEvents
-                  .filter(me => { const e=new Date(me.endDate); e.setHours(23,59,59,999); return now2 <= e; })
+                  .filter(me => {
+                    const [ey,em,ed] = me.endDate.slice(0,10).split("-").map(Number);
+                    const e = new Date(ey, em-1, ed, 23, 59, 59, 999);
+                    return now2 <= e;
+                  })
                   .sort((a, b) => {
                     // Pinned events first, then earliest start date (ongoing events
                     // have start in the past, so they naturally sort above upcoming).
                     const pinDelta = (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
                     if (pinDelta !== 0) return pinDelta;
-                    return new Date(a.startDate) - new Date(b.startDate);
+                    const aYmd = (a.startDate || "").slice(0,10);
+                    const bYmd = (b.startDate || "").slice(0,10);
+                    return aYmd < bYmd ? -1 : aYmd > bYmd ? 1 : 0;
                   });
                 if (visible.length === 0) {
                   if (canShowPlaceholder("major") && majorEvents.length === 0) {
@@ -2862,7 +4389,7 @@ export default function App() {
               }
 
               if (id === "shiftstatus") {
-                if (!shifts || shifts.length === 0) return null;
+                if (!visibleShifts || visibleShifts.length === 0) return null;
                 const todayY = TODAY.getFullYear(), todayM = TODAY.getMonth(), todayD = TODAY.getDate();
                 const oKeyOf = (pid) => pid + ":" + todayY + "-" + todayM + "-" + todayD;
                 const yesterday = new Date(TODAY); yesterday.setDate(yesterday.getDate() - 1);
@@ -2877,7 +4404,7 @@ export default function App() {
                 // shift id — otherwise B→C→B looks like one unbroken block when
                 // it's really three separate assignments back-to-back.
                 const findShiftStartingAt = (dayStart, startMs, shiftId) => {
-                  for (const p of shifts) {
+                  for (const p of visibleShifts) {
                     if (p.id !== shiftId) continue;
                     const oKey = p.id + ":" + dayStart.getFullYear() + "-" + dayStart.getMonth() + "-" + dayStart.getDate();
                     const isNat = p.type === "rotation" ? getRotationStatus(p, dayStart) === "work"
@@ -2924,7 +4451,7 @@ export default function App() {
                   if (diffDays === 1) return timeStr + " tomorrow";
                   return timeStr + " " + (d.getMonth() + 1) + "/" + d.getDate();
                 };
-                const rows = shifts.map(p => {
+                const rows = visibleShifts.map(p => {
                   const isNatural = p.type === "rotation" ? getRotationStatus(p, TODAY) === "work"
                     : p.type === "monthly" ? isMonthlyWorkDay(p, TODAY)
                     : (p.config?.days ?? []).includes(TODAY.getDay());
@@ -3274,7 +4801,7 @@ export default function App() {
             {calView === "month" && (
               <>
                 {/* Shift filter — scrollable single row */}
-                {shifts.length > 0 && (
+                {visibleShifts.length > 0 && (
                   <div style={{ display:"flex", gap:5, overflowX:"auto", marginBottom:12, paddingBottom:2, WebkitOverflowScrolling:"touch", scrollbarWidth:"none" }}>
                     <button onClick={() => setCalShiftFilter(null)}
                       style={{ flexShrink:0, padding:"5px 12px", borderRadius:14, fontSize:"0.6875rem", fontWeight:700,
@@ -3282,7 +4809,7 @@ export default function App() {
                         background: calShiftFilter===null ? "var(--accent)" : "var(--surface2)",
                         color: calShiftFilter===null ? "white" : "var(--muted)",
                         cursor:"pointer", fontFamily:"var(--font)" }}>All</button>
-                    {shifts.map(p => (
+                    {visibleShifts.map(p => (
                       <button key={p.id} onClick={() => setCalShiftFilter(calShiftFilter===p.id ? null : p.id)}
                         style={{ flexShrink:0, display:"flex", alignItems:"center", gap:5, padding:"5px 12px", borderRadius:14,
                           border:"1.5px solid " + (calShiftFilter===p.id ? p.color : "var(--border)"),
@@ -3298,7 +4825,7 @@ export default function App() {
 
                 {/* Calendar grid */}
                 <MonthGrid year={calMonth.year} month={calMonth.month} events={visibleEvents} calendars={calendars}
-                  shifts={calShiftFilter ? shifts.filter(p => p.id === calShiftFilter) : shifts}
+                  shifts={calShiftFilter ? visibleShifts.filter(p => p.id === calShiftFilter) : visibleShifts}
                   majorEvents={calShiftFilter ? [] : visibleMajorEvents}
                   shiftOverrides={shiftOverrides}
                   onLongPress={(date) => setDayPopup({ date })}
@@ -3319,10 +4846,10 @@ export default function App() {
                     const end   = new Date(ley,lem-1,led); end.setHours(23,59,59,999);
                     return start <= monthEnd && end >= monthStart;
                   });
-                  if (shifts.length === 0 && visibleMajor.length === 0) return null;
+                  if (visibleShifts.length === 0 && visibleMajor.length === 0) return null;
                   return (
                     <div style={{ display:"flex", flexWrap:"wrap", gap:10, marginTop:10, paddingTop:10, borderTop:"1px solid var(--border)" }}>
-                      {shifts.map(p => (
+                      {visibleShifts.map(p => (
                         <div key={p.id} style={{ display:"flex", alignItems:"center", gap:5, fontSize:"0.6875rem", color:"var(--muted)" }}>
                           <svg width="14" height="14" viewBox="0 0 100 100" style={{flexShrink:0}}><path d="M 65 4 L 78 4 A 18 18 0 0 1 96 22 L 96 78 A 18 18 0 0 1 78 96 L 22 96 A 18 18 0 0 1 4 78 L 4 22 A 18 18 0 0 1 22 4 L 35 4" fill="none" stroke={p.color||"#6366f1"} strokeWidth="8" strokeLinecap="round" /></svg>
                           {p.name}
@@ -3360,7 +4887,7 @@ export default function App() {
                 </div>
                 {weekLayout === "columns" ? (
                   <WeekViewColumns weekDays={weekDays} events={visibleEvents} calendars={calendars}
-                    shifts={shifts} shiftOverrides={shiftOverrides}
+                    shifts={visibleShifts} shiftOverrides={shiftOverrides}
                     majorEvents={visibleMajorEvents} holidays={holidays} holidayCountries={holidayCountries}
                     selectedDate={selectedDate}
                     onSelect={d => setSelectedDate(d)}
@@ -3384,13 +4911,13 @@ export default function App() {
             )}
 
             {dayPopup && (() => {
-              const activeForDay = shifts.filter(p => {
+              const activeForDay = visibleShifts.filter(p => {
                 if (p.type === "rotation") return getRotationStatus(p, dayPopup.date) === "work";
                 if (p.type === "weekly") return (p.config.days ?? []).includes(dayPopup.date.getDay());
                 if (p.type === "monthly") return isMonthlyWorkDay(p, dayPopup.date);
                 return false;
               });
-              const inactiveForDay = shifts.filter(p => !activeForDay.includes(p));
+              const inactiveForDay = visibleShifts.filter(p => !activeForDay.includes(p));
               return (
                 <div className="sheet-overlay" onClick={() => { setDayPopup(null); setEditingShiftTime(null); }}>
                   <div className="sheet" onClick={e => e.stopPropagation()}>
@@ -3669,9 +5196,7 @@ export default function App() {
         )}
 
         {/* GROUPS TAB */}
-        {tab === "groups" && (() => {
-          const friendRequests = friends.filter(f => f.status === "pending_received").length;
-          return (
+        {tab === "groups" && (
           <div className="screen" ref={setScreenRef}>
             <div className="header">
               <h1>{groupsSubTab === "groups" ? "Groups" : groupsSubTab === "feed" ? "Activity" : groupsSubTab === "friends" ? "Friends" : "Add Friends"}</h1>
@@ -3680,22 +5205,16 @@ export default function App() {
             <div className="sub-tab-row">
               {[
                 { v:"groups",  l:"Groups" },
-                { v:"feed",    l:"Feed",    badge: userProfile.badges?.feed !== false ? activityFeed.filter(a => a.userId !== "u1" && a.ts > feedSeenAt).length : 0 },
-                { v:"friends", l:"Friends", badge: userProfile.badges?.friendRequests !== false ? friendRequests : 0 },
-                { v:"add",     l:"Add" },
+                ...(FEATURES.activityFeed ? [{ v:"feed", l:"Feed" }] : []),
+                ...(FEATURES.friends ? [
+                  { v:"friends", l:"Friends" },
+                  { v:"add",     l:"Add" },
+                ] : []),
               ].map(t => (
                 <button key={t.v} className={"sub-tab"+(groupsSubTab===t.v?" active":"")}
                   onClick={() => { setGroupsSubTab(t.v); if (t.v === "feed") setFeedSeenAt(new Date()); }}
                   style={{ position:"relative" }}>
                   {t.l}
-                  {t.badge > 0 && (
-                    <div style={{ position:"absolute", top:2, right:4, minWidth:14, height:14,
-                      borderRadius:7, background:"#ef4444", fontSize:"0.6875rem", fontWeight:800,
-                      color:"#fff", display:"flex", alignItems:"center", justifyContent:"center",
-                      padding:"0 3px", lineHeight:1 }}>
-                      {t.badge > 9 ? "9+" : t.badge}
-                    </div>
-                  )}
                 </button>
               ))}
             </div>
@@ -3729,8 +5248,10 @@ export default function App() {
                       {members.map(m => (
                         <div key={m.userId} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
                           <div style={{ fontSize:"0.875rem", color:"var(--text)" }}>{m.name}</div>
-                          <button onClick={() => toggleMemberRole(g.id, m.userId)}
-                            style={{ background:m.role==="editor"?"rgba(124,106,247,0.2)":"var(--surface2)", color:m.role==="editor"?"var(--accent2)":"var(--muted)", border:m.role==="editor"?"1px solid rgba(124,106,247,0.3)":"1px solid transparent", borderRadius:20, padding:"3px 10px", fontSize:"0.75rem", fontWeight:500, cursor:"pointer", fontFamily:"var(--font)" }}>
+                          <button
+                            onClick={g.owner === userId ? () => toggleMemberRole(g.id, m.userId) : undefined}
+                            disabled={g.owner !== userId}
+                            style={{ background:m.role==="editor"?"rgba(124,106,247,0.2)":"var(--surface2)", color:m.role==="editor"?"var(--accent2)":"var(--muted)", border:m.role==="editor"?"1px solid rgba(124,106,247,0.3)":"1px solid transparent", borderRadius:20, padding:"3px 10px", fontSize:"0.75rem", fontWeight:500, cursor: g.owner === userId ? "pointer" : "default", fontFamily:"var(--font)" }}>
                             {m.role}
                           </button>
                         </div>
@@ -3789,7 +5310,7 @@ export default function App() {
                     <div className="section-label">Requests</div>
                     {friends.filter(f => f.status === "pending_received").map(f => (
                       <div key={f.id} className="friend-card friend-card-pending">
-                        <div className="friend-avatar" style={{ background:"var(--surface3)", color:"var(--muted)" }}>{f.avatar}</div>
+                        <MemberAvatar url={f.avatar} name={f.name} size={40} />
                         <div style={{ flex:1, minWidth:0 }}>
                           <div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{f.name}</div>
                           <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:2 }}>{f.handle}</div>
@@ -3808,9 +5329,15 @@ export default function App() {
                     <div className="section-label">Sent</div>
                     {friends.filter(f => f.status === "pending_sent").map(f => (
                       <div key={f.id} className="friend-card">
-                        <div className="friend-avatar" style={{ background:"var(--surface3)", color:"var(--muted)" }}>{f.avatar}</div>
-                        <div style={{ flex:1, minWidth:0 }}><div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{f.name}</div><div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>{f.handle}</div></div>
-                        <button onClick={() => cancelFriendRequest(f.id)} style={{ background:"rgba(124,106,247,0.12)", border:"1px solid rgba(124,106,247,0.25)", borderRadius:8, padding:"6px 10px", cursor:"pointer", color:"var(--accent2)", fontSize:"0.75rem", fontWeight:500 }}>Pending</button>
+                        <MemberAvatar url={f.avatar} name={f.name} size={40} />
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{f.name}</div>
+                          <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>{f.handle}</div>
+                        </div>
+                        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                          <span style={{ background:"rgba(124,106,247,0.12)", border:"1px solid rgba(124,106,247,0.25)", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600, color:"var(--accent2)" }}>Sent</span>
+                          <button onClick={() => cancelFriendRequest(f.id)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", cursor:"pointer", color:"var(--muted)", fontSize:"0.75rem" }}>Cancel</button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -3818,17 +5345,23 @@ export default function App() {
                 {friends.some(f => f.status === "accepted") && (
                   <div>
                     <div className="section-label">Friends</div>
-                    {friends.filter(f => f.status === "accepted").map(f => (
-                      <div key={f.id} className="friend-card">
-                        <div className="friend-avatar">{f.avatar}</div>
-                        <div style={{ flex:1, minWidth:0 }}>
-                          <div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{f.name}</div>
-                          <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>{f.handle}</div>
-                          {f.mutualGroups > 0 && <div style={{ fontSize:"0.6875rem", color:"var(--accent2)", marginTop:3 }}>{f.mutualGroups} shared group{f.mutualGroups!==1?"s":""}</div>}
+                    {friends.filter(f => f.status === "accepted").map(f => {
+                      // Derived live from groupMembers — counts groups where
+                      // the friend appears in the viewer's visible memberships
+                      // (which equals "groups we're both in" by RLS scope).
+                      const mutualCount = groupMembers.filter(m => m.userId === f.userId).length;
+                      return (
+                        <div key={f.id} className="friend-card">
+                          <MemberAvatar url={f.avatar} name={f.name} size={40} />
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{f.name}</div>
+                            <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>{f.handle}</div>
+                            {mutualCount > 0 && <div style={{ fontSize:"0.6875rem", color:"var(--accent2)", marginTop:3 }}>{mutualCount} shared group{mutualCount!==1?"s":""}</div>}
+                          </div>
+                          <button onClick={() => removeFriend(f.id)} style={{ background:"none", border:"1px solid rgba(248,113,113,0.25)", borderRadius:8, padding:"6px 10px", cursor:"pointer", color:"#f87171", fontSize:"0.75rem", fontWeight:500 }}>Remove</button>
                         </div>
-                        <button onClick={() => removeFriend(f.id)} style={{ background:"none", border:"1px solid rgba(248,113,113,0.25)", borderRadius:8, padding:"6px 10px", cursor:"pointer", color:"#f87171", fontSize:"0.75rem", fontWeight:500 }}>Remove</button>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
                 {friends.length === 0 && (
@@ -3884,32 +5417,88 @@ export default function App() {
               </div>
             )}
 
-            {groupsSubTab === "add" && (
-              <>
-                <div className="form-group">
-                  <input className="form-input" placeholder="Search by name or @handle..." value={friendSearch} onChange={e => setFriendSearch(e.target.value)} />
+            {groupsSubTab === "add" && (() => {
+              // Derive the relationship branch from live friends[]. Keeping
+              // this in render (vs. inside the search effect) means accept/
+              // decline/cancel from this surface refresh the card without
+              // re-firing findUserByHandle.
+              let cardState = handleResult.state;
+              let user = null, existingFriend = null;
+              if (handleResult.state === 'resolved') {
+                user = handleResult.user;
+                if (user.id === userId) {
+                  cardState = 'yourself';
+                } else {
+                  existingFriend = friends.find(f => f.userId === user.id);
+                  if      (!existingFriend)                              cardState = 'found';
+                  else if (existingFriend.status === 'accepted')         cardState = 'already-friends';
+                  else if (existingFriend.status === 'pending_sent')     cardState = 'already-pending-sent';
+                  else if (existingFriend.status === 'pending_received') cardState = 'already-pending-received';
+                }
+              }
+              const profileCard = (right) => (
+                <div className="friend-card">
+                  <MemberAvatar url={user?.avatar_url} name={user?.name} size={40} />
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{user?.name || (user?.handle ? `@${user.handle}` : 'Unknown')}</div>
+                    {user?.handle && <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{user.handle}</div>}
+                  </div>
+                  {right}
                 </div>
-                {[
-                    { id:"d1", name:"Taylor Kim",   handle:"@taylorkim",   avatar:"TK" },
-                    { id:"d2", name:"Morgan Chen",  handle:"@morganchen",  avatar:"MC" },
-                    { id:"d4", name:"Drew Santos",  handle:"@drewsantos",  avatar:"DS" },
-                    { id:"d5", name:"Sam Nakamura", handle:"@samnakamura", avatar:"SN" },
-                    { id:"d6", name:"Alex Okonkwo", handle:"@alexokonkwo", avatar:"AO" },
-                  ]
-                  .filter(u => !friends.some(f => f.userId === u.id && (f.status === "accepted" || f.status === "pending_sent")))
-                  .filter(u => !friendSearch.trim() || u.name.toLowerCase().includes(friendSearch.toLowerCase()) || u.handle.includes(friendSearch.toLowerCase()))
-                  .map(u => (
-                    <div key={u.id} className="friend-card">
-                      <div className="friend-avatar" style={{ background:"var(--surface3)", color:"var(--muted)" }}>{u.avatar}</div>
-                      <div style={{ flex:1, minWidth:0 }}><div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{u.name}</div><div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>{u.handle}</div></div>
-                      <button onClick={() => sendFriendRequest(u)} style={{ background:"var(--accent)", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", color:"white", fontSize:"0.75rem", fontWeight:600 }}>+ Add</button>
+              );
+              return (
+                <>
+                  <div className="form-group">
+                    <input className="form-input" placeholder="Find by @handle..."
+                      value={handleQuery} onChange={e => setHandleQuery(e.target.value)} />
+                  </div>
+                  {cardState === 'idle' && (
+                    <div style={{ fontSize:"0.75rem", color:"var(--muted)", textAlign:"center", padding:"20px 8px" }}>
+                      Find friends by @handle. They'll need to accept your request.
                     </div>
-                  ))}
-              </>
-            )}
+                  )}
+                  {cardState === 'searching' && (
+                    <div style={{ fontSize:"0.75rem", color:"var(--muted)", padding:"12px 4px" }}>Searching…</div>
+                  )}
+                  {cardState === 'not-found' && (
+                    <div style={{ fontSize:"0.75rem", color:"var(--muted)", padding:"12px 4px" }}>
+                      No one with @{handleQuery.replace(/^@+/, '').toLowerCase().trim()}
+                    </div>
+                  )}
+                  {cardState === 'error' && (
+                    <div style={{ fontSize:"0.75rem", color:"#f87171", padding:"12px 4px" }}>Couldn't search — try again.</div>
+                  )}
+                  {cardState === 'yourself' && profileCard(
+                    <span style={{ background:"var(--surface2)", color:"var(--muted)", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600 }}>That's you</span>
+                  )}
+                  {cardState === 'found' && profileCard(
+                    <button onClick={() => sendFriendRequest({
+                      id: user.id,
+                      name: user.name || `@${user.handle}`,
+                      handle: user.handle ? `@${user.handle}` : '',
+                      avatar: user.avatar_url,
+                    })} style={{ background:"var(--accent)", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", color:"white", fontSize:"0.75rem", fontWeight:600 }}>+ Add friend</button>
+                  )}
+                  {cardState === 'already-friends' && profileCard(
+                    <span style={{ background:"rgba(110,231,183,0.1)", border:"1px solid rgba(110,231,183,0.2)", color:"#10b981", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600 }}>Already friends</span>
+                  )}
+                  {cardState === 'already-pending-sent' && profileCard(
+                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                      <span style={{ background:"rgba(124,106,247,0.12)", border:"1px solid rgba(124,106,247,0.25)", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600, color:"var(--accent2)" }}>Sent</span>
+                      <button onClick={() => cancelFriendRequest(existingFriend.id)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", cursor:"pointer", color:"var(--muted)", fontSize:"0.75rem" }}>Cancel</button>
+                    </div>
+                  )}
+                  {cardState === 'already-pending-received' && profileCard(
+                    <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+                      <button onClick={() => acceptFriendRequest(existingFriend.id)} style={{ background:"var(--accent)", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", color:"white", fontSize:"0.75rem", fontWeight:600 }}>Accept</button>
+                      <button onClick={() => declineFriendRequest(existingFriend.id)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"5px 12px", cursor:"pointer", color:"var(--muted)", fontSize:"0.75rem" }}>Decline</button>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
-          );
-        })()}
+        )}
 
         {/* PATTERNS TAB */}
         {tab === "shifts" && (
@@ -3927,10 +5516,21 @@ export default function App() {
                   labels={Object.fromEntries(shifts.map(p => [p.id, p.name]))}
                   colors={Object.fromEntries(shifts.map(p => [p.id, p.color || "#888"]))}
                   onReorder={(newOrder) => {
-                    setShifts(prev => newOrder.map((id, idx) => {
-                      const p = prev.find(x => x.id === id);
+                    if (!userId) return;
+                    const priorShifts = shiftsRef.current;
+                    const newShifts = newOrder.map((id, idx) => {
+                      const p = priorShifts.find(x => x.id === id);
                       return { ...p, priority: idx };
-                    }));
+                    });
+                    setShifts(newShifts);
+                    reorderShifts(newShifts.map(s => ({ id: s.id, priority: s.priority })))
+                      .then(({ error }) => {
+                        if (error) {
+                          console.warn("[shifts] reorder failed", error);
+                          setShifts(priorShifts);
+                          showToast("Couldn't reorder — reverted", "err");
+                        }
+                      });
                   }}
                 />
               </div>
@@ -3946,17 +5546,28 @@ export default function App() {
                 effectiveTimeToday={getEffectiveShiftTime(p, TODAY)}
                 hasTimeOverrideToday={hasShiftTimeOverride(p.id, TODAY)}
                 onAddManualDay={(shiftId, date) => {
+                  if (!userId) return;
                   const key = "extra:" + shiftId + ":" + date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
+                  if (shiftOverridesRef.current.has(key)) return; // idempotent no-op
                   setShiftOverrides(prev => { const next = new Set(prev); next.add(key); return next; });
+                  upsertShiftOverride(shiftId, date, 'extra').then(({ error }) => {
+                    if (error) {
+                      console.warn("[shifts] add manual day failed", error);
+                      setShiftOverrides(prev => { const next = new Set(prev); next.delete(key); return next; });
+                      showToast("Couldn't save — reverted", "err");
+                    }
+                  });
                 }}
                 onToggleMonthDay={(shiftId, year, month, day) => {
-                  setShifts(prev => prev.map(pat => {
-                    if (pat.id !== shiftId) return pat;
-                    const key = `${year}-${month}`;
-                    const existing = pat.config?.months?.[key] || [];
-                    const next = existing.includes(day) ? existing.filter(d=>d!==day) : [...existing, day].sort((a,b)=>a-b);
-                    return { ...pat, config: { ...pat.config, months: { ...pat.config.months, [key]: next } } };
-                  }));
+                  // Pre-existing bypass of updateShift fixed in shifts Phase 3
+                  // — go through updateShift so the config edit round-trips
+                  // to Supabase like onToggleDay does for weekly shifts.
+                  const pat = shiftsRef.current.find(x => x.id === shiftId);
+                  if (!pat) return;
+                  const key = `${year}-${month}`;
+                  const existing = pat.config?.months?.[key] || [];
+                  const next = existing.includes(day) ? existing.filter(d=>d!==day) : [...existing, day].sort((a,b)=>a-b);
+                  updateShift({ ...pat, config: { ...pat.config, months: { ...pat.config.months, [key]: next } } });
                 }}
                 onToggleDay={(dow) => {
                   if (p.type !== "weekly") return;
@@ -3987,6 +5598,15 @@ export default function App() {
               </div>
               <button onClick={() => setSheet("editProfile")} className="btn btn-secondary" style={{ fontSize:"0.75rem", padding:"6px 14px", flexShrink:0 }}>Edit</button>
             </div>
+
+            {/* Sign out */}
+            <button
+              onClick={async () => { await signOut(); window.location.reload(); }}
+              className="btn btn-secondary"
+              style={{ width:"100%", marginBottom:16, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}
+            >
+              Sign out
+            </button>
 
             {/* Appearance */}
             <div className="section-label">Appearance</div>
@@ -4208,10 +5828,9 @@ export default function App() {
                 Choose which badges appear on the app.
               </div>
               {[
-                FEATURES.friends     && { k:"friendRequests", l:"Friend requests", d:"Red badge when someone wants to connect" },
-                FEATURES.activityFeed && { k:"feed",           l:"Group activity",  d:"Red badge for new events in your groups" },
+                { k:"friendRequests", l:"Friend requests", d:"Small red dot on Groups when someone wants to connect" },
                 { k:"todayEvents",    l:"Today's events",  d:"Small dot on Calendar if you have events today" },
-              ].filter(Boolean).map(b => (
+              ].map(b => (
                 <div key={b.k} style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
                   padding:"10px 0", borderBottom:"1px solid var(--border)" }}>
                   <div style={{ flex:1, minWidth:0 }}>
@@ -4445,6 +6064,117 @@ export default function App() {
               )}
             </div>
 
+            {/* Delete account — Supabase-side destruction with type-to-confirm */}
+            <div className="card" style={{ marginBottom:20, padding:0 }}>
+              {!confirmDeleteAccount ? (
+                <div onClick={expandDeleteAccount}
+                  style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 16px", cursor:"pointer" }}>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:"0.875rem", fontWeight:600, color:"#f87171" }}>Delete account</div>
+                    <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:2 }}>
+                      Permanently remove your profile, events, and friendships from the server
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", width:16, height:16, color:"#f87171", flexShrink:0 }}>{Icon.chevR}</div>
+                </div>
+              ) : deletionPreflight === 'loading' ? (
+                <div style={{ padding:14, background:"rgba(248,113,113,0.08)" }}>
+                  <div style={{ fontSize:"0.75rem", color:"var(--muted)", padding:"8px 4px" }}>Loading…</div>
+                </div>
+              ) : deletionPreflight === 'error' ? (
+                <div style={{ padding:14, background:"rgba(248,113,113,0.08)" }}>
+                  <div style={{ fontSize:"0.75rem", color:"#fca5a5", marginBottom:10 }}>
+                    Couldn't load deletion details — try again.
+                  </div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button onClick={collapseDeleteAccount} className="btn btn-secondary" style={{ flex:1 }}>Cancel</button>
+                    <button onClick={expandDeleteAccount}
+                      style={{ flex:1, padding:"10px", borderRadius:8, background:"#b91c1c",
+                        border:"none", fontSize:"0.8125rem", fontWeight:700, color:"#fff",
+                        cursor:"pointer", fontFamily:"var(--font)" }}>
+                      Retry
+                    </button>
+                  </div>
+                </div>
+              ) : deletionPreflight && deletionPreflight.ownedGroups.length > 0 ? (
+                <div style={{ padding:14, background:"rgba(248,113,113,0.08)" }}>
+                  <div style={{ fontSize:"0.875rem", fontWeight:700, color:"#fca5a5", marginBottom:8 }}>
+                    You still own these groups:
+                  </div>
+                  <div style={{ marginBottom:10 }}>
+                    {deletionPreflight.ownedGroups.map(g => (
+                      <div key={g.id} onClick={() => handleOwnedGroupClick(g)}
+                        style={{ display:"flex", alignItems:"center", gap:8,
+                          padding:"10px 12px", marginBottom:6, cursor:"pointer",
+                          background:"rgba(248,113,113,0.06)", borderRadius:8,
+                          border:"1px solid rgba(248,113,113,0.2)" }}>
+                        <div style={{ flex:1, fontSize:"0.8125rem", color:"var(--text)" }}>{g.name}</div>
+                        <div style={{ fontSize:"0.6875rem", fontWeight:600, color:"var(--accent2)" }}>Edit →</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", lineHeight:1.5, marginBottom:12 }}>
+                    Transfer ownership or delete each before you can delete your account.
+                  </div>
+                  <button onClick={collapseDeleteAccount} className="btn btn-secondary" style={{ width:"100%" }}>Cancel</button>
+                </div>
+              ) : deletionPreflight ? (() => {
+                const handleNormalized = (userProfile.handle || '').replace(/^@+/, '').toLowerCase();
+                const inputNormalized  = deleteAccountInput.replace(/^@+/, '').toLowerCase();
+                const canDelete = handleNormalized.length > 0 && inputNormalized === handleNormalized;
+                if (!handleNormalized) {
+                  return (
+                    <div style={{ padding:14, background:"rgba(248,113,113,0.08)" }}>
+                      <div style={{ fontSize:"0.75rem", color:"#fca5a5", marginBottom:10, lineHeight:1.5 }}>
+                        Couldn't load your handle — try refreshing the page and signing in again before deleting.
+                      </div>
+                      <button onClick={collapseDeleteAccount} className="btn btn-secondary" style={{ width:"100%" }}>Cancel</button>
+                    </div>
+                  );
+                }
+                return (
+                  <div style={{ padding:14, background:"rgba(248,113,113,0.08)" }}>
+                    <div style={{ fontSize:"0.875rem", fontWeight:700, color:"#fca5a5", marginBottom:6 }}>
+                      Delete account?
+                    </div>
+                    <div style={{ fontSize:"0.75rem", color:"var(--text)", lineHeight:1.7, marginBottom:8,
+                      paddingLeft:8, borderLeft:"2px solid rgba(248,113,113,0.3)" }}>
+                      Permanent. Removes:<br/>
+                      • Your profile and avatar<br/>
+                      • <strong>{deletionPreflight.eventCount}</strong> event{deletionPreflight.eventCount === 1 ? "" : "s"}<br/>
+                      • <strong>{deletionPreflight.friendshipCount}</strong> friendship{deletionPreflight.friendshipCount === 1 ? "" : "s"} and requests<br/>
+                      • All your group memberships<br/>
+                      • Visibility you've granted to others
+                    </div>
+                    <div style={{ fontSize:"0.6875rem", color:"var(--muted)", lineHeight:1.5, marginBottom:12 }}>
+                      Major events and shifts on this device aren't deleted — they're not on the server yet. Use "Reset app" to clear local data.
+                    </div>
+                    <div style={{ fontSize:"0.6875rem", fontWeight:600, color:"#fca5a5", marginBottom:6 }}>
+                      Type <strong style={{ color:"var(--text)", fontFamily:"var(--mono)" }}>@{handleNormalized}</strong> to confirm
+                    </div>
+                    <input value={deleteAccountInput} onChange={e => setDeleteAccountInput(e.target.value)}
+                      placeholder={`Type @${handleNormalized} here`}
+                      style={{ width:"100%", boxSizing:"border-box",
+                        background:"rgba(0,0,0,0.3)", border:"1px solid rgba(248,113,113,0.3)",
+                        borderRadius:8, padding:"10px 12px", color:"var(--text)",
+                        fontSize:"0.875rem", fontFamily:"var(--mono)", outline:"none", marginBottom:12 }} />
+                    <div style={{ display:"flex", gap:8 }}>
+                      <button onClick={collapseDeleteAccount} className="btn btn-secondary" style={{ flex:1 }}>Cancel</button>
+                      <button onClick={doDeleteAccount} disabled={!canDelete}
+                        style={{ flex:1, padding:"10px", borderRadius:8,
+                          background: canDelete ? "#b91c1c" : "rgba(185,28,28,0.25)",
+                          border:"none", fontSize:"0.8125rem", fontWeight:700,
+                          color: canDelete ? "#fff" : "var(--muted)",
+                          cursor: canDelete ? "pointer" : "not-allowed",
+                          fontFamily:"var(--font)" }}>
+                        Delete forever
+                      </button>
+                    </div>
+                  </div>
+                );
+              })() : null}
+            </div>
+
           </div>
         )}
 
@@ -4497,24 +6227,18 @@ export default function App() {
             const todayHasEvents = todayEvents.length > 0;
             const hasConflicts = getConflicts(todayEvents).size > 0;
             const shiftOverrideCount = shiftOverrides.size;
-            const friendRequestsRaw = friends.filter(f => f.status === "pending_received").length;
-            const feedUnseenRaw = activityFeed.filter(a => a.userId !== "u1" && a.ts > feedSeenAt).length;
-            // Respect user's badge preferences
-            const friendRequests = userProfile.badges?.friendRequests !== false ? friendRequestsRaw : 0;
-            const feedUnseen = userProfile.badges?.feed !== false ? feedUnseenRaw : 0;
-            const groupsBadge = friendRequests + feedUnseen;
+            const hasFriendRequests = friends.some(f => f.status === "pending_received");
             return [
               { id:"home", label:"Home", icon:Icon.home, dot: hasConflicts ? "#ef4444" : null },
               { id:"calendar", label:"Calendar", icon:Icon.calendar, dot: (todayHasEvents && userProfile.badges?.todayEvents !== false) ? "var(--accent2)" : null },
-              ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups, badge: groupsBadge }] : []),
+              ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups, dot: (hasFriendRequests && userProfile.badges?.friendRequests !== false) ? "#ef4444" : null }] : []),
               { id:"shifts", label:"Shifts", icon:Icon.shifts, dot: shiftOverrideCount > 0 ? "#f59e0b" : null },
               { id:"settings", label:"Settings", icon:Icon.settings },
             ].map(n => (
               <button key={n.id} ref={!(isDesktop || isSplit) ? setTourRef("nav-"+n.id) : undefined} className={"nav-btn "+(tab===n.id?"active":"")} onClick={() => { setTab(n.id); setFabOpen(false); }}>
                 <div style={{ position:"relative", display:"inline-flex" }}>
                   {n.icon}
-                  {n.badge > 0 && <div style={{ position:"absolute", top:-5, right:-5, minWidth:14, height:14, borderRadius:7, background:"#ef4444", fontSize:"0.6875rem", fontWeight:700, color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", padding:"0 2px" }}>{n.badge}</div>}
-                  {!n.badge && n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:7, height:7, borderRadius:"50%", background:n.dot, border:"1.5px solid var(--bg)" }} />}
+                  {n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:7, height:7, borderRadius:"50%", background:n.dot, border:"1.5px solid var(--bg)" }} />}
                 </div>
                 <span>{n.label}</span>
               </button>
@@ -4551,23 +6275,45 @@ export default function App() {
             </div>
           </div>
         )}
-        {sheet === "newMajorEvent" && <MajorEventSheet defaultDate={selectedDate} onPreview={setPreviewMajor} groups={groups} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addMajorEvent} onClose={() => { setPreviewMajor(null); closeSheet(); }} />}
+        {sheet === "newMajorEvent" && <MajorEventSheet defaultDate={selectedDate} onPreview={setPreviewMajor} groups={groups} friends={friends} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addMajorEvent} onClose={() => { setPreviewMajor(null); closeSheet(); }} />}
         {sheet === "editCalendar" && <CalendarSheet existing={activeCalendar} allCalendars={calendars} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={activeCalendar ? updateCalendar : addCalendar} onDelete={activeCalendar && calendars.length > 1 ? deleteCalendar : null} onClose={closeSheet} />}
         {sheet === "editProfile" && (
           <EditProfileSheet
+            userId={userId}
             profile={userProfile}
             onSave={p => { setUserProfile(prev => ({...prev, ...p})); closeSheet(); }}
             onClose={closeSheet}
           />
         )}
-        {sheet === "majorEventDetail" && activeMajorEvent && <MajorEventDetailSheet me={activeMajorEvent} groups={groups} onEdit={() => openEditMajorEvent(activeMajorEvent)} onDelete={deleteMajorEvent} onDuplicate={duplicateMajorEvent} onPin={toggleMajorPin} onClose={closeSheet} mapProvider={mapProvider} />}
-        {sheet === "editMajorEvent" && activeMajorEvent && <MajorEventSheet existing={activeMajorEvent} onPreview={setPreviewMajor} groups={groups} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateMajorEvent} onDelete={deleteMajorEvent} onClose={() => { setPreviewMajor(null); closeSheet(); }} />}
-        {sheet === "newEvent" && <NewEventSheet onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} defaultCalendar={userProfile.defaultCalendar} defaultReminder={userProfile.defaultReminder} />}
-        {sheet === "newImportantEvent" && <NewEventSheet onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} defaultCalendar={userProfile.defaultCalendar} defaultReminder={userProfile.defaultReminder} defaultImportant={true} />}
-        {sheet === "editEvent" && activeEvent && <NewEventSheet existing={activeEvent} onPreview={setPreviewEvent} calendars={calendars} groups={groups} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateEvent} onDelete={deleteEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} />}
-        {sheet === "eventDetail" && activeEvent && <EventDetailSheet ev={activeEvent} cal={calForCalendar(activeEvent.calendarId)} groups={groups} onDelete={deleteEvent} onEdit={() => openEditEvent(activeEvent)} onClose={closeSheet} onDuplicate={duplicateEvent} onPin={togglePin} isPinned={pinnedEvents.has(baseEventId(activeEvent.id))} mapProvider={mapProvider} />}
-        {sheet === "newGroup" && <NewGroupSheet onSave={addGroup} onClose={closeSheet} />}
-        {sheet === "editGroup" && activeGroup && <NewGroupSheet existing={activeGroup} currentMembers={groupMembers.filter(m => m.groupId === activeGroup.id)} onSave={(g, members) => updateGroup(g, members)} onDelete={deleteGroup} onClose={closeSheet} />}
+        {sheet === "majorEventDetail" && activeMajorEvent && <MajorEventDetailSheet me={activeMajorEvent} groups={groups} friends={friends} onEdit={() => openEditMajorEvent(activeMajorEvent)} onDelete={deleteMajorEvent} onDuplicate={duplicateMajorEvent} onPin={toggleMajorPin} onClose={closeSheet} mapProvider={mapProvider} />}
+        {sheet === "editMajorEvent" && activeMajorEvent && <MajorEventSheet existing={activeMajorEvent} onPreview={setPreviewMajor} groups={groups} friends={friends} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateMajorEvent} onDelete={deleteMajorEvent} onClose={() => { setPreviewMajor(null); closeSheet(); }} />}
+        {sheet === "newEvent" && <NewEventSheet onPreview={setPreviewEvent} calendars={calendars} groups={groups} friends={friends} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} defaultCalendar={userProfile.defaultCalendar} defaultReminder={userProfile.defaultReminder} />}
+        {sheet === "newImportantEvent" && <NewEventSheet onPreview={setPreviewEvent} calendars={calendars} groups={groups} friends={friends} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} defaultCalendar={userProfile.defaultCalendar} defaultReminder={userProfile.defaultReminder} defaultImportant={true} />}
+        {sheet === "editEvent" && activeEvent && <NewEventSheet existing={activeEvent} onPreview={setPreviewEvent} calendars={calendars} groups={groups} friends={friends} allEvents={events} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateEvent} onDelete={deleteEvent} onClose={() => { setPreviewEvent(null); closeSheet(); }} defaultDate={selectedDate} />}
+        {sheet === "eventDetail" && activeEvent && <EventDetailSheet ev={activeEvent} cal={calForCalendar(activeEvent.calendarId)} groups={groups} friends={friends} onDelete={deleteEvent} onEdit={() => openEditEvent(activeEvent)} onClose={closeSheet} onDuplicate={duplicateEvent} onPin={togglePin} isPinned={pinnedEvents.has(baseEventId(activeEvent.id))} mapProvider={mapProvider} />}
+        {sheet === "newGroup" && (
+          <NewGroupSheet
+            userId={userId}
+            userProfile={userProfile}
+            myRole="owner"
+            customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }}
+            onSave={addGroup}
+            onClose={closeSheet} />
+        )}
+        {sheet === "editGroup" && activeGroup && (
+          <NewGroupSheet
+            existing={activeGroup}
+            currentMembers={groupMembers.filter(m => m.groupId === activeGroup.id)}
+            userId={userId}
+            userProfile={userProfile}
+            myRole={myGroupRole(activeGroup)}
+            customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }}
+            onSave={(g, members) => updateGroup(g, members)}
+            onDelete={deleteGroup}
+            onTransferOwnership={transferGroupOwnership}
+            onLeaveGroup={leaveGroupAction}
+            onClose={closeSheet} />
+        )}
         {sheet === "icsPreview" && (
           <ICSPreviewSheet
             events={events}
@@ -4591,8 +6337,8 @@ export default function App() {
             }}
           />
         )}
-        {sheet === "newShift" && <ShiftSheet onPreview={setPreviewShift} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addShift} onClose={() => { setPreviewShift(null); closeSheet(); }} />}
-        {sheet === "editShift" && activeShift && <ShiftSheet existing={activeShift} onPreview={setPreviewShift} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateShift} onDelete={deleteShift} onClose={() => { setPreviewShift(null); closeSheet(); }} />}
+        {sheet === "newShift" && <ShiftSheet groups={groups} friends={friends} onPreview={setPreviewShift} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={addShift} onClose={() => { setPreviewShift(null); closeSheet(); }} />}
+        {sheet === "editShift" && activeShift && <ShiftSheet existing={activeShift} groups={groups} friends={friends} onPreview={setPreviewShift} customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }} onSave={updateShift} onDelete={deleteShift} onDuplicate={duplicateShift} onClose={() => { setPreviewShift(null); closeSheet(); }} />}
         {sheet === "guide" && <GuideSheet onClose={closeSheet} onStartTour={() => { closeSheet(); setTab("home"); setTourOpen(true); }} />}
       </div>
     </>
@@ -5689,7 +7435,13 @@ function ShiftCard({ shift, onEdit, shiftOverrides, onToggleDay, onAddManualDay,
           </button>
         )}
         <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontFamily:"var(--mono)" }}>{shift.type==="rotation"?cycleLen+"-day":shift.type==="monthly"?"monthly":"weekly"}</div>
-        <button className="btn btn-secondary" style={{ fontSize:"0.75rem", padding:"5px 10px" }} onClick={onEdit}>Edit</button>
+        {shift._sharePath === 'own' ? (
+          <button className="btn btn-secondary" style={{ fontSize:"0.75rem", padding:"5px 10px" }} onClick={onEdit}>Edit</button>
+        ) : (
+          <span style={{ fontSize:"0.6875rem", color:"var(--muted)", fontStyle:"italic" }}>
+            {formatShareLabel(shift) ?? 'Shared'}
+          </span>
+        )}
       </div>
 
       <div style={{ display:"flex", alignItems:"center", gap:8, padding:"9px 12px", borderRadius:10, marginBottom:12,
@@ -6065,7 +7817,7 @@ function CustomColorPopup({ current, recents, favorites, onPick, onToggleFavorit
   );
 }
 
-function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors, onSave, onDelete, onClose, defaultDate, defaultCalendar, defaultReminder, defaultImportant=false, onPreview }) {
+function NewEventSheet({ existing, calendars, groups, friends=[], allEvents=[], customColors, onSave, onDelete, onClose, defaultDate, defaultCalendar, defaultReminder, defaultImportant=false, onPreview }) {
   const isEdit = !!existing;
   const pad = n => String(n).padStart(2,"0");
   const defaultStart = new Date(defaultDate); defaultStart.setHours(9,0);
@@ -6079,6 +7831,7 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
   const [notes, setNotes] = useState(existing?.notes??"");
   const [visibility, setVisibility] = useState(existing?.visibility==="inherit" ? "private" : (existing?.visibility??"private"));
   const [selGroups, setSelGroups] = useState(existing?.groupIds??[]);
+  const [selUsers,  setSelUsers]  = useState(existing?.userIds??[]);
   const [frequency, setFrequency] = useState(existing?.frequency??"none");
   const [monthDays, setMonthDays] = useState(existing?.monthDays ?? {});
   const [reminder, setReminder] = useState(existing?.reminder??defaultReminder??"none");
@@ -6096,6 +7849,7 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
   const [scope, setScope] = useState(isRecurringOccurrence ? "instance" : "series");
 
   const toggleGroup = id => setSelGroups(prev => prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
+  const toggleUser  = id => setSelUsers(prev  => prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
 
   const handleSave = () => {
     if (!title.trim()) return;
@@ -6105,7 +7859,13 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
     const [eh,emin] = endTime.split(":").map(Number);
     const start = new Date(sy,sm-1,sd, allDay?0:sh, allDay?0:smin);
     const end = new Date(ey,em-1,ed, allDay?23:eh, allDay?59:emin);
-    const saved = { title, calendarId:calId, start, end, allDay, notes, visibility, groupIds:selGroups, frequency, reminder, location, color:eventColor, url, attendees, important };
+    // Visibility-aware: only include the matching array. Switching the
+    // chip from 'groups'→'private' shouldn't write phantom share rows
+    // for groups the user picked then deselected by chip-toggling away.
+    const saved = { title, calendarId:calId, start, end, allDay, notes, visibility,
+      groupIds: visibility === 'groups' ? selGroups : [],
+      userIds:  visibility === 'people' ? selUsers  : [],
+      frequency, reminder, location, color:eventColor, url, attendees, important };
     if (frequency === "specific") saved.monthDays = monthDays;
     if (isEdit) {
       saved.id = existing.id;
@@ -6428,21 +8188,54 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
                 </div>
               )}
             </div>
-            {FEATURES.sharing && (
-            <div style={{ marginBottom:8 }}>
-              <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Visibility</div>
-              <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
-                {[{v:"private",l:"Only me"},{v:"groups",l:"Groups"},{v:"full_access",l:"Everyone"}].map(opt=>(
-                  <div key={opt.v} className={"chip"+(visibility===opt.v?" active":"")} onClick={()=>setVisibility(opt.v)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{opt.l}</div>
-                ))}
-              </div>
-              {visibility==="groups" && (
-                <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
-                  {groups.map(g=><div key={g.id} className={"chip"+(selGroups.includes(g.id)?" active":"")} onClick={()=>toggleGroup(g.id)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{g.name}</div>)}
+            {FEATURES.sharing && (() => {
+              const accepted = friends.filter(f => f.status === 'accepted');
+              return (
+                <div style={{ marginBottom:8 }}>
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Visibility</div>
+                  <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
+                    {[{v:"private",l:"Only me"},{v:"friends",l:"All friends"},{v:"groups",l:"Groups"},{v:"people",l:"Specific friends"}].map(opt=>(
+                      <div key={opt.v} className={"chip"+(visibility===opt.v?" active":"")} onClick={()=>setVisibility(opt.v)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{opt.l}</div>
+                    ))}
+                  </div>
+                  {visibility==="groups" && (
+                    groups.length === 0 ? (
+                      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6, lineHeight:1.5 }}>You haven't created any groups yet — head to the Groups screen to add one.</div>
+                    ) : (
+                      <>
+                        <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
+                          {groups.map(g=><div key={g.id} className={"chip"+(selGroups.includes(g.id)?" active":"")} onClick={()=>toggleGroup(g.id)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{g.name}</div>)}
+                        </div>
+                        {selGroups.length === 0 && (
+                          <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:5, lineHeight:1.5 }}>Pick at least one group, or this event stays private to you.</div>
+                        )}
+                      </>
+                    )
+                  )}
+                  {visibility==="people" && (
+                    accepted.length === 0 ? (
+                      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6, lineHeight:1.5 }}>You haven't added any friends yet — head to the Add tab.</div>
+                    ) : (
+                      <>
+                        <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
+                          {accepted.map(f => (
+                            <div key={f.id} className={"chip"+(selUsers.includes(f.userId)?" active":"")}
+                              onClick={() => toggleUser(f.userId)}
+                              style={{ fontSize:"0.6875rem", padding:"3px 8px", display:"flex", alignItems:"center", gap:5 }}>
+                              <MemberAvatar url={f.avatar} name={f.name} size={16} />
+                              {f.name}
+                            </div>
+                          ))}
+                        </div>
+                        {selUsers.length === 0 && (
+                          <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:5, lineHeight:1.5 }}>Pick at least one person, or this event stays private to you.</div>
+                        )}
+                      </>
+                    )
+                  )}
                 </div>
-              )}
-            </div>
-            )}
+              );
+            })()}
             {FEATURES.attendees && (
             <div style={{ marginBottom:8 }}>
               <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Attendees</div>
@@ -6514,8 +8307,9 @@ function NewEventSheet({ existing, calendars, groups, allEvents=[], customColors
     </div>
   );
 }
-function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplicate, onPin, isPinned, mapProvider }) {
+function EventDetailSheet({ ev, cal, groups, friends=[], onDelete, onEdit, onClose, onDuplicate, onPin, isPinned, mapProvider }) {
   const evGroups = groups.filter(g => ev.groupIds?.includes(g.id));
+  const evUsers  = (friends || []).filter(f => f.status === 'accepted' && ev.userIds?.includes(f.userId));
   const isMultiDay = ev.allDay && !sameDay(ev.start, ev.end);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const isRecurring = ev.frequency && ev.frequency !== "none";
@@ -6549,9 +8343,26 @@ function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplic
         <div className="card card-sm" style={{ marginBottom:12 }}>
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
             <span style={{ fontSize:"1.125rem" }}>{visibilityIcon(ev.visibility)}</span>
-            <div>
+            <div style={{ flex:1 }}>
               <div style={{ fontSize:"0.875rem", fontWeight:500 }}>{visibilityLabel(ev.visibility)}</div>
-              {evGroups.length>0&&<div style={{ display:"flex", gap:6, marginTop:6, flexWrap:"wrap" }}>{evGroups.map(g=><span key={g.id} className="group-badge"><div style={{ width:7, height:7, borderRadius:"50%", background:g.color }} />{g.name}</span>)}</div>}
+              {ev.visibility === 'friends' && (
+                <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:2 }}>All your friends</div>
+              )}
+              {ev.visibility === 'groups' && evGroups.length>0 && (
+                <div style={{ display:"flex", gap:6, marginTop:6, flexWrap:"wrap" }}>
+                  {evGroups.map(g=><span key={g.id} className="group-badge"><div style={{ width:7, height:7, borderRadius:"50%", background:g.color }} />{g.name}</span>)}
+                </div>
+              )}
+              {ev.visibility === 'people' && evUsers.length>0 && (
+                <div style={{ display:"flex", gap:6, marginTop:6, flexWrap:"wrap" }}>
+                  {evUsers.map(f => (
+                    <span key={f.id} style={{ display:"flex", alignItems:"center", gap:5, background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:20, padding:"3px 8px", fontSize:"0.6875rem" }}>
+                      <MemberAvatar url={f.avatar} name={f.name} size={14} />
+                      {f.name}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -6592,10 +8403,12 @@ function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplic
         {ev.notes&&<div className="card card-sm" style={{ marginBottom:12 }}><div className="section-label" style={{ marginBottom:4 }}>Notes</div><div style={{ fontSize:"0.875rem" }}>{ev.notes}</div></div>}
         {!confirmDelete && (
           <>
-            <div style={{ display:"flex", gap:8, marginBottom:8 }}>
-              <button className="btn btn-secondary" style={{ flex:1 }} onClick={onEdit}>Edit</button>
-              <button className="btn btn-secondary" style={{ flex:1, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }} onClick={()=>setConfirmDelete(true)}>Delete</button>
-            </div>
+            {ev._sharePath === 'own' && (
+              <div style={{ display:"flex", gap:8, marginBottom:8 }}>
+                <button className="btn btn-secondary" style={{ flex:1 }} onClick={onEdit}>Edit</button>
+                <button className="btn btn-secondary" style={{ flex:1, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }} onClick={()=>setConfirmDelete(true)}>Delete</button>
+              </div>
+            )}
             <div style={{ display:"flex", gap:8, marginTop:0 }}>
               <button className="btn btn-secondary" onClick={()=>onDuplicate(ev)} style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
                 <span style={{ display:"flex", width:13, height:13 }}>{Icon.copy}</span> Duplicate
@@ -6604,6 +8417,11 @@ function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplic
                 <span style={{ display:"flex", width:13, height:13 }}>{Icon.pin2}</span> {isPinned?"Pinned":"Pin"}
               </button>
             </div>
+            {formatShareLabel(ev) && (
+              <div style={{ marginTop: 12, fontSize: "0.75rem", color: "var(--muted)", textAlign: "center" }}>
+                {formatShareLabel(ev)}
+              </div>
+            )}
           </>
         )}
         {confirmDelete && (
@@ -6663,55 +8481,416 @@ function EventDetailSheet({ ev, cal, groups, onDelete, onEdit, onClose, onDuplic
 }
 
 // ── NEW GROUP SHEET ───────────────────────────────────────
-function NewGroupSheet({ existing, currentMembers, onSave, onDelete, onClose }) {
-  const isEdit = !!existing;
-  const [name, setName] = useState(existing?.name??"");
-  const [color, setColor] = useState(existing?.color??"#6366f1");
-  const [members, setMembers] = useState(currentMembers??[]);
-  const [newMemberName, setNewMemberName] = useState("");
-  const colors = ["#6366f1","#f97316","#10b981","#f59e0b","#ec4899","#3b82f6"];
-  const uid2 = () => Math.random().toString(36).slice(2,7);
+//
+// Owner-aware editor. Renders different action surfaces by `myRole`:
+//   'owner'  — full edit (name, color, privacy, member ops, delete)
+//   'editor' — read-only meta; can add/remove role='member' rows only
+//   'member' — fully read-only (Commit 2 adds the Leave action)
+// Member changes are staged locally; Save commits via the parent's
+// updateGroup, which diffs against priorMembers. The owner is rendered
+// inline as a banner row at the top of the Members section using the
+// owner-profile fields attached by loadGroupsForViewer.
+
+// Hoisted out of NewGroupSheet so it isn't recreated on every render.
+function MemberAvatar({ url, name, size = 32 }) {
+  const initial = (name || '?').charAt(0).toUpperCase();
+  if (url) {
+    return (
+      <img src={url} alt=""
+        style={{ width:size, height:size, borderRadius:"50%", objectFit:"cover", flexShrink:0 }} />
+    );
+  }
   return (
-    <div className="sheet-overlay" onClick={e => e.target===e.currentTarget&&onClose()}>
+    <div style={{
+      width:size, height:size, borderRadius:"50%", background:"var(--surface3)",
+      color:"var(--muted)", display:"flex", alignItems:"center", justifyContent:"center",
+      fontSize:size*0.4, fontWeight:600, flexShrink:0,
+    }}>{initial}</div>
+  );
+}
+
+function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole, customColors,
+                        onSave, onDelete, onTransferOwnership, onLeaveGroup, onClose }) {
+  const isEdit = !!existing;
+  const isOwner = myRole === 'owner';
+  const isEditor = myRole === 'editor';
+  const canEditMeta = isOwner;                       // name, color, member_list_hidden, delete
+  const canAddAnyRole = isOwner;                     // owner can stage 'member' or 'editor'
+  const canAddMemberRole = isOwner || isEditor;      // editor restricted to 'member' (RLS-enforced)
+
+  // Owner row: in edit mode, comes from the loaded group; in create mode,
+  // synthesized from the viewer's profile (creator is always the owner).
+  const ownerDisplay = isEdit
+    ? { id: existing.owner, name: existing.ownerName, handle: existing.ownerHandle, avatar: existing.ownerAvatar }
+    : { id: userId,         name: userProfile?.name,  handle: userProfile?.handle,  avatar: userProfile?.avatar };
+
+  const [name, setName] = useState(existing?.name ?? "");
+  const [color, setColor] = useState(existing?.color ?? "#6366f1");
+  const [memberListHidden, setMemberListHidden] = useState(!!existing?.memberListHidden);
+  const [members, setMembers] = useState(currentMembers ?? []);
+  const [handleQuery, setHandleQuery] = useState("");
+  const [handleResult, setHandleResult] = useState({ state: 'idle' });
+  const [addRole, setAddRole] = useState('member');
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferTargetId, setTransferTargetId] = useState(null);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
+  const debounceRef = useRef(null);
+
+  // Pending edits not yet saved — guards Transfer Ownership behind a
+  // "Save pending changes first" hint so the transfer doesn't happen
+  // mid-edit (which would commit a stale-server view to the sheet).
+  const isDirty = useMemo(() => {
+    if (!isEdit) return false;
+    if (name !== existing.name) return true;
+    if (color !== existing.color) return true;
+    if (memberListHidden !== !!existing.memberListHidden) return true;
+    if (members.length !== (currentMembers?.length ?? 0)) return true;
+    const orig = new Map((currentMembers ?? []).map(m => [m.userId, m.role]));
+    for (const m of members) {
+      if (orig.get(m.userId) !== m.role) return true;
+    }
+    return false;
+  }, [name, color, memberListHidden, members, existing, currentMembers, isEdit]);
+
+  // Read latest staged members inside the debounced search timer
+  // without re-firing on every add/remove. Keeping `members` out of
+  // the search effect's deps means staged-list churn doesn't restart
+  // the 250ms timer; the "already-member" check below still sees the
+  // current list when it eventually fires.
+  const membersRef = useRef(members);
+  React.useEffect(() => { membersRef.current = members; }, [members]);
+
+  React.useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const cleaned = handleQuery.replace(/^@+/, '').toLowerCase().trim();
+    if (cleaned.length < 3) { setHandleResult({ state: 'idle' }); return; }
+    setHandleResult({ state: 'searching' });
+    debounceRef.current = setTimeout(async () => {
+      const { user, error } = await findUserByHandle(cleaned);
+      if (error) { setHandleResult({ state: 'error' }); return; }
+      if (!user) { setHandleResult({ state: 'not-found' }); return; }
+      if (user.id === userId) { setHandleResult({ state: 'yourself' }); return; }
+      if (existing?.owner === user.id) { setHandleResult({ state: 'already-member', user }); return; }
+      if (membersRef.current.some(m => m.userId === user.id)) { setHandleResult({ state: 'already-member', user }); return; }
+      setHandleResult({ state: 'found', user });
+    }, 250);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [handleQuery, userId, existing?.owner]);
+
+  const stageAdd = () => {
+    if (handleResult.state !== 'found') return;
+    const u = handleResult.user;
+    setMembers(prev => [...prev, {
+      groupId: existing?.id,
+      userId: u.id,
+      name: u.name || (u.handle ? `@${u.handle}` : 'Unknown'),
+      handle: u.handle,
+      avatar: u.avatar_url,
+      role: canAddAnyRole ? addRole : 'member',
+    }]);
+    setHandleQuery("");
+    setHandleResult({ state: 'idle' });
+    setAddRole('member');
+  };
+
+  return (
+    <div className="sheet-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="sheet">
         <div className="sheet-handle" />
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
-          <div className="sheet-title" style={{ marginBottom:0 }}>{isEdit?"Edit Group":"New Group"}</div>
+          <div className="sheet-title" style={{ marginBottom:0 }}>{isEdit ? "Edit Group" : "New Group"}</div>
           <button className="btn-icon" style={{ background:"var(--surface3)" }} onClick={onClose}>{Icon.close}</button>
         </div>
-        <div className="form-group"><label className="form-label">Name</label><input className="form-input" placeholder="Group name" value={name} onChange={e=>setName(e.target.value)} /></div>
+
+        <div className="form-group">
+          <label className="form-label">Name</label>
+          <input className="form-input" placeholder="Group name" value={name}
+            disabled={isEdit && !canEditMeta}
+            onChange={e => setName(e.target.value)} />
+        </div>
+
         <div className="form-group">
           <label className="form-label">Color</label>
-          <div className="chip-row">{colors.map(c=><div key={c} onClick={()=>setColor(c)} style={{ width:32,height:32,borderRadius:"50%",background:c,cursor:"pointer",border:color===c?"3px solid white":"3px solid transparent",transition:"border .12s" }} />)}</div>
+          <div style={{ pointerEvents: (!isEdit || canEditMeta) ? 'auto' : 'none', opacity: (!isEdit || canEditMeta) ? 1 : 0.6 }}>
+            <ColorPicker value={color} onChange={setColor}
+              recents={customColors?.recents||[]} favorites={customColors?.favorites||[]}
+              onRecentsChange={customColors?.setRecents} onFavoritesChange={customColors?.setFavorites} />
+          </div>
         </div>
+
         <div className="form-group">
           <label className="form-label">Members</label>
-          <div style={{ display:"flex", gap:8, marginBottom:8 }}>
-            <input className="form-input" placeholder="Member name" value={newMemberName} onChange={e=>setNewMemberName(e.target.value)}
-              onKeyDown={e=>{ if (e.key==="Enter"&&newMemberName.trim()) { setMembers(prev=>[...prev,{userId:"u"+uid2(),name:newMemberName.trim(),role:"viewer"}]); setNewMemberName(""); }}}
-              style={{ flex:1 }} />
-            <button className="btn btn-secondary" style={{ padding:"0 14px", whiteSpace:"nowrap" }}
-              onClick={()=>{ if (newMemberName.trim()) { setMembers(prev=>[...prev,{userId:"u"+uid2(),name:newMemberName.trim(),role:"viewer"}]); setNewMemberName(""); }}}>Add</button>
-          </div>
-          {members.map((m,idx)=>(
-            <div key={m.userId} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
-              <div style={{ flex:1, fontSize:"0.875rem" }}>{m.name}</div>
-              <select value={m.role} onChange={e=>setMembers(prev=>prev.map((x,i)=>i===idx?{...x,role:e.target.value}:x))} style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text)", padding:"4px 8px", fontSize:"0.75rem" }}>
-                <option value="viewer">Viewer</option><option value="editor">Editor</option>
-              </select>
-              <button onClick={()=>setMembers(prev=>prev.filter((_,i)=>i!==idx))} style={{ background:"none", border:"none", color:"#f87171", cursor:"pointer", display:"flex", width:16, height:16 }}><span style={{ display:"flex", width:16, height:16 }}>{Icon.x}</span></button>
+
+          {ownerDisplay.id && (
+            <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
+              <MemberAvatar url={ownerDisplay.avatar} name={ownerDisplay.name} />
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                  {ownerDisplay.name || "Unknown"}
+                  {ownerDisplay.id === userId && (
+                    <span style={{ fontSize:"0.6875rem", color:"var(--muted)", marginLeft:6 }}>· You</span>
+                  )}
+                </div>
+                {ownerDisplay.handle && (
+                  <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{ownerDisplay.handle}</div>
+                )}
+              </div>
+              <div style={{
+                background:"rgba(124,106,247,0.2)", color:"var(--accent2)",
+                border:"1px solid rgba(124,106,247,0.3)", borderRadius:20,
+                padding:"3px 10px", fontSize:"0.75rem", fontWeight:600,
+              }}>Owner</div>
             </div>
-          ))}
+          )}
+
+          {members.map((m, idx) => {
+            const canRemove = isOwner || (isEditor && m.role === 'member');
+            const canChange = isOwner;
+            return (
+              <div key={m.userId} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
+                <MemberAvatar url={m.avatar} name={m.name} />
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {m.name}
+                  </div>
+                  {m.handle && (
+                    <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{m.handle}</div>
+                  )}
+                </div>
+                {canChange ? (
+                  <select value={m.role}
+                    onChange={e => setMembers(prev => prev.map((x, i) => i === idx ? { ...x, role: e.target.value } : x))}
+                    style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text)", padding:"4px 8px", fontSize:"0.75rem" }}>
+                    <option value="member">Member</option>
+                    <option value="editor">Editor</option>
+                  </select>
+                ) : (
+                  <div style={{ background:"var(--surface2)", color:"var(--muted)", borderRadius:20, padding:"3px 10px", fontSize:"0.75rem", fontWeight:500, textTransform:"capitalize" }}>
+                    {m.role}
+                  </div>
+                )}
+                {canRemove && (
+                  <button onClick={() => setMembers(prev => prev.filter((_, i) => i !== idx))}
+                    style={{ background:"none", border:"none", color:"#f87171", cursor:"pointer", display:"flex", width:16, height:16, padding:0 }}>
+                    <span style={{ display:"flex", width:16, height:16 }}>{Icon.x}</span>
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
-        <button className="btn btn-primary" onClick={()=>{ if (name.trim()) onSave({...(existing||{}),name,color},members); }} style={{ opacity:name.trim()?1:0.5 }}>{isEdit?"Save Changes":"Create Group"}</button>
-        {isEdit&&onDelete&&<button className="btn btn-secondary" onClick={()=>onDelete(existing.id)} style={{ width:"100%", marginTop:10, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>Delete Group</button>}
+
+        {canAddMemberRole && (
+          <div className="form-group">
+            <label className="form-label">Add member</label>
+            <input className="form-input" placeholder="@handle"
+              value={handleQuery}
+              onChange={e => setHandleQuery(e.target.value)}
+              autoCapitalize="none" autoCorrect="off" />
+            {handleResult.state === 'searching' && (
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>Searching…</div>
+            )}
+            {handleResult.state === 'not-found' && (
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>
+                No one with @{handleQuery.replace(/^@+/, '')}
+              </div>
+            )}
+            {handleResult.state === 'yourself' && (
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>That's you.</div>
+            )}
+            {handleResult.state === 'already-member' && (
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>Already in this group.</div>
+            )}
+            {handleResult.state === 'error' && (
+              <div style={{ fontSize:"0.75rem", color:"#f87171", marginTop:6 }}>Couldn't search — try again.</div>
+            )}
+            {handleResult.state === 'found' && (
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8, padding:"10px 12px", background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
+                <MemberAvatar url={handleResult.user.avatar_url} name={handleResult.user.name} />
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {handleResult.user.name || "Unknown"}
+                  </div>
+                  {handleResult.user.handle && (
+                    <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{handleResult.user.handle}</div>
+                  )}
+                </div>
+                {canAddAnyRole && (
+                  <select value={addRole} onChange={e => setAddRole(e.target.value)}
+                    style={{ background:"var(--surface3)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text)", padding:"4px 8px", fontSize:"0.75rem" }}>
+                    <option value="member">Member</option>
+                    <option value="editor">Editor</option>
+                  </select>
+                )}
+                <button className="btn btn-secondary" onClick={stageAdd}
+                  style={{ padding:"6px 12px", fontSize:"0.75rem" }}>Add</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {canEditMeta && (
+          <div className="form-group">
+            <label className="form-label">Privacy</label>
+            <label style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"10px 12px", background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)", cursor:"pointer" }}>
+              <input type="checkbox" checked={memberListHidden}
+                onChange={e => setMemberListHidden(e.target.checked)}
+                style={{ marginTop:2 }} />
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:"0.875rem", color:"var(--text)", marginBottom:2 }}>Hide member list</div>
+                <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>
+                  Only you and editors can see who's in this group. Members see only themselves.
+                </div>
+              </div>
+            </label>
+          </div>
+        )}
+
+        {isEdit && isOwner && (
+          <div className="form-group">
+            <label className="form-label">Ownership</label>
+
+            {members.length === 0 ? (
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", padding:"10px 12px",
+                            background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
+                Add a member first to transfer ownership.
+              </div>
+            ) : !transferOpen ? (
+              <>
+                <button className="btn btn-secondary"
+                  disabled={isDirty}
+                  onClick={() => setTransferOpen(true)}
+                  style={{ width:"100%", opacity: isDirty ? 0.5 : 1, cursor: isDirty ? 'default' : 'pointer' }}>
+                  Transfer ownership →
+                </button>
+                {isDirty && (
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6 }}>
+                    Save pending changes first.
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ background:"var(--surface2)", borderRadius:10,
+                            border:"1px solid var(--border)", padding:"10px 12px" }}>
+                {!transferTargetId ? (
+                  <>
+                    <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginBottom:8 }}>
+                      Transfer to which member?
+                    </div>
+                    {members.map(m => (
+                      <div key={m.userId}
+                        onClick={() => setTransferTargetId(m.userId)}
+                        style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0",
+                                 cursor:"pointer", borderBottom:"1px solid var(--border)" }}>
+                        <MemberAvatar url={m.avatar} name={m.name} size={28} />
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontSize:"0.875rem", color:"var(--text)" }}>{m.name}</div>
+                          {m.handle && <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{m.handle}</div>}
+                        </div>
+                      </div>
+                    ))}
+                    <button onClick={() => setTransferOpen(false)}
+                      style={{ width:"100%", marginTop:8, background:"none",
+                               border:"1px solid var(--border)", borderRadius:8, padding:"8px",
+                               fontSize:"0.75rem", color:"var(--muted)", cursor:"pointer", fontFamily:"var(--font)" }}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (() => {
+                  const target = members.find(m => m.userId === transferTargetId);
+                  if (!target) return null;
+                  return (
+                    <>
+                      <div style={{ fontSize:"0.875rem", color:"var(--text)", marginBottom:8 }}>
+                        Make <strong>{target.name}</strong> the owner of <strong>{name}</strong>?
+                      </div>
+                      <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginBottom:12 }}>
+                        You'll become an editor and lose owner-only controls.
+                      </div>
+                      <div style={{ display:"flex", gap:8 }}>
+                        <button onClick={() => setTransferTargetId(null)}
+                          style={{ flex:1, padding:"8px", borderRadius:8, background:"var(--surface3)",
+                                   border:"1px solid var(--border)", color:"var(--text)",
+                                   fontSize:"0.8125rem", fontWeight:600, cursor:"pointer", fontFamily:"var(--font)" }}>
+                          Cancel
+                        </button>
+                        <button onClick={() => {
+                            onTransferOwnership(existing.id, transferTargetId);
+                            setTransferOpen(false);
+                            setTransferTargetId(null);
+                          }}
+                          style={{ flex:1, padding:"8px", borderRadius:8, background:"var(--accent)",
+                                   border:"none", color:"#fff",
+                                   fontSize:"0.8125rem", fontWeight:700, cursor:"pointer", fontFamily:"var(--font)" }}>
+                          Make owner
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+
+            <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:8 }}>
+              Owners can't leave directly — transfer ownership first, or delete the group.
+            </div>
+          </div>
+        )}
+
+        <button className="btn btn-primary"
+          onClick={() => { if (name.trim()) onSave({ ...(existing || {}), name, color, memberListHidden }, members); }}
+          style={{ opacity: name.trim() ? 1 : 0.5 }}>
+          {isEdit ? "Save Changes" : "Create Group"}
+        </button>
+
+        {isEdit && !isOwner && onLeaveGroup && (
+          !leaveConfirmOpen ? (
+            <button className="btn btn-secondary"
+              onClick={() => setLeaveConfirmOpen(true)}
+              style={{ width:"100%", marginTop:10, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>
+              Leave group
+            </button>
+          ) : (
+            <div style={{ marginTop:10, background:"var(--surface2)", borderRadius:10,
+                          border:"1px solid rgba(248,113,113,0.3)", padding:"12px" }}>
+              <div style={{ fontSize:"0.875rem", color:"var(--text)", marginBottom:4 }}>
+                Leave {existing.name}?
+              </div>
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginBottom:12 }}>
+                You'll lose access to events shared with this group.
+              </div>
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={() => setLeaveConfirmOpen(false)}
+                  style={{ flex:1, padding:"8px", borderRadius:8, background:"var(--surface3)",
+                           border:"1px solid var(--border)", color:"var(--text)",
+                           fontSize:"0.8125rem", fontWeight:600, cursor:"pointer", fontFamily:"var(--font)" }}>
+                  Cancel
+                </button>
+                <button onClick={() => onLeaveGroup(existing.id)}
+                  style={{ flex:1, padding:"8px", borderRadius:8, background:"#ef4444",
+                           border:"none", color:"#fff",
+                           fontSize:"0.8125rem", fontWeight:700, cursor:"pointer", fontFamily:"var(--font)" }}>
+                  Leave
+                </button>
+              </div>
+            </div>
+          )
+        )}
+
+        {isEdit && canEditMeta && onDelete && (
+          <button className="btn btn-secondary"
+            onClick={() => onDelete(existing.id)}
+            style={{ width:"100%", marginTop:10, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>
+            Delete Group
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
 // ── MAJOR EVENT DETAIL SHEET ─────────────────────────────
-function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, onPin, onClose, mapProvider }) {
+function MajorEventDetailSheet({ me, groups=[], friends=[], onEdit, onDelete, onDuplicate, onPin, onClose, mapProvider }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const parseLocal = s => { const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d); };
   const start = parseLocal(me.startDate);
@@ -6788,15 +8967,21 @@ function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, o
               </a>
             </div>
           )}
-          {FEATURES.sharing && evGroups.length > 0 && (
-            <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", marginBottom:8,
-              background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
-              <span style={{ display:"flex", width:14, height:14, color:"var(--muted)", flexShrink:0 }}>{Icon.groups}</span>
-              <div style={{ fontSize:"0.8125rem", color:"var(--text)", flex:1 }}>
-                Shared with {evGroups.map(g => g.name).join(", ")}
+          {FEATURES.sharing && me.visibility !== 'private' && (() => {
+            const evUsers = (friends || []).filter(f => f.status === 'accepted' && me.userIds?.includes(f.userId));
+            let summary = null;
+            if (me.visibility === 'friends') summary = "Shared with all friends";
+            else if (me.visibility === 'groups' && evGroups.length > 0) summary = "Shared with " + evGroups.map(g => g.name).join(", ");
+            else if (me.visibility === 'people' && evUsers.length > 0) summary = "Shared with " + evUsers.map(f => f.name).join(", ");
+            if (!summary) return null;
+            return (
+              <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", marginBottom:8,
+                background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
+                <span style={{ display:"flex", width:14, height:14, color:"var(--muted)", flexShrink:0 }}>{Icon.groups}</span>
+                <div style={{ fontSize:"0.8125rem", color:"var(--text)", flex:1 }}>{summary}</div>
               </div>
-            </div>
-          )}
+            );
+          })()}
           {me.notes && (
             <div style={{ background:"var(--surface2)", borderRadius:10, padding:12, marginBottom:12,
               border:"1px solid var(--border)" }}>
@@ -6819,14 +9004,23 @@ function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, o
                 </button>
               )}
               <div style={{ display:"flex", gap:8 }}>
-                <button className="btn btn-secondary" style={{ flex:1 }} onClick={onEdit}>Edit</button>
+                {me._sharePath === 'own' && (
+                  <button className="btn btn-secondary" style={{ flex:1 }} onClick={onEdit}>Edit</button>
+                )}
                 {onDuplicate && (
                   <button className="btn btn-secondary" style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }} onClick={() => onDuplicate(me)}>
-                    <span style={{ display:"flex", width:13, height:13 }}>{Icon.copy}</span> Copy
+                    <span style={{ display:"flex", width:13, height:13 }}>{Icon.copy}</span> Duplicate
                   </button>
                 )}
-                <button className="btn btn-secondary" style={{ flex:1, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }} onClick={() => setConfirmDelete(true)}>Delete</button>
+                {me._sharePath === 'own' && (
+                  <button className="btn btn-secondary" style={{ flex:1, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }} onClick={() => setConfirmDelete(true)}>Delete</button>
+                )}
               </div>
+              {formatShareLabel(me) && (
+                <div style={{ marginTop: 12, fontSize: "0.75rem", color: "var(--muted)", textAlign: "center" }}>
+                  {formatShareLabel(me)}
+                </div>
+              )}
             </>
           )}
           {confirmDelete && (
@@ -6855,10 +9049,14 @@ function MajorEventDetailSheet({ me, groups=[], onEdit, onDelete, onDuplicate, o
 }
 
 // ── MAJOR EVENT SHEET ─────────────────────────────────────
-function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSave, onDelete, onClose, onPreview }) {
+function MajorEventSheet({ existing, defaultDate, groups=[], friends=[], customColors, onSave, onDelete, onClose, onPreview }) {
   const isEdit = !!existing;
   const pad = n => String(n).padStart(2,"0");
-  const fmtForInput = d => { const dt=new Date(d); return dt.getFullYear()+"-"+pad(dt.getMonth()+1)+"-"+pad(dt.getDate()); };
+  const fmtForInput = d => {
+    if (!d) return todayStr();
+    if (typeof d === 'string') return d.slice(0, 10);   // pre-formatted YMD passes through, no UTC parse
+    return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate());  // Date → local YMD
+  };
   const todayStr = () => { const d=new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); };
   const initialDate = defaultDate ? fmtForInput(defaultDate) : todayStr();
 
@@ -6876,7 +9074,9 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
   const [url, setUrl] = useState(existing?.url??"");
   const [visibility, setVisibility] = useState(existing?.visibility==="inherit" ? "private" : (existing?.visibility??"private"));
   const [selGroups, setSelGroups] = useState(existing?.groupIds??[]);
+  const [selUsers,  setSelUsers]  = useState(existing?.userIds??[]);
   const toggleGroup = id => setSelGroups(p => p.includes(id) ? p.filter(x=>x!==id) : [...p, id]);
+  const toggleUser  = id => setSelUsers(p  => p.includes(id) ? p.filter(x=>x!==id) : [...p, id]);
 
   // Live preview: report the current date range + color so calendar can visualize it
   React.useEffect(() => {
@@ -6893,7 +9093,9 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
   const handleSave = () => {
     if (!title.trim()) return;
     const saved = { title, color, showCountdown, pinned, notes, location, url, allDay, startTime, endTime,
-      startDate, endDate, visibility, groupIds: selGroups };
+      startDate, endDate, visibility,
+      groupIds: visibility === 'groups' ? selGroups : [],
+      userIds:  visibility === 'people' ? selUsers  : [] };
     if (isEdit) { saved.id=existing.id; }
     onSave(saved);
   };
@@ -7028,25 +9230,58 @@ function MajorEventSheet({ existing, defaultDate, groups=[], customColors, onSav
           onChange={e=>setNotes(e.target.value)} style={{ marginBottom:10, minHeight:56, resize:"none" }} />
 
         {/* Visibility */}
-        {FEATURES.sharing && (
-        <div style={{ marginBottom:10 }}>
-          <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Who can see this?</div>
-          <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
-            {[{v:"private",l:"Only me"},{v:"groups",l:"Groups"},{v:"full_access",l:"Everyone"}].map(opt=>(
-              <div key={opt.v} className={"chip"+(visibility===opt.v?" active":"")}
-                onClick={()=>setVisibility(opt.v)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{opt.l}</div>
-            ))}
-          </div>
-          {visibility==="groups" && groups.length > 0 && (
-            <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
-              {groups.map(g => (
-                <div key={g.id} className={"chip"+(selGroups.includes(g.id)?" active":"")}
-                  onClick={()=>toggleGroup(g.id)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{g.name}</div>
-              ))}
+        {FEATURES.sharing && (() => {
+          const accepted = friends.filter(f => f.status === 'accepted');
+          return (
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Who can see this?</div>
+              <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
+                {[{v:"private",l:"Only me"},{v:"friends",l:"All friends"},{v:"groups",l:"Groups"},{v:"people",l:"Specific friends"}].map(opt=>(
+                  <div key={opt.v} className={"chip"+(visibility===opt.v?" active":"")}
+                    onClick={()=>setVisibility(opt.v)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{opt.l}</div>
+                ))}
+              </div>
+              {visibility==="groups" && (
+                groups.length === 0 ? (
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6, lineHeight:1.5 }}>You haven't created any groups yet — head to the Groups screen to add one.</div>
+                ) : (
+                  <>
+                    <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
+                      {groups.map(g => (
+                        <div key={g.id} className={"chip"+(selGroups.includes(g.id)?" active":"")}
+                          onClick={()=>toggleGroup(g.id)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{g.name}</div>
+                      ))}
+                    </div>
+                    {selGroups.length === 0 && (
+                      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:5, lineHeight:1.5 }}>Pick at least one group, or this event stays private to you.</div>
+                    )}
+                  </>
+                )
+              )}
+              {visibility==="people" && (
+                accepted.length === 0 ? (
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6, lineHeight:1.5 }}>You haven't added any friends yet — head to the Add tab.</div>
+                ) : (
+                  <>
+                    <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
+                      {accepted.map(f => (
+                        <div key={f.id} className={"chip"+(selUsers.includes(f.userId)?" active":"")}
+                          onClick={() => toggleUser(f.userId)}
+                          style={{ fontSize:"0.6875rem", padding:"3px 8px", display:"flex", alignItems:"center", gap:5 }}>
+                          <MemberAvatar url={f.avatar} name={f.name} size={16} />
+                          {f.name}
+                        </div>
+                      ))}
+                    </div>
+                    {selUsers.length === 0 && (
+                      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:5, lineHeight:1.5 }}>Pick at least one person, or this event stays private to you.</div>
+                    )}
+                  </>
+                )
+              )}
             </div>
-          )}
-        </div>
-        )}
+          );
+        })()}
 
         {/* Countdown + Pin toggles */}
         <div style={{ background:"var(--surface2)", borderRadius:10, marginBottom:12,
@@ -7134,7 +9369,7 @@ const PATTERN_TEMPLATES = [
   },
 ];
 
-function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPreview }) {
+function ShiftSheet({ existing, groups=[], friends=[], customColors, onSave, onDelete, onDuplicate, onClose, onPreview }) {
   const isEdit = !!existing;
   // Template picker: shown ONLY for NEW shifts (not edit mode), and only until a template is chosen
   const [showTemplates, setShowTemplates] = useState(!isEdit);
@@ -7149,6 +9384,11 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
   // Explicit "ends next day" lets a user say 1 AM → 5 AM crosses midnight,
   // which auto-detect (end ≤ start) can't express on its own.
   const [shiftEndsNextDay, setShiftEndsNextDay] = useState(existing?.config?.shiftTime?.endsNextDay??false);
+  const [visibility, setVisibility] = useState(existing?.visibility==="inherit" ? "private" : (existing?.visibility ?? "private"));
+  const [selGroups, setSelGroups] = useState(existing?.groupIds ?? []);
+  const [selUsers, setSelUsers]   = useState(existing?.userIds  ?? []);
+  const toggleGroup = id => setSelGroups(prev => prev.includes(id) ? prev.filter(g=>g!==id) : [...prev, id]);
+  const toggleUser  = id => setSelUsers (prev => prev.includes(id) ? prev.filter(u=>u!==id) : [...prev, id]);
   // Apply a template preset — fills in name, type, sequence/days
   const applyTemplate = (tpl) => {
     if (tpl.id === "blank") {
@@ -7195,7 +9435,12 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
     const parseLocal = s => { const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d); };
     const shiftTime={enabled:shiftEnabled,start:shiftStart,end:shiftEnd,endsNextDay:shiftEndsNextDay};
     const config=type==="rotation"?{sequence,startDate:parseLocal(cycleStart).toISOString(),shiftTime}:type==="monthly"?{months:{},shiftTime}:{days:weekDays,shiftTime};
-    const saved={name,type,color,config};
+    const saved={
+      name, type, color, config,
+      visibility,
+      groupIds: visibility === 'groups' ? selGroups : [],
+      userIds:  visibility === 'people' ? selUsers  : [],
+    };
     if (isEdit) saved.id=existing.id;
     onSave(saved);
   };
@@ -7270,7 +9515,7 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
           {type==="monthly"&&<div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:8, lineHeight:1.5 }}>Tap days on the calendar each month to mark your work days. No repeating shift — you fill it in when you get your schedule.</div>}
         </div>
         <div className="form-group">
-          <label className="form-label">Colour</label>
+          <label className="form-label">Color</label>
           <ColorPicker value={color} onChange={setColor}
             recents={customColors?.recents||[]} favorites={customColors?.favorites||[]}
             onRecentsChange={customColors?.setRecents} onFavoritesChange={customColors?.setFavorites} />
@@ -7381,6 +9626,59 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
             Shift duration: {shiftMetrics.durationHours} hours ({formatTime12h(shiftStart)} &ndash; {formatTime12h(shiftEnd)})
           </div>
         )}
+        {/* Visibility */}
+        {FEATURES.sharing && (() => {
+          const accepted = friends.filter(f => f.status === 'accepted');
+          return (
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase", marginBottom:4 }}>Who can see this?</div>
+              <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
+                {[{v:"private",l:"Only me"},{v:"friends",l:"All friends"},{v:"groups",l:"Groups"},{v:"people",l:"Specific friends"}].map(opt=>(
+                  <div key={opt.v} className={"chip"+(visibility===opt.v?" active":"")}
+                    onClick={()=>setVisibility(opt.v)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{opt.l}</div>
+                ))}
+              </div>
+              {visibility==="groups" && (
+                groups.length === 0 ? (
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6, lineHeight:1.5 }}>You haven't created any groups yet — head to the Groups screen to add one.</div>
+                ) : (
+                  <>
+                    <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
+                      {groups.map(g => (
+                        <div key={g.id} className={"chip"+(selGroups.includes(g.id)?" active":"")}
+                          onClick={()=>toggleGroup(g.id)} style={{ fontSize:"0.6875rem", padding:"3px 8px" }}>{g.name}</div>
+                      ))}
+                    </div>
+                    {selGroups.length === 0 && (
+                      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:5, lineHeight:1.5 }}>Pick at least one group, or this shift stays private to you.</div>
+                    )}
+                  </>
+                )
+              )}
+              {visibility==="people" && (
+                accepted.length === 0 ? (
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:6, lineHeight:1.5 }}>You haven't added any friends yet — head to the Add tab.</div>
+                ) : (
+                  <>
+                    <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginTop:5 }}>
+                      {accepted.map(f => (
+                        <div key={f.id} className={"chip"+(selUsers.includes(f.userId)?" active":"")}
+                          onClick={() => toggleUser(f.userId)}
+                          style={{ fontSize:"0.6875rem", padding:"3px 8px", display:"flex", alignItems:"center", gap:5 }}>
+                          <MemberAvatar url={f.avatar} name={f.name} size={16} />
+                          {f.name}
+                        </div>
+                      ))}
+                    </div>
+                    {selUsers.length === 0 && (
+                      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:5, lineHeight:1.5 }}>Pick at least one person, or this shift stays private to you.</div>
+                    )}
+                  </>
+                )
+              )}
+            </div>
+          );
+        })()}
         <div style={{
           position:"sticky", bottom:-40,
           marginLeft:-20, marginRight:-20, marginTop:12, marginBottom:-40,
@@ -7390,7 +9688,18 @@ function ShiftSheet({ existing, customColors, onSave, onDelete, onClose, onPrevi
           zIndex:2,
         }}>
           <button className="btn btn-primary" onClick={handleSave} style={{ opacity:name.trim()?1:0.5 }}>{isEdit?"Save Changes":"Save Shift"}</button>
-          {isEdit&&onDelete&&<button className="btn btn-secondary" onClick={()=>onDelete(existing.id)} style={{ width:"100%", marginTop:8, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}>Delete Shift</button>}
+          {isEdit && (onDuplicate || onDelete) && (
+            <div style={{ display:"flex", gap:8, marginTop:8 }}>
+              {onDuplicate && (
+                <button className="btn btn-secondary" style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }} onClick={() => onDuplicate(existing)}>
+                  <span style={{ display:"flex", width:13, height:13 }}>{Icon.copy}</span> Duplicate
+                </button>
+              )}
+              {onDelete && (
+                <button className="btn btn-secondary" style={{ flex:1, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }} onClick={() => onDelete(existing.id)}>Delete</button>
+              )}
+            </div>
+          )}
         </div>
           </>
         )}
@@ -8835,6 +11144,266 @@ function PreviewColorFallback() {
   );
 }
 
+function PreviewGroupsTab() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", gap:18, padding:"12px 16px", borderRadius:10, background:"var(--surface3)",
+        border:"1px solid var(--border)" }}>
+        {[
+          { icon: Icon.home,     active:false, dot:null      },
+          { icon: Icon.calendar, active:false, dot:null      },
+          { icon: Icon.groups,   active:true,  dot:"#ef4444" },
+          { icon: Icon.shifts,   active:false, dot:null      },
+          { icon: Icon.settings, active:false, dot:null      },
+        ].map((n, i) => (
+          <div key={i} style={{ position:"relative", width:18, height:18,
+            color: n.active ? "var(--accent2)" : "var(--muted)" }}>
+            <span style={{ display:"flex", width:18, height:18 }}>{n.icon}</span>
+            {n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:6, height:6, borderRadius:"50%",
+              background:n.dot, border:"1.5px solid var(--surface3)" }} />}
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewCreateGroup() {
+  const color = "#10b981";
+  return (
+    <PreviewFrame height={145}>
+      <div style={{ width:220, padding:8, borderRadius:8, background:"var(--surface)", border:"1px solid var(--border)",
+        display:"flex", flexDirection:"column", gap:5 }}>
+        <div style={{ fontSize:"0.625rem", fontWeight:700, color:"var(--text)" }}>New Group</div>
+        <div style={{ height:14, borderRadius:4, background:"var(--surface3)", border:"1px solid var(--border)",
+          display:"flex", alignItems:"center", padding:"0 5px" }}>
+          <span style={{ fontSize:"0.5rem", color:"var(--text)", fontWeight:600 }}>Family</span>
+        </div>
+        <div style={{ display:"flex", gap:3 }}>
+          {["#ef4444","#f97316","#10b981","#3b82f6","#8b5cf6","#ec4899"].map((c,i) => (
+            <div key={i} style={{ width:11, height:11, borderRadius:"50%", background:c,
+              border: c===color ? "1.5px solid var(--text)" : "1.5px solid transparent",
+              boxShadow: c===color ? `0 0 0 1px var(--accent)` : "none" }} />
+          ))}
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:5, padding:"3px 5px", borderRadius:5,
+          background:"var(--surface2)", border:"1px solid var(--border)" }}>
+          <div style={{ width:11, height:11, borderRadius:"50%", background:"var(--surface3)" }} />
+          <span style={{ fontSize:"0.5rem", color:"var(--text)", fontWeight:600 }}>Jordan</span>
+          <span style={{ fontSize:"0.4375rem", color:"var(--muted)", marginLeft:"auto" }}>member</span>
+        </div>
+        <div style={{ padding:"4px 0", borderRadius:4, background:"var(--accent)", color:"#fff",
+          textAlign:"center", fontSize:"0.5625rem", fontWeight:700 }}>Create Group</div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewGroupRoles() {
+  const rows = [
+    { name:"You",     role:"Owner",  badge:"rgba(124,106,247,0.2)", text:"var(--accent2)" },
+    { name:"Jordan",  role:"Editor", badge:"rgba(59,130,246,0.18)", text:"#60a5fa" },
+    { name:"Casey",   role:"Member", badge:"var(--surface3)",       text:"var(--muted)" },
+  ];
+  return (
+    <PreviewFrame height={130}>
+      <div style={{ width:220, display:"flex", flexDirection:"column", gap:5 }}>
+        {rows.map((r, i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 8px",
+            borderRadius:7, background:"var(--surface3)", border:"1px solid var(--border)" }}>
+            <div style={{ width:18, height:18, borderRadius:"50%", background:"var(--surface2)",
+              display:"flex", alignItems:"center", justifyContent:"center", fontSize:"0.5rem", fontWeight:700,
+              color:"var(--muted)" }}>{r.name.charAt(0)}</div>
+            <span style={{ fontSize:"0.625rem", color:"var(--text)", fontWeight:600, flex:1 }}>{r.name}</span>
+            <div style={{ background:r.badge, color:r.text, borderRadius:20, padding:"2px 8px",
+              fontSize:"0.5rem", fontWeight:700 }}>{r.role}</div>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewHideGroup() {
+  const cards = [
+    { name:"Family", color:"#10b981", hidden:false },
+    { name:"Work",   color:"#3b82f6", hidden:true  },
+  ];
+  return (
+    <PreviewFrame>
+      <div style={{ width:220, display:"flex", flexDirection:"column", gap:5 }}>
+        {cards.map((c, i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 8px",
+            borderRadius:7, background:"var(--surface3)", border:"1px solid var(--border)",
+            opacity: c.hidden ? 0.55 : 1 }}>
+            <div style={{ width:9, height:9, borderRadius:3, background: c.hidden ? "var(--surface2)" : c.color }} />
+            <span style={{ fontSize:"0.625rem", color:"var(--text)", flex:1, fontWeight:600,
+              textDecoration: c.hidden ? "line-through" : "none" }}>{c.name}</span>
+            <div style={{ borderRadius:20, padding:"2px 8px", fontSize:"0.5rem", fontWeight:700,
+              background: c.hidden ? "var(--surface2)" : `${c.color}22`,
+              color: c.hidden ? "var(--muted)" : c.color,
+              border: c.hidden ? "1px solid var(--border)" : `1px solid ${c.color}55` }}>
+              {c.hidden ? "Hidden" : "Visible"}
+            </div>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewFriendRequest() {
+  return (
+    <PreviewFrame height={130}>
+      <div style={{ width:240, padding:"8px 10px", borderRadius:8, background:"var(--surface3)",
+        border:"1px solid var(--border)", display:"flex", alignItems:"center", gap:8 }}>
+        <div style={{ width:24, height:24, borderRadius:"50%", background:"var(--surface2)",
+          display:"flex", alignItems:"center", justifyContent:"center", fontSize:"0.625rem", fontWeight:700,
+          color:"var(--muted)" }}>R</div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:"0.625rem", color:"var(--text)", fontWeight:700 }}>Riley Patel</div>
+          <div style={{ fontSize:"0.5rem", color:"var(--accent2)", marginTop:1 }}>Wants to connect</div>
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+          <div style={{ padding:"3px 8px", borderRadius:5, background:"var(--accent)", color:"#fff",
+            fontSize:"0.5rem", fontWeight:700, textAlign:"center" }}>Accept</div>
+          <div style={{ padding:"3px 8px", borderRadius:5, background:"none", border:"1px solid var(--border)",
+            color:"var(--muted)", fontSize:"0.5rem", fontWeight:600, textAlign:"center" }}>Decline</div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewVisibilityPicker({ contextLabel = null }) {
+  const chips = [
+    { l:"Only me", active:false },
+    { l:"Friends", active:false },
+    { l:"Groups",  active:true  },
+    { l:"People",  active:false },
+  ];
+  return (
+    <div style={{ width:240, display:"flex", flexDirection:"column", gap:6 }}>
+      {contextLabel && (
+        <div style={{ fontSize:"0.5625rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase",
+          letterSpacing:"0.4px" }}>{contextLabel}</div>
+      )}
+      <div style={{ display:"flex", gap:4 }}>
+        {chips.map((c, i) => (
+          <div key={i} style={{ flex:1, padding:"5px 0", borderRadius:14, textAlign:"center",
+            fontSize:"0.5rem", fontWeight:700,
+            border: "1.5px solid " + (c.active ? "var(--accent)" : "var(--border)"),
+            background: c.active ? "rgba(124,106,247,0.22)" : "var(--surface3)",
+            color: c.active ? "var(--accent2)" : "var(--muted)" }}>{c.l}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PreviewShareEvent() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+        <PreviewVisibilityPicker />
+        <div style={{ display:"flex", alignItems:"center", gap:5, padding:"4px 7px", borderRadius:5,
+          background:"rgba(16,185,129,0.15)", border:"1px solid rgba(16,185,129,0.4)", alignSelf:"flex-start" }}>
+          <div style={{ width:7, height:7, borderRadius:2, background:"#10b981" }} />
+          <span style={{ fontSize:"0.5rem", color:"#10b981", fontWeight:700 }}>Family</span>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewShareMajorOrShift() {
+  return (
+    <PreviewFrame>
+      <PreviewVisibilityPicker contextLabel="On major events & shifts too" />
+    </PreviewFrame>
+  );
+}
+
+function PreviewShareLabel() {
+  return (
+    <PreviewFrame height={140}>
+      <div style={{ width:240, display:"flex", flexDirection:"column", gap:5 }}>
+        <div style={{ padding:"5px 9px", borderRadius:6, background:"#10b98122",
+          border:"1px solid #10b98155", borderLeft:"3px solid #10b981" }}>
+          <div style={{ fontSize:"0.625rem", fontWeight:700, color:"var(--text)" }}>Sunday brunch</div>
+          <div style={{ fontSize:"0.5rem", color:"#10b981", marginTop:1 }}>Shared in Family</div>
+        </div>
+        <div style={{ padding:"5px 9px", borderRadius:6, background:"#3b82f622",
+          border:"1px solid #3b82f655", borderLeft:"3px solid #3b82f6" }}>
+          <div style={{ fontSize:"0.625rem", fontWeight:700, color:"var(--text)" }}>Team standup</div>
+          <div style={{ fontSize:"0.5rem", color:"#3b82f6", marginTop:1 }}>Shared by Jordan</div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewMemberPermissions() {
+  return (
+    <PreviewFrame height={130}>
+      <div style={{ display:"flex", gap:14, alignItems:"center" }}>
+        <div style={{ display:"flex", flexDirection:"column", gap:4, alignItems:"center" }}>
+          <span style={{ fontSize:"0.5rem", color:"var(--accent2)", fontWeight:800, letterSpacing:"0.4px" }}>OWNER</span>
+          <div style={{ display:"flex", gap:3 }}>
+            {["Edit","Duplicate","Delete"].map((l, i) => (
+              <div key={i} style={{ padding:"3px 6px", borderRadius:4, background:"var(--surface3)",
+                border:"1px solid var(--border)", fontSize:"0.4375rem", fontWeight:700,
+                color: l==="Delete" ? "#f87171" : "var(--text)" }}>{l}</div>
+            ))}
+          </div>
+        </div>
+        <span style={{ fontSize:"0.875rem", color:"var(--muted)" }}>vs</span>
+        <div style={{ display:"flex", flexDirection:"column", gap:4, alignItems:"center" }}>
+          <span style={{ fontSize:"0.5rem", color:"var(--muted)", fontWeight:800, letterSpacing:"0.4px" }}>MEMBER</span>
+          <div style={{ display:"flex", gap:3 }}>
+            <div style={{ padding:"3px 6px", borderRadius:4, background:"var(--surface3)",
+              border:"1px solid var(--border)", fontSize:"0.4375rem", fontWeight:700, color:"var(--text)" }}>Duplicate</div>
+          </div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewLeaveGroup() {
+  return (
+    <PreviewFrame>
+      <div style={{ width:200, display:"flex", flexDirection:"column", gap:5 }}>
+        <div style={{ padding:"6px 0", borderRadius:6, background:"var(--surface3)",
+          border:"1px solid var(--border)", textAlign:"center", fontSize:"0.5625rem",
+          color:"var(--text)", fontWeight:600 }}>Transfer ownership →</div>
+        <div style={{ padding:"6px 0", borderRadius:6, background:"none",
+          border:"1px solid rgba(248,113,113,0.4)", textAlign:"center", fontSize:"0.5625rem",
+          color:"#f87171", fontWeight:600 }}>Leave group</div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewMemberListPrivacy() {
+  return (
+    <PreviewFrame height={130}>
+      <div style={{ width:240, padding:"7px 9px", borderRadius:8, background:"var(--surface3)",
+        border:"1px solid var(--border)", display:"flex", alignItems:"flex-start", gap:7 }}>
+        <div style={{ width:11, height:11, borderRadius:3, background:"var(--accent)",
+          border:"1px solid var(--accent2)", marginTop:1, display:"flex", alignItems:"center", justifyContent:"center",
+          color:"#fff", fontSize:"0.5rem", fontWeight:800 }}>✓</div>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:"0.625rem", color:"var(--text)", fontWeight:600 }}>Hide member list</div>
+          <div style={{ fontSize:"0.5rem", color:"var(--muted)", marginTop:1, lineHeight:1.4 }}>
+            Members see only themselves and you.
+          </div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
 // Registry keyed by string so CONTENT rows stay declarative and easy to edit.
 const GUIDE_PREVIEWS = {
   stripes:         PreviewStripes,
@@ -8886,6 +11455,17 @@ const GUIDE_PREVIEWS = {
   keyboard:        PreviewKeyboard,
   hideCal:         PreviewHideCal,
   colorFallback:   PreviewColorFallback,
+  groupsTab:           PreviewGroupsTab,
+  createGroup:         PreviewCreateGroup,
+  groupRoles:          PreviewGroupRoles,
+  hideGroup:           PreviewHideGroup,
+  friendRequest:       PreviewFriendRequest,
+  shareEvent:          PreviewShareEvent,
+  shareMajorOrShift:   PreviewShareMajorOrShift,
+  shareLabel:          PreviewShareLabel,
+  memberPermissions:   PreviewMemberPermissions,
+  leaveGroup:          PreviewLeaveGroup,
+  memberListPrivacy:   PreviewMemberListPrivacy,
 };
 
 // ── GUIDE SHEET ───────────────────────────────────────────
@@ -8902,6 +11482,7 @@ function GuideSheet({ onClose, onStartTour }) {
     { id: "calendar", label: "Calendar", icon: Icon.calendar },
     { id: "shifts",   label: "Shifts",   icon: Icon.repeat },
     { id: "adding",   label: "Adding",   icon: Icon.plus },
+    { id: "groups",   label: "Groups & Friends", icon: Icon.groups },
     { id: "settings", label: "Settings", icon: Icon.settings },
     { id: "tips",     label: "Tips",     icon: Icon.help },
   ];
@@ -8950,6 +11531,19 @@ function GuideSheet({ onClose, onStartTour }) {
       { title: "Location + meeting link", body: "Events support a location that opens in your preferred maps app, and a URL for joining remote meetings.", preview: "locationLink" },
       { title: "Notes + reminders", body: "Every event has free-form notes and a per-event reminder that overrides the default.", preview: "notesReminders" },
     ],
+    groups: [
+      { title: "The Groups tab", body: "Found in the bottom nav. Manages your groups (shared calendars) and friends. The red dot fires when there's a pending friend request waiting for your response.", preview: "groupsTab" },
+      { title: "Creating a group", body: "Tap + on the Groups tab. Pick a name and color, add friends by @handle, and toggle 'Hide member list' if needed — all in one shot. Members get the group on their side as soon as you save.", preview: "createGroup" },
+      { title: "Group roles", body: "Owner (you, by default), Editor (can add members and edit group meta), Member (can see what's shared, can't change it). Owners can transfer ownership or remove anyone; editors can add new members but only as 'member' role.", preview: "groupRoles" },
+      { title: "Hide a group from your calendar", body: "Each group card has a Visible / Hidden toggle. Hidden removes that group's shared events and shifts from your calendar without leaving the group. Toggle back anytime — items reappear instantly.", preview: "hideGroup" },
+      { title: "Friend requests", body: "Send by @handle from the Add sub-tab on Groups. Incoming requests show up in the Friends sub-tab with Accept / Decline buttons. The Groups tab gets a small red dot whenever there's one waiting.", preview: "friendRequest" },
+      { title: "Sharing an event", body: "Every event sheet has a visibility picker: Only me (private), Friends, Groups, or People. Pick Groups to share the event into one or more groups; pick People to share with specific friends by name.", preview: "shareEvent" },
+      { title: "Sharing a major event or shift", body: "Same visibility picker on major events and shifts. People you share with see the item on their calendar at the time it's scheduled and can pin or react to it like any other event.", preview: "shareMajorOrShift" },
+      { title: "The 'Shared in / Shared by' label", body: "Items you've shared into a group show 'Shared in [group name]' under the title. Items others have shared with you show 'Shared by [their name]' so the context is always clear at a glance.", preview: "shareLabel" },
+      { title: "What members can edit", body: "Only the owner of an event, major event, or shift can edit or delete it. Members and recipients see the full details — title, time, location, notes — but the Edit/Delete buttons stay hidden for them.", preview: "memberPermissions" },
+      { title: "Leaving a group", body: "Open the group → Edit → 'Leave group' at the bottom. Owners can't leave directly — transfer ownership to another member first, or delete the group entirely.", preview: "leaveGroup" },
+      { title: "Privacy: hide member list", body: "Toggle in the group's edit sheet (owner-only). When enabled, members see only themselves and you — useful when members shouldn't know who else is in the group.", preview: "memberListPrivacy" },
+    ],
     settings: [
       { title: "Profile", body: "Your name and default color. The color is used wherever you haven't picked a specific one.", preview: "profile" },
       { title: "Default calendar + reminder", body: "New events land on this calendar and use this reminder lead time unless you override per event.", preview: "defaults" },
@@ -8962,7 +11556,7 @@ function GuideSheet({ onClose, onStartTour }) {
       { title: "Holidays", body: "Pick which countries' public holidays appear as H badges on the calendar.", preview: "holidayH" },
       { title: "Map provider", body: "Event locations open in Apple Maps, Google Maps, or Auto (picks the right one for your device) — your choice.", preview: "mapProvider" },
       { title: "Export", body: "Download a .ics file of everything. Import into Apple Calendar, Google Calendar, Outlook, or any other calendar app.", preview: "exportICS" },
-      { title: "In-app badges", body: "Toggle the small colored dots on nav icons (today has events, etc.).", preview: "badges" },
+      { title: "In-app badges", body: "Toggle the small colored dots on nav icons — today has events, pending friend requests, etc.", preview: "badges" },
       { title: "Soft reset", body: "Clears events, shifts, and major events — keeps your profile, theme, and onboarding state.", preview: "softReset" },
       { title: "Full reset", body: "Deletes everything including onboarding. Starts the app completely fresh.", preview: "fullReset" },
       { title: "Take a tour", body: "Replays the 60-second spotlight tour that highlights each tab's purpose.", preview: "tourReplay" },
@@ -9943,7 +12537,7 @@ function CalendarSheet({ existing, allCalendars=[], allEvents=[], customColors, 
 }
 
 // ── EDIT PROFILE SHEET ───────────────────────────────────
-function EditProfileSheet({ profile, onSave, onClose }) {
+function EditProfileSheet({ userId, profile, onSave, onClose }) {
   const [name, setName] = useState(profile.name || "");
   const [handle, setHandle] = useState(profile.handle || "");
   const [avatar, setAvatar] = useState(profile.avatar || null);
@@ -9960,6 +12554,8 @@ function EditProfileSheet({ profile, onSave, onClose }) {
   const handleError = handle.length > 0 && handle.length < 3
     ? "Username must be at least 3 characters"
     : null;
+  const [saving, setSaving] = useState(false);
+  const [claimError, setClaimError] = useState(null);
   const [cropMode, setCropMode] = useState(false);
   const [rawImg, setRawImg] = useState(null);
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
@@ -10074,6 +12670,69 @@ function EditProfileSheet({ profile, onSave, onClose }) {
 
   const removePhoto = () => { setAvatar(null); setCropMode(false); setRawImg(null); };
 
+  // Save. Handle changes go through claim_handle (atomic uniqueness check);
+  // name changes are a direct profiles.update under RLS. Both surface
+  // failures inline without closing the sheet. Order: handle first — its
+  // failure modes are most likely (taken / format) and most visible.
+  async function handleSave() {
+    if (handleError || saving) return;
+    setSaving(true);
+    setClaimError(null);
+    if (handle !== profile.handle) {
+      const { error } = await supabase.rpc("claim_handle", { p_handle: handle });
+      if (error) {
+        const msg = error.message || "";
+        setClaimError(/taken/i.test(msg) ? "That username is taken — try another." : (msg || "Could not save username."));
+        setSaving(false);
+        return;
+      }
+    }
+    if (name !== profile.name) {
+      const { error } = await supabase.from("profiles").update({ name }).eq("id", userId);
+      if (error) {
+        console.warn("[profile] name update failed", error);
+        setClaimError("Couldn't save name — try again.");
+        setSaving(false);
+        return;
+      }
+    }
+    // Avatar: a fresh data URI from the cropper goes to Storage; null after a
+    // prior URL means the user tapped Remove (we just clear avatar_url and
+    // leave the orphan file for account-deletion cleanup). Unchanged value
+    // (existing URL untouched) skips the round-trip entirely.
+    let savedAvatar = avatar;
+    if (avatar !== profile.avatar) {
+      if (typeof avatar === "string" && avatar.startsWith("data:")) {
+        const { url, error: uploadError } = await uploadAvatar(userId, avatar);
+        if (uploadError) {
+          console.warn("[profile] avatar upload failed", uploadError);
+          setClaimError("Couldn't save photo — try again.");
+          setSaving(false);
+          return;
+        }
+        const { error: dbError } = await supabase.from("profiles").update({ avatar_url: url }).eq("id", userId);
+        if (dbError) {
+          console.warn("[profile] avatar_url update failed", dbError);
+          setClaimError("Couldn't save photo — try again.");
+          setSaving(false);
+          return;
+        }
+        savedAvatar = url;
+      } else if (avatar === null) {
+        const { error } = await supabase.from("profiles").update({ avatar_url: null }).eq("id", userId);
+        if (error) {
+          console.warn("[profile] avatar_url clear failed", error);
+          setClaimError("Couldn't save photo — try again.");
+          setSaving(false);
+          return;
+        }
+        savedAvatar = null;
+      }
+    }
+    onSave({ name, email: profile.email || "", handle, avatar: savedAvatar });
+    setSaving(false);
+  }
+
   return (
     <div className="sheet-overlay" onClick={e => e.target===e.currentTarget&&onClose()}>
       <div className="sheet">
@@ -10143,11 +12802,16 @@ function EditProfileSheet({ profile, onSave, onClose }) {
               lineHeight:1.5, padding:"0 4px", marginBottom:16 }}>
               {handleError || "Pick one you like — if it's taken when sharing launches, we'll ask you to choose another. 3-20 chars, letters/numbers/underscores."}
             </div>
+            {claimError && (
+              <div style={{ fontSize:"0.75rem", color:"#f87171", lineHeight:1.4, marginBottom:10, padding:"0 4px" }}>
+                {claimError}
+              </div>
+            )}
             <button className="btn btn-primary"
-              disabled={!!handleError}
-              onClick={() => onSave({ name, email: profile.email || "", handle, avatar })}
-              style={{ opacity: handleError ? 0.5 : 1, cursor: handleError ? "not-allowed" : "pointer" }}>
-              Save
+              disabled={!!handleError || saving}
+              onClick={handleSave}
+              style={{ opacity: (handleError || saving) ? 0.5 : 1, cursor: (handleError || saving) ? "not-allowed" : "pointer" }}>
+              {saving ? "Saving…" : "Save"}
             </button>
           </>
         ) : (
@@ -10252,8 +12916,8 @@ input, textarea, select { font-size: max(16px, 1rem) !important; }
 .split-calendar-panel .screen { padding: 0; max-height: none; overflow-y: visible; }
 .split-mode .cal-grid { max-width: 820px; margin-left: auto; margin-right: auto; }
 /* Logo eyes flip color with theme — black on light bg, white on dark bg */
-.daytu-logo-eye { fill: #ffffff; }
-.light-mode .daytu-logo-eye { fill: #000000; }
+.daytu-logo-eye { fill: #fafafc; }
+.light-mode .daytu-logo-eye { fill: #17161f; }
 /* The + button inside the split sidebar */
 .split-add-btn { width: 44px; height: 44px; border-radius: 12px; background: var(--accent); border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(124,106,247,0.4); transition: transform .15s; margin-top: 8px; }
 .split-add-btn:hover { transform: scale(1.05); }
