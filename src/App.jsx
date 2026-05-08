@@ -1964,7 +1964,7 @@ export default function App({ userId, profile }) {
   const duplicateMajorEvent = (me) => {
     if (!userId) return;
     const newId = crypto.randomUUID();
-    const copy = { ...me, id: newId, title: me.title + " (copy)" };
+    const copy = { ...me, id: newId, title: me.title + " (copy)", _sharePath: 'own' };
     setMajorEvents(prev => [...prev, copy]);
     closeSheet();
     insertMajorEvent(copy, userId).then(async ({ error }) => {
@@ -1990,7 +1990,7 @@ export default function App({ userId, profile }) {
   const addEvent = (ev) => {
     if (!userId) return;
     const newId = crypto.randomUUID();
-    const newEv = { ...ev, id: newId };
+    const newEv = { ...ev, id: newId, _sharePath: 'own' };
     setEvents(prev => [...prev, newEv]);
     if (ev.important) setPinnedEvents(prev => { const n = new Set(prev); n.add(newId); return n; });
     (ev.groupIds||[]).forEach(gid => addActivity(gid, "added", ev.title, ev.start));
@@ -2061,7 +2061,7 @@ export default function App({ userId, profile }) {
   const duplicateEvent = (ev) => {
     if (!userId) return;
     const newId = crypto.randomUUID();
-    const newEv = { ...ev, id: newId, title: ev.title + " (copy)" };
+    const newEv = { ...ev, id: newId, title: ev.title + " (copy)", _sharePath: 'own' };
     setEvents(prev => [...prev, newEv]);
     closeSheet();
     showToast("Event duplicated");
@@ -2383,7 +2383,7 @@ export default function App({ userId, profile }) {
   const addMajorEvent = (me) => {
     if (!userId) return;
     const newId = crypto.randomUUID();
-    const saved = { ...me, id: newId };
+    const saved = { ...me, id: newId, _sharePath: 'own' };
     setMajorEvents(prev => [...prev, saved]);
     const startDate = typeof saved.startDate === "string" ? new Date(saved.startDate) : saved.startDate;
     (saved.groupIds||[]).forEach(gid => addActivity(gid, "added", saved.title, startDate));
@@ -2554,7 +2554,7 @@ export default function App({ userId, profile }) {
     if (!userId) return;
     const newId = crypto.randomUUID();
     const maxP = shiftsRef.current.reduce((m, x) => Math.max(m, x.priority ?? 0), -1);
-    const saved = { ...s, id: newId, priority: maxP + 1 };
+    const saved = { ...s, id: newId, priority: maxP + 1, _sharePath: 'own' };
     setShifts(prev => [...prev, saved]);
     closeSheet();
     showToast("Shift created");
@@ -2610,7 +2610,7 @@ export default function App({ userId, profile }) {
     if (!userId) return;
     const newId = crypto.randomUUID();
     const maxP = shiftsRef.current.reduce((m, x) => Math.max(m, x.priority ?? 0), -1);
-    const copy = { ...s, id: newId, name: (s.name || "") + " (copy)", priority: maxP + 1 };
+    const copy = { ...s, id: newId, name: (s.name || "") + " (copy)", priority: maxP + 1, _sharePath: 'own' };
     setShifts(prev => [...prev, copy]);
     closeSheet();
     showToast("Shift duplicated");
