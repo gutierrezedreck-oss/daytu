@@ -2681,13 +2681,25 @@ export default function App({ userId, profile }) {
 
   const visibleEvents = useMemo(() => events.filter(e => {
     if (hiddenCalendars.has(e.calendarId)) return false;
-    // Hide if ALL groups the event belongs to are hidden (or event has groups and they're all hidden)
+    // Owned content: hide if I shared with groups and I've hidden ALL of them.
+    // groupIds is empty for shared-with-me content (RLS restricts the share-row
+    // read to events I own), so this branch only fires for own events.
     if (e.groupIds && e.groupIds.length > 0 && e.groupIds.every(id => hiddenGroups.has(id))) return false;
+    // Shared-with-me content: hide if it reached me via a group I've hidden.
+    // _shareGroupId is the single group the RPC picks (earliest-joined match);
+    // null on 'people' / 'friends' paths.
+    // TODO(post-merge): a viewer in multiple groups that all received the same
+    // share only sees one — hiding the reported group hides the share even when
+    // other receiving groups remain visible. Fix needs either an RPC change to
+    // return all matching groups, or a wider RLS read on event_group_shares.
+    if (e._shareGroupId && hiddenGroups.has(e._shareGroupId)) return false;
     return true;
   }), [events, hiddenCalendars, hiddenGroups]);
   const visibleMajorEvents = useMemo(() => majorEvents.filter(me => {
-    // Hide if ALL groups the major event belongs to are hidden
+    // Same two-branch rule as visibleEvents above; see the TODO there for the
+    // multi-group-share edge case.
     if (me.groupIds && me.groupIds.length > 0 && me.groupIds.every(id => hiddenGroups.has(id))) return false;
+    if (me._shareGroupId && hiddenGroups.has(me._shareGroupId)) return false;
     return true;
   }), [majorEvents, hiddenGroups]);
   const todayEvents = useMemo(() => {
