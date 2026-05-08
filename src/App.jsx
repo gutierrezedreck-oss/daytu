@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback, useRef } from "react";
 import { signOut } from "./lib/auth.js";
+import { formatShareLabel } from "./lib/shareLabel.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner, diffAndWriteShares } from "./lib/events.js";
 import { loadMajorEventsFromSupabase, migrateLocalMajorEventsToSupabase, insertMajorEvent, updateMajorEventRow, deleteMajorEventRow, deleteAllMajorEventsForOwner, diffAndWriteMajorEventShares } from "./lib/major_events.js";
@@ -7412,7 +7413,7 @@ function ShiftCard({ shift, onEdit, shiftOverrides, onToggleDay, onAddManualDay,
           <button className="btn btn-secondary" style={{ fontSize:"0.75rem", padding:"5px 10px" }} onClick={onEdit}>Edit</button>
         ) : (
           <span style={{ fontSize:"0.6875rem", color:"var(--muted)", fontStyle:"italic" }}>
-            {shift._ownerName ? `Shared by ${shift._ownerName}` : 'Shared'}
+            {formatShareLabel(shift) ?? 'Shared'}
           </span>
         )}
       </div>
@@ -8390,9 +8391,9 @@ function EventDetailSheet({ ev, cal, groups, friends=[], onDelete, onEdit, onClo
                 <span style={{ display:"flex", width:13, height:13 }}>{Icon.pin2}</span> {isPinned?"Pinned":"Pin"}
               </button>
             </div>
-            {ev._sharePath !== 'own' && ev._ownerName && (
+            {formatShareLabel(ev) && (
               <div style={{ marginTop: 12, fontSize: "0.75rem", color: "var(--muted)", textAlign: "center" }}>
-                Shared by {ev._ownerName}
+                {formatShareLabel(ev)}
               </div>
             )}
           </>
@@ -8996,9 +8997,9 @@ function MajorEventDetailSheet({ me, groups=[], friends=[], onEdit, onDelete, on
                   <button className="btn btn-secondary" style={{ flex:1, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }} onClick={() => setConfirmDelete(true)}>Delete</button>
                 )}
               </div>
-              {me._sharePath !== 'own' && me._ownerName && (
+              {formatShareLabel(me) && (
                 <div style={{ marginTop: 12, fontSize: "0.75rem", color: "var(--muted)", textAlign: "center" }}>
-                  Shared by {me._ownerName}
+                  {formatShareLabel(me)}
                 </div>
               )}
             </>
