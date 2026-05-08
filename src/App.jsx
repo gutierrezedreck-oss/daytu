@@ -11144,6 +11144,266 @@ function PreviewColorFallback() {
   );
 }
 
+function PreviewGroupsTab() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", gap:18, padding:"12px 16px", borderRadius:10, background:"var(--surface3)",
+        border:"1px solid var(--border)" }}>
+        {[
+          { icon: Icon.home,     active:false, dot:null      },
+          { icon: Icon.calendar, active:false, dot:null      },
+          { icon: Icon.groups,   active:true,  dot:"#ef4444" },
+          { icon: Icon.shifts,   active:false, dot:null      },
+          { icon: Icon.settings, active:false, dot:null      },
+        ].map((n, i) => (
+          <div key={i} style={{ position:"relative", width:18, height:18,
+            color: n.active ? "var(--accent2)" : "var(--muted)" }}>
+            <span style={{ display:"flex", width:18, height:18 }}>{n.icon}</span>
+            {n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:6, height:6, borderRadius:"50%",
+              background:n.dot, border:"1.5px solid var(--surface3)" }} />}
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewCreateGroup() {
+  const color = "#10b981";
+  return (
+    <PreviewFrame height={145}>
+      <div style={{ width:220, padding:8, borderRadius:8, background:"var(--surface)", border:"1px solid var(--border)",
+        display:"flex", flexDirection:"column", gap:5 }}>
+        <div style={{ fontSize:"0.625rem", fontWeight:700, color:"var(--text)" }}>New Group</div>
+        <div style={{ height:14, borderRadius:4, background:"var(--surface3)", border:"1px solid var(--border)",
+          display:"flex", alignItems:"center", padding:"0 5px" }}>
+          <span style={{ fontSize:"0.5rem", color:"var(--text)", fontWeight:600 }}>Family</span>
+        </div>
+        <div style={{ display:"flex", gap:3 }}>
+          {["#ef4444","#f97316","#10b981","#3b82f6","#8b5cf6","#ec4899"].map((c,i) => (
+            <div key={i} style={{ width:11, height:11, borderRadius:"50%", background:c,
+              border: c===color ? "1.5px solid var(--text)" : "1.5px solid transparent",
+              boxShadow: c===color ? `0 0 0 1px var(--accent)` : "none" }} />
+          ))}
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:5, padding:"3px 5px", borderRadius:5,
+          background:"var(--surface2)", border:"1px solid var(--border)" }}>
+          <div style={{ width:11, height:11, borderRadius:"50%", background:"var(--surface3)" }} />
+          <span style={{ fontSize:"0.5rem", color:"var(--text)", fontWeight:600 }}>Jordan</span>
+          <span style={{ fontSize:"0.4375rem", color:"var(--muted)", marginLeft:"auto" }}>member</span>
+        </div>
+        <div style={{ padding:"4px 0", borderRadius:4, background:"var(--accent)", color:"#fff",
+          textAlign:"center", fontSize:"0.5625rem", fontWeight:700 }}>Create Group</div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewGroupRoles() {
+  const rows = [
+    { name:"You",     role:"Owner",  badge:"rgba(124,106,247,0.2)", text:"var(--accent2)" },
+    { name:"Jordan",  role:"Editor", badge:"rgba(59,130,246,0.18)", text:"#60a5fa" },
+    { name:"Casey",   role:"Member", badge:"var(--surface3)",       text:"var(--muted)" },
+  ];
+  return (
+    <PreviewFrame height={130}>
+      <div style={{ width:220, display:"flex", flexDirection:"column", gap:5 }}>
+        {rows.map((r, i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 8px",
+            borderRadius:7, background:"var(--surface3)", border:"1px solid var(--border)" }}>
+            <div style={{ width:18, height:18, borderRadius:"50%", background:"var(--surface2)",
+              display:"flex", alignItems:"center", justifyContent:"center", fontSize:"0.5rem", fontWeight:700,
+              color:"var(--muted)" }}>{r.name.charAt(0)}</div>
+            <span style={{ fontSize:"0.625rem", color:"var(--text)", fontWeight:600, flex:1 }}>{r.name}</span>
+            <div style={{ background:r.badge, color:r.text, borderRadius:20, padding:"2px 8px",
+              fontSize:"0.5rem", fontWeight:700 }}>{r.role}</div>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewHideGroup() {
+  const cards = [
+    { name:"Family", color:"#10b981", hidden:false },
+    { name:"Work",   color:"#3b82f6", hidden:true  },
+  ];
+  return (
+    <PreviewFrame>
+      <div style={{ width:220, display:"flex", flexDirection:"column", gap:5 }}>
+        {cards.map((c, i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 8px",
+            borderRadius:7, background:"var(--surface3)", border:"1px solid var(--border)",
+            opacity: c.hidden ? 0.55 : 1 }}>
+            <div style={{ width:9, height:9, borderRadius:3, background: c.hidden ? "var(--surface2)" : c.color }} />
+            <span style={{ fontSize:"0.625rem", color:"var(--text)", flex:1, fontWeight:600,
+              textDecoration: c.hidden ? "line-through" : "none" }}>{c.name}</span>
+            <div style={{ borderRadius:20, padding:"2px 8px", fontSize:"0.5rem", fontWeight:700,
+              background: c.hidden ? "var(--surface2)" : `${c.color}22`,
+              color: c.hidden ? "var(--muted)" : c.color,
+              border: c.hidden ? "1px solid var(--border)" : `1px solid ${c.color}55` }}>
+              {c.hidden ? "Hidden" : "Visible"}
+            </div>
+          </div>
+        ))}
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewFriendRequest() {
+  return (
+    <PreviewFrame height={130}>
+      <div style={{ width:240, padding:"8px 10px", borderRadius:8, background:"var(--surface3)",
+        border:"1px solid var(--border)", display:"flex", alignItems:"center", gap:8 }}>
+        <div style={{ width:24, height:24, borderRadius:"50%", background:"var(--surface2)",
+          display:"flex", alignItems:"center", justifyContent:"center", fontSize:"0.625rem", fontWeight:700,
+          color:"var(--muted)" }}>R</div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:"0.625rem", color:"var(--text)", fontWeight:700 }}>Riley Patel</div>
+          <div style={{ fontSize:"0.5rem", color:"var(--accent2)", marginTop:1 }}>Wants to connect</div>
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+          <div style={{ padding:"3px 8px", borderRadius:5, background:"var(--accent)", color:"#fff",
+            fontSize:"0.5rem", fontWeight:700, textAlign:"center" }}>Accept</div>
+          <div style={{ padding:"3px 8px", borderRadius:5, background:"none", border:"1px solid var(--border)",
+            color:"var(--muted)", fontSize:"0.5rem", fontWeight:600, textAlign:"center" }}>Decline</div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewVisibilityPicker({ contextLabel = null }) {
+  const chips = [
+    { l:"Only me", active:false },
+    { l:"Friends", active:false },
+    { l:"Groups",  active:true  },
+    { l:"People",  active:false },
+  ];
+  return (
+    <div style={{ width:240, display:"flex", flexDirection:"column", gap:6 }}>
+      {contextLabel && (
+        <div style={{ fontSize:"0.5625rem", color:"var(--muted)", fontWeight:700, textTransform:"uppercase",
+          letterSpacing:"0.4px" }}>{contextLabel}</div>
+      )}
+      <div style={{ display:"flex", gap:4 }}>
+        {chips.map((c, i) => (
+          <div key={i} style={{ flex:1, padding:"5px 0", borderRadius:14, textAlign:"center",
+            fontSize:"0.5rem", fontWeight:700,
+            border: "1.5px solid " + (c.active ? "var(--accent)" : "var(--border)"),
+            background: c.active ? "rgba(124,106,247,0.22)" : "var(--surface3)",
+            color: c.active ? "var(--accent2)" : "var(--muted)" }}>{c.l}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PreviewShareEvent() {
+  return (
+    <PreviewFrame>
+      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+        <PreviewVisibilityPicker />
+        <div style={{ display:"flex", alignItems:"center", gap:5, padding:"4px 7px", borderRadius:5,
+          background:"rgba(16,185,129,0.15)", border:"1px solid rgba(16,185,129,0.4)", alignSelf:"flex-start" }}>
+          <div style={{ width:7, height:7, borderRadius:2, background:"#10b981" }} />
+          <span style={{ fontSize:"0.5rem", color:"#10b981", fontWeight:700 }}>Family</span>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewShareMajorOrShift() {
+  return (
+    <PreviewFrame>
+      <PreviewVisibilityPicker contextLabel="On major events & shifts too" />
+    </PreviewFrame>
+  );
+}
+
+function PreviewShareLabel() {
+  return (
+    <PreviewFrame height={140}>
+      <div style={{ width:240, display:"flex", flexDirection:"column", gap:5 }}>
+        <div style={{ padding:"5px 9px", borderRadius:6, background:"#10b98122",
+          border:"1px solid #10b98155", borderLeft:"3px solid #10b981" }}>
+          <div style={{ fontSize:"0.625rem", fontWeight:700, color:"var(--text)" }}>Sunday brunch</div>
+          <div style={{ fontSize:"0.5rem", color:"#10b981", marginTop:1 }}>Shared in Family</div>
+        </div>
+        <div style={{ padding:"5px 9px", borderRadius:6, background:"#3b82f622",
+          border:"1px solid #3b82f655", borderLeft:"3px solid #3b82f6" }}>
+          <div style={{ fontSize:"0.625rem", fontWeight:700, color:"var(--text)" }}>Team standup</div>
+          <div style={{ fontSize:"0.5rem", color:"#3b82f6", marginTop:1 }}>Shared by Jordan</div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewMemberPermissions() {
+  return (
+    <PreviewFrame height={130}>
+      <div style={{ display:"flex", gap:14, alignItems:"center" }}>
+        <div style={{ display:"flex", flexDirection:"column", gap:4, alignItems:"center" }}>
+          <span style={{ fontSize:"0.5rem", color:"var(--accent2)", fontWeight:800, letterSpacing:"0.4px" }}>OWNER</span>
+          <div style={{ display:"flex", gap:3 }}>
+            {["Edit","Duplicate","Delete"].map((l, i) => (
+              <div key={i} style={{ padding:"3px 6px", borderRadius:4, background:"var(--surface3)",
+                border:"1px solid var(--border)", fontSize:"0.4375rem", fontWeight:700,
+                color: l==="Delete" ? "#f87171" : "var(--text)" }}>{l}</div>
+            ))}
+          </div>
+        </div>
+        <span style={{ fontSize:"0.875rem", color:"var(--muted)" }}>vs</span>
+        <div style={{ display:"flex", flexDirection:"column", gap:4, alignItems:"center" }}>
+          <span style={{ fontSize:"0.5rem", color:"var(--muted)", fontWeight:800, letterSpacing:"0.4px" }}>MEMBER</span>
+          <div style={{ display:"flex", gap:3 }}>
+            <div style={{ padding:"3px 6px", borderRadius:4, background:"var(--surface3)",
+              border:"1px solid var(--border)", fontSize:"0.4375rem", fontWeight:700, color:"var(--text)" }}>Duplicate</div>
+          </div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewLeaveGroup() {
+  return (
+    <PreviewFrame>
+      <div style={{ width:200, display:"flex", flexDirection:"column", gap:5 }}>
+        <div style={{ padding:"6px 0", borderRadius:6, background:"var(--surface3)",
+          border:"1px solid var(--border)", textAlign:"center", fontSize:"0.5625rem",
+          color:"var(--text)", fontWeight:600 }}>Transfer ownership →</div>
+        <div style={{ padding:"6px 0", borderRadius:6, background:"none",
+          border:"1px solid rgba(248,113,113,0.4)", textAlign:"center", fontSize:"0.5625rem",
+          color:"#f87171", fontWeight:600 }}>Leave group</div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
+function PreviewMemberListPrivacy() {
+  return (
+    <PreviewFrame height={130}>
+      <div style={{ width:240, padding:"7px 9px", borderRadius:8, background:"var(--surface3)",
+        border:"1px solid var(--border)", display:"flex", alignItems:"flex-start", gap:7 }}>
+        <div style={{ width:11, height:11, borderRadius:3, background:"var(--accent)",
+          border:"1px solid var(--accent2)", marginTop:1, display:"flex", alignItems:"center", justifyContent:"center",
+          color:"#fff", fontSize:"0.5rem", fontWeight:800 }}>✓</div>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:"0.625rem", color:"var(--text)", fontWeight:600 }}>Hide member list</div>
+          <div style={{ fontSize:"0.5rem", color:"var(--muted)", marginTop:1, lineHeight:1.4 }}>
+            Members see only themselves and you.
+          </div>
+        </div>
+      </div>
+    </PreviewFrame>
+  );
+}
+
 // Registry keyed by string so CONTENT rows stay declarative and easy to edit.
 const GUIDE_PREVIEWS = {
   stripes:         PreviewStripes,
@@ -11195,6 +11455,17 @@ const GUIDE_PREVIEWS = {
   keyboard:        PreviewKeyboard,
   hideCal:         PreviewHideCal,
   colorFallback:   PreviewColorFallback,
+  groupsTab:           PreviewGroupsTab,
+  createGroup:         PreviewCreateGroup,
+  groupRoles:          PreviewGroupRoles,
+  hideGroup:           PreviewHideGroup,
+  friendRequest:       PreviewFriendRequest,
+  shareEvent:          PreviewShareEvent,
+  shareMajorOrShift:   PreviewShareMajorOrShift,
+  shareLabel:          PreviewShareLabel,
+  memberPermissions:   PreviewMemberPermissions,
+  leaveGroup:          PreviewLeaveGroup,
+  memberListPrivacy:   PreviewMemberListPrivacy,
 };
 
 // ── GUIDE SHEET ───────────────────────────────────────────
@@ -11211,6 +11482,7 @@ function GuideSheet({ onClose, onStartTour }) {
     { id: "calendar", label: "Calendar", icon: Icon.calendar },
     { id: "shifts",   label: "Shifts",   icon: Icon.repeat },
     { id: "adding",   label: "Adding",   icon: Icon.plus },
+    { id: "groups",   label: "Groups & Friends", icon: Icon.groups },
     { id: "settings", label: "Settings", icon: Icon.settings },
     { id: "tips",     label: "Tips",     icon: Icon.help },
   ];
@@ -11259,6 +11531,19 @@ function GuideSheet({ onClose, onStartTour }) {
       { title: "Location + meeting link", body: "Events support a location that opens in your preferred maps app, and a URL for joining remote meetings.", preview: "locationLink" },
       { title: "Notes + reminders", body: "Every event has free-form notes and a per-event reminder that overrides the default.", preview: "notesReminders" },
     ],
+    groups: [
+      { title: "The Groups tab", body: "Found in the bottom nav. Manages your groups (shared calendars) and friends. The red dot fires when there's a pending friend request waiting for your response.", preview: "groupsTab" },
+      { title: "Creating a group", body: "Tap + on the Groups tab. Pick a name and color, add friends by @handle, and toggle 'Hide member list' if needed — all in one shot. Members get the group on their side as soon as you save.", preview: "createGroup" },
+      { title: "Group roles", body: "Owner (you, by default), Editor (can add members and edit group meta), Member (can see what's shared, can't change it). Owners can transfer ownership or remove anyone; editors can add new members but only as 'member' role.", preview: "groupRoles" },
+      { title: "Hide a group from your calendar", body: "Each group card has a Visible / Hidden toggle. Hidden removes that group's shared events and shifts from your calendar without leaving the group. Toggle back anytime — items reappear instantly.", preview: "hideGroup" },
+      { title: "Friend requests", body: "Send by @handle from the Add sub-tab on Groups. Incoming requests show up in the Friends sub-tab with Accept / Decline buttons. The Groups tab gets a small red dot whenever there's one waiting.", preview: "friendRequest" },
+      { title: "Sharing an event", body: "Every event sheet has a visibility picker: Only me (private), Friends, Groups, or People. Pick Groups to share the event into one or more groups; pick People to share with specific friends by name.", preview: "shareEvent" },
+      { title: "Sharing a major event or shift", body: "Same visibility picker on major events and shifts. People you share with see the item on their calendar at the time it's scheduled and can pin or react to it like any other event.", preview: "shareMajorOrShift" },
+      { title: "The 'Shared in / Shared by' label", body: "Items you've shared into a group show 'Shared in [group name]' under the title. Items others have shared with you show 'Shared by [their name]' so the context is always clear at a glance.", preview: "shareLabel" },
+      { title: "What members can edit", body: "Only the owner of an event, major event, or shift can edit or delete it. Members and recipients see the full details — title, time, location, notes — but the Edit/Delete buttons stay hidden for them.", preview: "memberPermissions" },
+      { title: "Leaving a group", body: "Open the group → Edit → 'Leave group' at the bottom. Owners can't leave directly — transfer ownership to another member first, or delete the group entirely.", preview: "leaveGroup" },
+      { title: "Privacy: hide member list", body: "Toggle in the group's edit sheet (owner-only). When enabled, members see only themselves and you — useful when members shouldn't know who else is in the group.", preview: "memberListPrivacy" },
+    ],
     settings: [
       { title: "Profile", body: "Your name and default color. The color is used wherever you haven't picked a specific one.", preview: "profile" },
       { title: "Default calendar + reminder", body: "New events land on this calendar and use this reminder lead time unless you override per event.", preview: "defaults" },
@@ -11271,7 +11556,7 @@ function GuideSheet({ onClose, onStartTour }) {
       { title: "Holidays", body: "Pick which countries' public holidays appear as H badges on the calendar.", preview: "holidayH" },
       { title: "Map provider", body: "Event locations open in Apple Maps, Google Maps, or Auto (picks the right one for your device) — your choice.", preview: "mapProvider" },
       { title: "Export", body: "Download a .ics file of everything. Import into Apple Calendar, Google Calendar, Outlook, or any other calendar app.", preview: "exportICS" },
-      { title: "In-app badges", body: "Toggle the small colored dots on nav icons (today has events, etc.).", preview: "badges" },
+      { title: "In-app badges", body: "Toggle the small colored dots on nav icons — today has events, pending friend requests, etc.", preview: "badges" },
       { title: "Soft reset", body: "Clears events, shifts, and major events — keeps your profile, theme, and onboarding state.", preview: "softReset" },
       { title: "Full reset", body: "Deletes everything including onboarding. Starts the app completely fresh.", preview: "fullReset" },
       { title: "Take a tour", body: "Replays the 60-second spotlight tour that highlights each tab's purpose.", preview: "tourReplay" },
