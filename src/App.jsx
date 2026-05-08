@@ -6277,6 +6277,7 @@ export default function App({ userId, profile }) {
             userId={userId}
             userProfile={userProfile}
             myRole="owner"
+            customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }}
             onSave={addGroup}
             onClose={closeSheet} />
         )}
@@ -6287,6 +6288,7 @@ export default function App({ userId, profile }) {
             userId={userId}
             userProfile={userProfile}
             myRole={myGroupRole(activeGroup)}
+            customColors={{ recents: customColorRecents, favorites: customColorFavorites, setRecents: setCustomColorRecents, setFavorites: setCustomColorFavorites }}
             onSave={(g, members) => updateGroup(g, members)}
             onDelete={deleteGroup}
             onTransferOwnership={transferGroupOwnership}
@@ -8488,7 +8490,7 @@ function MemberAvatar({ url, name, size = 32 }) {
   );
 }
 
-function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole,
+function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole, customColors,
                         onSave, onDelete, onTransferOwnership, onLeaveGroup, onClose }) {
   const isEdit = !!existing;
   const isOwner = myRole === 'owner';
@@ -8508,7 +8510,6 @@ function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole,
   const [transferTargetId, setTransferTargetId] = useState(null);
   const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const debounceRef = useRef(null);
-  const colors = ["#6366f1","#f97316","#10b981","#f59e0b","#ec4899","#3b82f6"];
 
   // Pending edits not yet saved — guards Transfer Ownership behind a
   // "Save pending changes first" hint so the transfer doesn't happen
@@ -8585,18 +8586,10 @@ function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole,
 
         <div className="form-group">
           <label className="form-label">Color</label>
-          <div className="chip-row">
-            {colors.map(c => (
-              <div key={c}
-                onClick={() => { if (!isEdit || canEditMeta) setColor(c); }}
-                style={{
-                  width:32, height:32, borderRadius:"50%", background:c,
-                  cursor: (!isEdit || canEditMeta) ? "pointer" : "default",
-                  border: color === c ? "3px solid white" : "3px solid transparent",
-                  opacity: (!isEdit || canEditMeta) ? 1 : 0.6,
-                  transition: "border .12s",
-                }} />
-            ))}
+          <div style={{ pointerEvents: (!isEdit || canEditMeta) ? 'auto' : 'none', opacity: (!isEdit || canEditMeta) ? 1 : 0.6 }}>
+            <ColorPicker value={color} onChange={setColor}
+              recents={customColors?.recents||[]} favorites={customColors?.favorites||[]}
+              onRecentsChange={customColors?.setRecents} onFavoritesChange={customColors?.setFavorites} />
           </div>
         </div>
 
