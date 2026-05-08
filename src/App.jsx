@@ -1170,7 +1170,7 @@ export default function App({ userId, profile }) {
   const [userProfile, setUserProfile] = useState(() => {
     const loaded = _ls?.userProfile ?? { name: "Alex Morgan", email: "", handle: "", defaultCalendar: "c1", defaultReminder: "15", avatar: null };
     // Ensure badges sub-object exists for users with older localStorage
-    if (!loaded.badges) loaded.badges = { todayEvents: true };
+    if (!loaded.badges) loaded.badges = { todayEvents: true, friendRequests: true };
     return loaded;
   });
   // Onboarding: true the very first time the app runs. Once finished it's stored as false permanently.
@@ -1417,7 +1417,7 @@ export default function App({ userId, profile }) {
     setShiftOverrides(new Set());
     setHomeOrder(["shiftstatus","status","important","pinned","nextup","major","freetime"]);
     setThemeMode("auto");
-    setUserProfile({ name: "Alex Morgan", email: "", handle: "", defaultCalendar: "c1", defaultReminder: "15", avatar: null, badges: { todayEvents: true } });
+    setUserProfile({ name: "Alex Morgan", email: "", handle: "", defaultCalendar: "c1", defaultReminder: "15", avatar: null, badges: { todayEvents: true, friendRequests: true } });
     // Trigger onboarding to run fresh
     setCustomColorRecents([]);
     setCustomColorFavorites([]);
@@ -3552,11 +3552,12 @@ export default function App({ userId, profile }) {
           const todayHasEvents = todayEvents.length > 0;
           const hasConflicts = getConflicts(todayEvents).size > 0;
           const shiftOverrideCount = shiftOverrides.size;
+          const hasFriendRequests = friends.some(f => f.status === "pending_received");
           // In split mode, calendar is the right panel — so we drop it from the nav
           const navItems = [
             { id:"home", label:"Home", icon:Icon.home, dot: hasConflicts ? "#ef4444" : null },
             ...(!isSplit ? [{ id:"calendar", label:"Calendar", icon:Icon.calendar, dot: (todayHasEvents && userProfile.badges?.todayEvents !== false) ? "var(--accent2)" : null }] : []),
-            ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups }] : []),
+            ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups, dot: (hasFriendRequests && userProfile.badges?.friendRequests !== false) ? "#ef4444" : null }] : []),
             { id:"shifts", label:"Shifts", icon:Icon.shifts, dot: shiftOverrideCount > 0 ? "#f59e0b" : null },
             { id:"settings", label:"Settings", icon:Icon.settings },
           ];
@@ -5808,6 +5809,7 @@ export default function App({ userId, profile }) {
                 Choose which badges appear on the app.
               </div>
               {[
+                { k:"friendRequests", l:"Friend requests", d:"Small red dot on Groups when someone wants to connect" },
                 { k:"todayEvents",    l:"Today's events",  d:"Small dot on Calendar if you have events today" },
               ].map(b => (
                 <div key={b.k} style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
@@ -6206,10 +6208,11 @@ export default function App({ userId, profile }) {
             const todayHasEvents = todayEvents.length > 0;
             const hasConflicts = getConflicts(todayEvents).size > 0;
             const shiftOverrideCount = shiftOverrides.size;
+            const hasFriendRequests = friends.some(f => f.status === "pending_received");
             return [
               { id:"home", label:"Home", icon:Icon.home, dot: hasConflicts ? "#ef4444" : null },
               { id:"calendar", label:"Calendar", icon:Icon.calendar, dot: (todayHasEvents && userProfile.badges?.todayEvents !== false) ? "var(--accent2)" : null },
-              ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups }] : []),
+              ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups, dot: (hasFriendRequests && userProfile.badges?.friendRequests !== false) ? "#ef4444" : null }] : []),
               { id:"shifts", label:"Shifts", icon:Icon.shifts, dot: shiftOverrideCount > 0 ? "#f59e0b" : null },
               { id:"settings", label:"Settings", icon:Icon.settings },
             ].map(n => (
