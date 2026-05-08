@@ -9501,7 +9501,7 @@ function ShiftSheet({ existing, groups=[], friends=[], customColors, onSave, onD
           {type==="monthly"&&<div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:8, lineHeight:1.5 }}>Tap days on the calendar each month to mark your work days. No repeating shift — you fill it in when you get your schedule.</div>}
         </div>
         <div className="form-group">
-          <label className="form-label">Colour</label>
+          <label className="form-label">Color</label>
           <ColorPicker value={color} onChange={setColor}
             recents={customColors?.recents||[]} favorites={customColors?.favorites||[]}
             onRecentsChange={customColors?.setRecents} onFavoritesChange={customColors?.setFavorites} />
