@@ -8995,7 +8995,7 @@ function MajorEventDetailSheet({ me, groups=[], friends=[], onEdit, onDelete, on
                 )}
                 {onDuplicate && (
                   <button className="btn btn-secondary" style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }} onClick={() => onDuplicate(me)}>
-                    <span style={{ display:"flex", width:13, height:13 }}>{Icon.copy}</span> Copy
+                    <span style={{ display:"flex", width:13, height:13 }}>{Icon.copy}</span> Duplicate
                   </button>
                 )}
                 {me._sharePath === 'own' && (
