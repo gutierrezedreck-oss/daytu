@@ -2183,7 +2183,7 @@ export default function App({ userId, profile }) {
   // the real UUID, so subsequent member-add operations have a valid
   // group_id to FK against. Rare-but-possible double-click footgun
   // (two RPCs in flight) is accepted; mitigations are UI polish.
-  const addGroup = async (g) => {
+  const addGroup = async (g, members = []) => {
     if (!userId) return;
     const { groupId, error } = await createGroup({ name: g.name, color: g.color });
     if (error) {
@@ -2203,6 +2203,25 @@ export default function App({ userId, profile }) {
     }]);
     closeSheet();
     showToast("Group created");
+    // Privacy + member writes ride as parallel follow-ups. Group stays
+    // created on partial failure; user can reopen Edit to retry.
+    const followUps = [];
+    if (g.memberListHidden) followUps.push(updateGroupRow(groupId, { member_list_hidden: true }));
+    for (const m of members) followUps.push(addMember(groupId, m.userId, m.role));
+    if (!followUps.length) return;
+    const results = await Promise.allSettled(followUps);
+    const failed = results.find(r => r.status === 'rejected' || r.value?.error);
+    if (!failed) {
+      if (members.length) {
+        setGroupMembers(prev => [...prev, ...members.map(m => ({ ...m, groupId }))]);
+      }
+      if (g.memberListHidden) {
+        setGroups(prev => prev.map(x => x.id === groupId ? { ...x, memberListHidden: true } : x));
+      }
+      return;
+    }
+    console.warn("[groups] follow-up failures", results);
+    showToast("Group created — some settings didn't apply", "err");
   };
   const updateGroup = (g, members) => {
     if (!userId) return;
@@ -8499,6 +8518,12 @@ function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole, 
   const canAddAnyRole = isOwner;                     // owner can stage 'member' or 'editor'
   const canAddMemberRole = isOwner || isEditor;      // editor restricted to 'member' (RLS-enforced)
 
+  // Owner row: in edit mode, comes from the loaded group; in create mode,
+  // synthesized from the viewer's profile (creator is always the owner).
+  const ownerDisplay = isEdit
+    ? { id: existing.owner, name: existing.ownerName, handle: existing.ownerHandle, avatar: existing.ownerAvatar }
+    : { id: userId,         name: userProfile?.name,  handle: userProfile?.handle,  avatar: userProfile?.avatar };
+
   const [name, setName] = useState(existing?.name ?? "");
   const [color, setColor] = useState(existing?.color ?? "#6366f1");
   const [memberListHidden, setMemberListHidden] = useState(!!existing?.memberListHidden);
@@ -8593,136 +8618,132 @@ function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole, 
           </div>
         </div>
 
-        {isEdit && (
-          <>
-            <div className="form-group">
-              <label className="form-label">Members</label>
+        <div className="form-group">
+          <label className="form-label">Members</label>
 
-              {existing.owner && (
-                <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
-                  <MemberAvatar url={existing.ownerAvatar} name={existing.ownerName} />
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                      {existing.ownerName || "Unknown"}
-                      {existing.owner === userId && (
-                        <span style={{ fontSize:"0.6875rem", color:"var(--muted)", marginLeft:6 }}>· You</span>
-                      )}
-                    </div>
-                    {existing.ownerHandle && (
-                      <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{existing.ownerHandle}</div>
-                    )}
-                  </div>
-                  <div style={{
-                    background:"rgba(124,106,247,0.2)", color:"var(--accent2)",
-                    border:"1px solid rgba(124,106,247,0.3)", borderRadius:20,
-                    padding:"3px 10px", fontSize:"0.75rem", fontWeight:600,
-                  }}>Owner</div>
+          {ownerDisplay.id && (
+            <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
+              <MemberAvatar url={ownerDisplay.avatar} name={ownerDisplay.name} />
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                  {ownerDisplay.name || "Unknown"}
+                  {ownerDisplay.id === userId && (
+                    <span style={{ fontSize:"0.6875rem", color:"var(--muted)", marginLeft:6 }}>· You</span>
+                  )}
                 </div>
-              )}
-
-              {members.map((m, idx) => {
-                const canRemove = isOwner || (isEditor && m.role === 'member');
-                const canChange = isOwner;
-                return (
-                  <div key={m.userId} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
-                    <MemberAvatar url={m.avatar} name={m.name} />
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                        {m.name}
-                      </div>
-                      {m.handle && (
-                        <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{m.handle}</div>
-                      )}
-                    </div>
-                    {canChange ? (
-                      <select value={m.role}
-                        onChange={e => setMembers(prev => prev.map((x, i) => i === idx ? { ...x, role: e.target.value } : x))}
-                        style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text)", padding:"4px 8px", fontSize:"0.75rem" }}>
-                        <option value="member">Member</option>
-                        <option value="editor">Editor</option>
-                      </select>
-                    ) : (
-                      <div style={{ background:"var(--surface2)", color:"var(--muted)", borderRadius:20, padding:"3px 10px", fontSize:"0.75rem", fontWeight:500, textTransform:"capitalize" }}>
-                        {m.role}
-                      </div>
-                    )}
-                    {canRemove && (
-                      <button onClick={() => setMembers(prev => prev.filter((_, i) => i !== idx))}
-                        style={{ background:"none", border:"none", color:"#f87171", cursor:"pointer", display:"flex", width:16, height:16, padding:0 }}>
-                        <span style={{ display:"flex", width:16, height:16 }}>{Icon.x}</span>
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
+                {ownerDisplay.handle && (
+                  <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{ownerDisplay.handle}</div>
+                )}
+              </div>
+              <div style={{
+                background:"rgba(124,106,247,0.2)", color:"var(--accent2)",
+                border:"1px solid rgba(124,106,247,0.3)", borderRadius:20,
+                padding:"3px 10px", fontSize:"0.75rem", fontWeight:600,
+              }}>Owner</div>
             </div>
+          )}
 
-            {canAddMemberRole && (
-              <div className="form-group">
-                <label className="form-label">Add member</label>
-                <input className="form-input" placeholder="@handle"
-                  value={handleQuery}
-                  onChange={e => setHandleQuery(e.target.value)}
-                  autoCapitalize="none" autoCorrect="off" />
-                {handleResult.state === 'searching' && (
-                  <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>Searching…</div>
-                )}
-                {handleResult.state === 'not-found' && (
-                  <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>
-                    No one with @{handleQuery.replace(/^@+/, '')}
+          {members.map((m, idx) => {
+            const canRemove = isOwner || (isEditor && m.role === 'member');
+            const canChange = isOwner;
+            return (
+              <div key={m.userId} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
+                <MemberAvatar url={m.avatar} name={m.name} />
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {m.name}
+                  </div>
+                  {m.handle && (
+                    <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{m.handle}</div>
+                  )}
+                </div>
+                {canChange ? (
+                  <select value={m.role}
+                    onChange={e => setMembers(prev => prev.map((x, i) => i === idx ? { ...x, role: e.target.value } : x))}
+                    style={{ background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text)", padding:"4px 8px", fontSize:"0.75rem" }}>
+                    <option value="member">Member</option>
+                    <option value="editor">Editor</option>
+                  </select>
+                ) : (
+                  <div style={{ background:"var(--surface2)", color:"var(--muted)", borderRadius:20, padding:"3px 10px", fontSize:"0.75rem", fontWeight:500, textTransform:"capitalize" }}>
+                    {m.role}
                   </div>
                 )}
-                {handleResult.state === 'yourself' && (
-                  <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>That's you.</div>
-                )}
-                {handleResult.state === 'already-member' && (
-                  <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>Already in this group.</div>
-                )}
-                {handleResult.state === 'error' && (
-                  <div style={{ fontSize:"0.75rem", color:"#f87171", marginTop:6 }}>Couldn't search — try again.</div>
-                )}
-                {handleResult.state === 'found' && (
-                  <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8, padding:"10px 12px", background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
-                    <MemberAvatar url={handleResult.user.avatar_url} name={handleResult.user.name} />
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                        {handleResult.user.name || "Unknown"}
-                      </div>
-                      {handleResult.user.handle && (
-                        <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{handleResult.user.handle}</div>
-                      )}
-                    </div>
-                    {canAddAnyRole && (
-                      <select value={addRole} onChange={e => setAddRole(e.target.value)}
-                        style={{ background:"var(--surface3)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text)", padding:"4px 8px", fontSize:"0.75rem" }}>
-                        <option value="member">Member</option>
-                        <option value="editor">Editor</option>
-                      </select>
-                    )}
-                    <button className="btn btn-secondary" onClick={stageAdd}
-                      style={{ padding:"6px 12px", fontSize:"0.75rem" }}>Add</button>
-                  </div>
+                {canRemove && (
+                  <button onClick={() => setMembers(prev => prev.filter((_, i) => i !== idx))}
+                    style={{ background:"none", border:"none", color:"#f87171", cursor:"pointer", display:"flex", width:16, height:16, padding:0 }}>
+                    <span style={{ display:"flex", width:16, height:16 }}>{Icon.x}</span>
+                  </button>
                 )}
               </div>
-            )}
+            );
+          })}
+        </div>
 
-            {canEditMeta && (
-              <div className="form-group">
-                <label className="form-label">Privacy</label>
-                <label style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"10px 12px", background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)", cursor:"pointer" }}>
-                  <input type="checkbox" checked={memberListHidden}
-                    onChange={e => setMemberListHidden(e.target.checked)}
-                    style={{ marginTop:2 }} />
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:"0.875rem", color:"var(--text)", marginBottom:2 }}>Hide member list</div>
-                    <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>
-                      Only you and editors can see who's in this group. Members see only themselves.
-                    </div>
-                  </div>
-                </label>
+        {canAddMemberRole && (
+          <div className="form-group">
+            <label className="form-label">Add member</label>
+            <input className="form-input" placeholder="@handle"
+              value={handleQuery}
+              onChange={e => setHandleQuery(e.target.value)}
+              autoCapitalize="none" autoCorrect="off" />
+            {handleResult.state === 'searching' && (
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>Searching…</div>
+            )}
+            {handleResult.state === 'not-found' && (
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>
+                No one with @{handleQuery.replace(/^@+/, '')}
               </div>
             )}
-          </>
+            {handleResult.state === 'yourself' && (
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>That's you.</div>
+            )}
+            {handleResult.state === 'already-member' && (
+              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>Already in this group.</div>
+            )}
+            {handleResult.state === 'error' && (
+              <div style={{ fontSize:"0.75rem", color:"#f87171", marginTop:6 }}>Couldn't search — try again.</div>
+            )}
+            {handleResult.state === 'found' && (
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8, padding:"10px 12px", background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
+                <MemberAvatar url={handleResult.user.avatar_url} name={handleResult.user.name} />
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {handleResult.user.name || "Unknown"}
+                  </div>
+                  {handleResult.user.handle && (
+                    <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{handleResult.user.handle}</div>
+                  )}
+                </div>
+                {canAddAnyRole && (
+                  <select value={addRole} onChange={e => setAddRole(e.target.value)}
+                    style={{ background:"var(--surface3)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text)", padding:"4px 8px", fontSize:"0.75rem" }}>
+                    <option value="member">Member</option>
+                    <option value="editor">Editor</option>
+                  </select>
+                )}
+                <button className="btn btn-secondary" onClick={stageAdd}
+                  style={{ padding:"6px 12px", fontSize:"0.75rem" }}>Add</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {canEditMeta && (
+          <div className="form-group">
+            <label className="form-label">Privacy</label>
+            <label style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"10px 12px", background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)", cursor:"pointer" }}>
+              <input type="checkbox" checked={memberListHidden}
+                onChange={e => setMemberListHidden(e.target.checked)}
+                style={{ marginTop:2 }} />
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:"0.875rem", color:"var(--text)", marginBottom:2 }}>Hide member list</div>
+                <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>
+                  Only you and editors can see who's in this group. Members see only themselves.
+                </div>
+              </div>
+            </label>
+          </div>
         )}
 
         {isEdit && isOwner && (
