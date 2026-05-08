@@ -1170,7 +1170,7 @@ export default function App({ userId, profile }) {
   const [userProfile, setUserProfile] = useState(() => {
     const loaded = _ls?.userProfile ?? { name: "Alex Morgan", email: "", handle: "", defaultCalendar: "c1", defaultReminder: "15", avatar: null };
     // Ensure badges sub-object exists for users with older localStorage
-    if (!loaded.badges) loaded.badges = { friendRequests: true, feed: true, todayEvents: true };
+    if (!loaded.badges) loaded.badges = { todayEvents: true };
     return loaded;
   });
   // Onboarding: true the very first time the app runs. Once finished it's stored as false permanently.
@@ -1417,7 +1417,7 @@ export default function App({ userId, profile }) {
     setShiftOverrides(new Set());
     setHomeOrder(["shiftstatus","status","important","pinned","nextup","major","freetime"]);
     setThemeMode("auto");
-    setUserProfile({ name: "Alex Morgan", email: "", handle: "", defaultCalendar: "c1", defaultReminder: "15", avatar: null, badges: { friendRequests: true, feed: true, todayEvents: true } });
+    setUserProfile({ name: "Alex Morgan", email: "", handle: "", defaultCalendar: "c1", defaultReminder: "15", avatar: null, badges: { todayEvents: true } });
     // Trigger onboarding to run fresh
     setCustomColorRecents([]);
     setCustomColorFavorites([]);
@@ -3552,16 +3552,11 @@ export default function App({ userId, profile }) {
           const todayHasEvents = todayEvents.length > 0;
           const hasConflicts = getConflicts(todayEvents).size > 0;
           const shiftOverrideCount = shiftOverrides.size;
-          const friendRequestsRaw = friends.filter(f => f.status === "pending_received").length;
-          const feedUnseenRaw = activityFeed.filter(a => a.userId !== "u1" && a.ts > feedSeenAt).length;
-          const friendRequests = userProfile.badges?.friendRequests !== false ? friendRequestsRaw : 0;
-          const feedUnseen = userProfile.badges?.feed !== false ? feedUnseenRaw : 0;
-          const groupsBadge = friendRequests + feedUnseen;
           // In split mode, calendar is the right panel — so we drop it from the nav
           const navItems = [
             { id:"home", label:"Home", icon:Icon.home, dot: hasConflicts ? "#ef4444" : null },
             ...(!isSplit ? [{ id:"calendar", label:"Calendar", icon:Icon.calendar, dot: (todayHasEvents && userProfile.badges?.todayEvents !== false) ? "var(--accent2)" : null }] : []),
-            ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups, badge: groupsBadge }] : []),
+            ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups }] : []),
             { id:"shifts", label:"Shifts", icon:Icon.shifts, dot: shiftOverrideCount > 0 ? "#f59e0b" : null },
             { id:"settings", label:"Settings", icon:Icon.settings },
           ];
@@ -3579,8 +3574,7 @@ export default function App({ userId, profile }) {
                     onClick={() => { setTab(n.id); setFabOpen(false); }}>
                     <div style={{ position:"relative", display:"inline-flex" }}>
                       {n.icon}
-                      {n.badge > 0 && <div style={{ position:"absolute", top:-5, right:-5, minWidth:14, height:14, borderRadius:7, background:"#ef4444", fontSize:"0.6875rem", fontWeight:700, color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", padding:"0 2px" }}>{n.badge}</div>}
-                      {!n.badge && n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:7, height:7, borderRadius:"50%", background:n.dot, border:"1.5px solid var(--surface)" }} />}
+                      {n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:7, height:7, borderRadius:"50%", background:n.dot, border:"1.5px solid var(--surface)" }} />}
                     </div>
                   </button>
                 ))}
@@ -3607,8 +3601,7 @@ export default function App({ userId, profile }) {
                   onClick={() => { setTab(n.id); setFabOpen(false); }}>
                   <div style={{ position:"relative", display:"inline-flex" }}>
                     {n.icon}
-                    {n.badge > 0 && <div style={{ position:"absolute", top:-5, right:-5, minWidth:14, height:14, borderRadius:7, background:"#ef4444", fontSize:"0.6875rem", fontWeight:700, color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", padding:"0 2px" }}>{n.badge}</div>}
-                    {!n.badge && n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:7, height:7, borderRadius:"50%", background:n.dot, border:"1.5px solid var(--surface)" }} />}
+                    {n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:7, height:7, borderRadius:"50%", background:n.dot, border:"1.5px solid var(--surface)" }} />}
                   </div>
                   <span>{n.label}</span>
                 </button>
@@ -5183,9 +5176,7 @@ export default function App({ userId, profile }) {
         )}
 
         {/* GROUPS TAB */}
-        {tab === "groups" && (() => {
-          const friendRequests = friends.filter(f => f.status === "pending_received").length;
-          return (
+        {tab === "groups" && (
           <div className="screen" ref={setScreenRef}>
             <div className="header">
               <h1>{groupsSubTab === "groups" ? "Groups" : groupsSubTab === "feed" ? "Activity" : groupsSubTab === "friends" ? "Friends" : "Add Friends"}</h1>
@@ -5194,9 +5185,9 @@ export default function App({ userId, profile }) {
             <div className="sub-tab-row">
               {[
                 { v:"groups",  l:"Groups" },
-                ...(FEATURES.activityFeed ? [{ v:"feed", l:"Feed", badge: userProfile.badges?.feed !== false ? activityFeed.filter(a => a.userId !== "u1" && a.ts > feedSeenAt).length : 0 }] : []),
+                ...(FEATURES.activityFeed ? [{ v:"feed", l:"Feed" }] : []),
                 ...(FEATURES.friends ? [
-                  { v:"friends", l:"Friends", badge: userProfile.badges?.friendRequests !== false ? friendRequests : 0 },
+                  { v:"friends", l:"Friends" },
                   { v:"add",     l:"Add" },
                 ] : []),
               ].map(t => (
@@ -5204,14 +5195,6 @@ export default function App({ userId, profile }) {
                   onClick={() => { setGroupsSubTab(t.v); if (t.v === "feed") setFeedSeenAt(new Date()); }}
                   style={{ position:"relative" }}>
                   {t.l}
-                  {t.badge > 0 && (
-                    <div style={{ position:"absolute", top:2, right:4, minWidth:14, height:14,
-                      borderRadius:7, background:"#ef4444", fontSize:"0.6875rem", fontWeight:800,
-                      color:"#fff", display:"flex", alignItems:"center", justifyContent:"center",
-                      padding:"0 3px", lineHeight:1 }}>
-                      {t.badge > 9 ? "9+" : t.badge}
-                    </div>
-                  )}
                 </button>
               ))}
             </div>
@@ -5495,8 +5478,7 @@ export default function App({ userId, profile }) {
               );
             })()}
           </div>
-          );
-        })()}
+        )}
 
         {/* PATTERNS TAB */}
         {tab === "shifts" && (
@@ -5826,10 +5808,8 @@ export default function App({ userId, profile }) {
                 Choose which badges appear on the app.
               </div>
               {[
-                FEATURES.friends     && { k:"friendRequests", l:"Friend requests", d:"Red badge when someone wants to connect" },
-                FEATURES.activityFeed && { k:"feed",           l:"Group activity",  d:"Red badge for new events in your groups" },
                 { k:"todayEvents",    l:"Today's events",  d:"Small dot on Calendar if you have events today" },
-              ].filter(Boolean).map(b => (
+              ].map(b => (
                 <div key={b.k} style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
                   padding:"10px 0", borderBottom:"1px solid var(--border)" }}>
                   <div style={{ flex:1, minWidth:0 }}>
@@ -6226,24 +6206,17 @@ export default function App({ userId, profile }) {
             const todayHasEvents = todayEvents.length > 0;
             const hasConflicts = getConflicts(todayEvents).size > 0;
             const shiftOverrideCount = shiftOverrides.size;
-            const friendRequestsRaw = friends.filter(f => f.status === "pending_received").length;
-            const feedUnseenRaw = activityFeed.filter(a => a.userId !== "u1" && a.ts > feedSeenAt).length;
-            // Respect user's badge preferences
-            const friendRequests = userProfile.badges?.friendRequests !== false ? friendRequestsRaw : 0;
-            const feedUnseen = userProfile.badges?.feed !== false ? feedUnseenRaw : 0;
-            const groupsBadge = friendRequests + feedUnseen;
             return [
               { id:"home", label:"Home", icon:Icon.home, dot: hasConflicts ? "#ef4444" : null },
               { id:"calendar", label:"Calendar", icon:Icon.calendar, dot: (todayHasEvents && userProfile.badges?.todayEvents !== false) ? "var(--accent2)" : null },
-              ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups, badge: groupsBadge }] : []),
+              ...(FEATURES.groups ? [{ id:"groups", label:"Groups", icon:Icon.groups }] : []),
               { id:"shifts", label:"Shifts", icon:Icon.shifts, dot: shiftOverrideCount > 0 ? "#f59e0b" : null },
               { id:"settings", label:"Settings", icon:Icon.settings },
             ].map(n => (
               <button key={n.id} ref={!(isDesktop || isSplit) ? setTourRef("nav-"+n.id) : undefined} className={"nav-btn "+(tab===n.id?"active":"")} onClick={() => { setTab(n.id); setFabOpen(false); }}>
                 <div style={{ position:"relative", display:"inline-flex" }}>
                   {n.icon}
-                  {n.badge > 0 && <div style={{ position:"absolute", top:-5, right:-5, minWidth:14, height:14, borderRadius:7, background:"#ef4444", fontSize:"0.6875rem", fontWeight:700, color:"#fff", display:"flex", alignItems:"center", justifyContent:"center", padding:"0 2px" }}>{n.badge}</div>}
-                  {!n.badge && n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:7, height:7, borderRadius:"50%", background:n.dot, border:"1.5px solid var(--bg)" }} />}
+                  {n.dot && <div style={{ position:"absolute", top:-2, right:-2, width:7, height:7, borderRadius:"50%", background:n.dot, border:"1.5px solid var(--bg)" }} />}
                 </div>
                 <span>{n.label}</span>
               </button>
