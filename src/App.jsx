@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback, useRef } from "react";
 import { signOut } from "./lib/auth.js";
+import { LS_KEY, clearLocalPrefs } from "./lib/localPrefs.js";
 import { formatShareLabel } from "./lib/shareLabel.js";
 import { supabase } from "./lib/supabase.js";
 import { loadEventsFromSupabase, migrateLocalEventsToSupabase, insertEvent, updateEventRow, deleteEventRow, deleteAllEventsForOwner, diffAndWriteShares } from "./lib/events.js";
@@ -630,7 +631,8 @@ function ImportantBadge({ size = 14, color = "#f59e0b", style }) {
 }
 
 // ── LOCALSTORAGE HELPERS ─────────────────────────────────
-const LS_KEY = "daytu_v1";
+// LS_KEY is imported from ./lib/localPrefs.js so AuthGate can share the
+// constant without circular imports.
 const SCHEMA_VERSION = 2;
 
 // Migrations: each key is the FROM version; the function returns data at FROM+1.
@@ -1429,7 +1431,7 @@ export default function App({ userId, profile }) {
       return;
     }
     // Clear localStorage — if the browser blocks it, we silently continue with in-memory reset
-    try { localStorage.removeItem(LS_KEY); } catch {}
+    clearLocalPrefs();
     // Reset all persisted state directly so we don't depend on a page reload
     setEvents([]);
     setCalendars(seed.calendars);
@@ -1949,6 +1951,11 @@ export default function App({ userId, profile }) {
       // this spread, every persist tick wipes any localStorage-only key.
       lsSave({
         ...(lsLoad() || {}),
+        // Stamp the userId this LS blob belongs to. AuthGate reads this on
+        // SIGNED_IN to detect a different user signing in on the same browser
+        // and purge the prior user's prefs. Placed AFTER the spread so a
+        // stale boundUserId pulled in from disk is overridden by the live one.
+        boundUserId: userId,
         calendars,
         groups,
         groupMembers,
@@ -1975,7 +1982,7 @@ export default function App({ userId, profile }) {
       });
     }, 300);
     return () => clearTimeout(saveHandle);
-  }, [calendars, groups, groupMembers, shifts, majorEvents, friends,
+  }, [userId, calendars, groups, groupMembers, shifts, majorEvents, friends,
       activityFeed, feedSeenAt, onboardingActive, onboardingCompletedAt,
       customColorRecents, customColorFavorites,
       pinnedEvents, dismissedImportantEvents, hiddenCalendars, hiddenGroups, holidayCountries, shiftOverrides,
@@ -5582,7 +5589,7 @@ export default function App({ userId, profile }) {
 
             {/* Sign out */}
             <button
-              onClick={() => signOut()}
+              onClick={async () => { await signOut(); window.location.reload(); }}
               className="btn btn-secondary"
               style={{ width:"100%", marginBottom:16, color:"#f87171", borderColor:"rgba(248,113,113,0.3)" }}
             >

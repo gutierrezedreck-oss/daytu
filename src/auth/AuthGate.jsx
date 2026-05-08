@@ -1,6 +1,7 @@
 import { cloneElement, useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { getSession, subscribeToAuth } from '../lib/auth.js';
+import { clearLocalPrefs, readBoundUserId } from '../lib/localPrefs.js';
 import SignIn from './SignIn.jsx';
 import Welcome from './Welcome.jsx';
 import ResetPassword from './ResetPassword.jsx';
@@ -190,6 +191,12 @@ export default function AuthGate({ children }) {
         return;
       }
       if (event === 'SIGNED_OUT' || !newSession) {
+        // Purge the prior user's localStorage prefs blob so a different user
+        // signing in on this browser doesn't inherit hidden groups, dismissed
+        // events, day notes, etc. Runs above the recovery-verify guard so
+        // every sign-out path — explicit button, account-delete, expired
+        // session — clears unconditionally.
+        clearLocalPrefs();
         // verifyOtp(recovery) hasn't resolved yet — INITIAL_SESSION fires
         // first with null. Hold in 'loading' instead of flipping to unauthed.
         if (recoveryVerifyInFlightRef.current && event === 'INITIAL_SESSION') {
@@ -205,6 +212,15 @@ export default function AuthGate({ children }) {
       }
       // INITIAL_SESSION (with session) or SIGNED_IN
       const userId = newSession.user.id;
+      // Defense-in-depth: a session-with-userId materialized without going
+      // through SIGNED_OUT first (magic-link sign-in on a previously-used
+      // browser, expired-session-then-fresh-login). If the LS blob was
+      // stamped with a different user, purge it before App mounts so it
+      // can't read the prior user's prefs into initial state.
+      const prevBoundUserId = readBoundUserId();
+      if (prevBoundUserId && prevBoundUserId !== userId) {
+        clearLocalPrefs();
+      }
       const dedupable = event === 'SIGNED_IN' || event === 'INITIAL_SESSION';
       if (
         dedupable &&
