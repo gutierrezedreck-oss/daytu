@@ -1096,40 +1096,6 @@ export default function App({ userId, profile }) {
     return () => Object.values(notifTimers.current).forEach(clearTimeout);
   }, [events, notifPermission]);
 
-  // Schedule a one-off notification at the start of a shift that has a time
-  // override for today, so the user gets a heads-up of the adjusted hours.
-  React.useEffect(() => {
-    if (notifPermission !== "granted") return;
-    Object.values(shiftNotifTimers.current).forEach(clearTimeout);
-    shiftNotifTimers.current = {};
-    const today = new Date();
-    const ymdKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
-    shifts.forEach(p => {
-      const key = p.id+":"+ymdKey;
-      if (!shiftTimeOverrides[key]) return;
-      const isNatural = p.type === "rotation" ? getRotationStatus(p, today) === "work"
-        : p.type === "monthly" ? isMonthlyWorkDay(p, today)
-        : (p.config?.days ?? []).includes(today.getDay());
-      const isHidden = shiftOverrides.has(key);
-      const isExtra = shiftOverrides.has("extra:" + key);
-      const isWorkToday = (isNatural && !isHidden) || (!isNatural && isExtra);
-      if (!isWorkToday) return;
-      const eff = shiftTimeOverrides[key];
-      const [sh, sm] = eff.start.split(":").map(Number);
-      const fireAt = new Date(today); fireAt.setHours(sh, sm, 0, 0);
-      const delay = fireAt.getTime() - Date.now();
-      if (delay < 0) return;
-      shiftNotifTimers.current[p.id] = setTimeout(() => {
-        new Notification(p.name + " starts now", {
-          body: `Today's shift: ${fmtClock(eff.start)} – ${fmtClock(eff.end)}. You're off at ${fmtClock(eff.end)}.`,
-          icon: "/favicon.ico",
-          tag: "shift-override-"+p.id+"-"+ymdKey,
-        });
-      }, delay);
-    });
-    return () => Object.values(shiftNotifTimers.current).forEach(clearTimeout);
-  }, [shifts, shiftOverrides, shiftTimeOverrides, notifPermission]);
-
   // Keep darkMode in sync with themeMode on every change:
   //   "dark"  → always dark
   //   "light" → always light
@@ -2709,6 +2675,50 @@ export default function App({ userId, profile }) {
     if (me._shareGroupId && hiddenGroups.has(me._shareGroupId)) return false;
     return true;
   }), [majorEvents, hiddenGroups]);
+  const visibleShifts = useMemo(() => shifts.filter(s => {
+    // Same two-branch rule as visibleEvents above; see the TODO there for the
+    // multi-group-share edge case.
+    if (s.groupIds && s.groupIds.length > 0 && s.groupIds.every(id => hiddenGroups.has(id))) return false;
+    if (s._shareGroupId && hiddenGroups.has(s._shareGroupId)) return false;
+    return true;
+  }), [shifts, hiddenGroups]);
+
+  // Schedule a one-off notification at the start of a shift that has a time
+  // override for today, so the user gets a heads-up of the adjusted hours.
+  // Lives below visibleShifts so the deps array can reference the filtered
+  // list — hidden-group shifts shouldn't fire notifications.
+  React.useEffect(() => {
+    if (notifPermission !== "granted") return;
+    Object.values(shiftNotifTimers.current).forEach(clearTimeout);
+    shiftNotifTimers.current = {};
+    const today = new Date();
+    const ymdKey = today.getFullYear()+"-"+today.getMonth()+"-"+today.getDate();
+    visibleShifts.forEach(p => {
+      const key = p.id+":"+ymdKey;
+      if (!shiftTimeOverrides[key]) return;
+      const isNatural = p.type === "rotation" ? getRotationStatus(p, today) === "work"
+        : p.type === "monthly" ? isMonthlyWorkDay(p, today)
+        : (p.config?.days ?? []).includes(today.getDay());
+      const isHidden = shiftOverrides.has(key);
+      const isExtra = shiftOverrides.has("extra:" + key);
+      const isWorkToday = (isNatural && !isHidden) || (!isNatural && isExtra);
+      if (!isWorkToday) return;
+      const eff = shiftTimeOverrides[key];
+      const [sh, sm] = eff.start.split(":").map(Number);
+      const fireAt = new Date(today); fireAt.setHours(sh, sm, 0, 0);
+      const delay = fireAt.getTime() - Date.now();
+      if (delay < 0) return;
+      shiftNotifTimers.current[p.id] = setTimeout(() => {
+        new Notification(p.name + " starts now", {
+          body: `Today's shift: ${fmtClock(eff.start)} – ${fmtClock(eff.end)}. You're off at ${fmtClock(eff.end)}.`,
+          icon: "/favicon.ico",
+          tag: "shift-override-"+p.id+"-"+ymdKey,
+        });
+      }, delay);
+    });
+    return () => Object.values(shiftNotifTimers.current).forEach(clearTimeout);
+  }, [visibleShifts, shiftOverrides, shiftTimeOverrides, notifPermission]);
+
   const todayEvents = useMemo(() => {
     const from = new Date(TODAY); from.setHours(0,0,0,0);
     const to = new Date(TODAY); to.setHours(23,59,59,999);
@@ -2953,8 +2963,8 @@ export default function App({ userId, profile }) {
       .filter(ev => !ev.allDay)
       .map(ev => [Math.max(ev.start.getTime(), fromMs),
                   Math.min(ev.end.getTime(), winEndMs)]);
-    for (var pi = 0; pi < shifts.length; pi++) {
-      const p = shifts[pi];
+    for (var pi = 0; pi < visibleShifts.length; pi++) {
+      const p = visibleShifts[pi];
       // Use per-day override when present so half-days etc. reflect correctly.
       var st = getEffectiveShiftTime(p, dayStart);
       if (!st?.enabled) continue;
@@ -2984,7 +2994,7 @@ export default function App({ userId, profile }) {
       if (j<merged.length) cursor=Math.max(cursor,merged[j][1]);
     }
     return gaps;
-  }, [events, shifts, shiftOverrides]);
+  }, [events, visibleShifts, shiftOverrides]);
 
   // Parse free time query and return a plain-language answer
   const freeTimeAnswer = useMemo(() => {
@@ -4366,7 +4376,7 @@ export default function App({ userId, profile }) {
               }
 
               if (id === "shiftstatus") {
-                if (!shifts || shifts.length === 0) return null;
+                if (!visibleShifts || visibleShifts.length === 0) return null;
                 const todayY = TODAY.getFullYear(), todayM = TODAY.getMonth(), todayD = TODAY.getDate();
                 const oKeyOf = (pid) => pid + ":" + todayY + "-" + todayM + "-" + todayD;
                 const yesterday = new Date(TODAY); yesterday.setDate(yesterday.getDate() - 1);
@@ -4381,7 +4391,7 @@ export default function App({ userId, profile }) {
                 // shift id — otherwise B→C→B looks like one unbroken block when
                 // it's really three separate assignments back-to-back.
                 const findShiftStartingAt = (dayStart, startMs, shiftId) => {
-                  for (const p of shifts) {
+                  for (const p of visibleShifts) {
                     if (p.id !== shiftId) continue;
                     const oKey = p.id + ":" + dayStart.getFullYear() + "-" + dayStart.getMonth() + "-" + dayStart.getDate();
                     const isNat = p.type === "rotation" ? getRotationStatus(p, dayStart) === "work"
@@ -4428,7 +4438,7 @@ export default function App({ userId, profile }) {
                   if (diffDays === 1) return timeStr + " tomorrow";
                   return timeStr + " " + (d.getMonth() + 1) + "/" + d.getDate();
                 };
-                const rows = shifts.map(p => {
+                const rows = visibleShifts.map(p => {
                   const isNatural = p.type === "rotation" ? getRotationStatus(p, TODAY) === "work"
                     : p.type === "monthly" ? isMonthlyWorkDay(p, TODAY)
                     : (p.config?.days ?? []).includes(TODAY.getDay());
@@ -4778,7 +4788,7 @@ export default function App({ userId, profile }) {
             {calView === "month" && (
               <>
                 {/* Shift filter — scrollable single row */}
-                {shifts.length > 0 && (
+                {visibleShifts.length > 0 && (
                   <div style={{ display:"flex", gap:5, overflowX:"auto", marginBottom:12, paddingBottom:2, WebkitOverflowScrolling:"touch", scrollbarWidth:"none" }}>
                     <button onClick={() => setCalShiftFilter(null)}
                       style={{ flexShrink:0, padding:"5px 12px", borderRadius:14, fontSize:"0.6875rem", fontWeight:700,
@@ -4786,7 +4796,7 @@ export default function App({ userId, profile }) {
                         background: calShiftFilter===null ? "var(--accent)" : "var(--surface2)",
                         color: calShiftFilter===null ? "white" : "var(--muted)",
                         cursor:"pointer", fontFamily:"var(--font)" }}>All</button>
-                    {shifts.map(p => (
+                    {visibleShifts.map(p => (
                       <button key={p.id} onClick={() => setCalShiftFilter(calShiftFilter===p.id ? null : p.id)}
                         style={{ flexShrink:0, display:"flex", alignItems:"center", gap:5, padding:"5px 12px", borderRadius:14,
                           border:"1.5px solid " + (calShiftFilter===p.id ? p.color : "var(--border)"),
@@ -4802,7 +4812,7 @@ export default function App({ userId, profile }) {
 
                 {/* Calendar grid */}
                 <MonthGrid year={calMonth.year} month={calMonth.month} events={visibleEvents} calendars={calendars}
-                  shifts={calShiftFilter ? shifts.filter(p => p.id === calShiftFilter) : shifts}
+                  shifts={calShiftFilter ? visibleShifts.filter(p => p.id === calShiftFilter) : visibleShifts}
                   majorEvents={calShiftFilter ? [] : visibleMajorEvents}
                   shiftOverrides={shiftOverrides}
                   onLongPress={(date) => setDayPopup({ date })}
@@ -4823,10 +4833,10 @@ export default function App({ userId, profile }) {
                     const end   = new Date(ley,lem-1,led); end.setHours(23,59,59,999);
                     return start <= monthEnd && end >= monthStart;
                   });
-                  if (shifts.length === 0 && visibleMajor.length === 0) return null;
+                  if (visibleShifts.length === 0 && visibleMajor.length === 0) return null;
                   return (
                     <div style={{ display:"flex", flexWrap:"wrap", gap:10, marginTop:10, paddingTop:10, borderTop:"1px solid var(--border)" }}>
-                      {shifts.map(p => (
+                      {visibleShifts.map(p => (
                         <div key={p.id} style={{ display:"flex", alignItems:"center", gap:5, fontSize:"0.6875rem", color:"var(--muted)" }}>
                           <svg width="14" height="14" viewBox="0 0 100 100" style={{flexShrink:0}}><path d="M 65 4 L 78 4 A 18 18 0 0 1 96 22 L 96 78 A 18 18 0 0 1 78 96 L 22 96 A 18 18 0 0 1 4 78 L 4 22 A 18 18 0 0 1 22 4 L 35 4" fill="none" stroke={p.color||"#6366f1"} strokeWidth="8" strokeLinecap="round" /></svg>
                           {p.name}
@@ -4864,7 +4874,7 @@ export default function App({ userId, profile }) {
                 </div>
                 {weekLayout === "columns" ? (
                   <WeekViewColumns weekDays={weekDays} events={visibleEvents} calendars={calendars}
-                    shifts={shifts} shiftOverrides={shiftOverrides}
+                    shifts={visibleShifts} shiftOverrides={shiftOverrides}
                     majorEvents={visibleMajorEvents} holidays={holidays} holidayCountries={holidayCountries}
                     selectedDate={selectedDate}
                     onSelect={d => setSelectedDate(d)}
@@ -4888,13 +4898,13 @@ export default function App({ userId, profile }) {
             )}
 
             {dayPopup && (() => {
-              const activeForDay = shifts.filter(p => {
+              const activeForDay = visibleShifts.filter(p => {
                 if (p.type === "rotation") return getRotationStatus(p, dayPopup.date) === "work";
                 if (p.type === "weekly") return (p.config.days ?? []).includes(dayPopup.date.getDay());
                 if (p.type === "monthly") return isMonthlyWorkDay(p, dayPopup.date);
                 return false;
               });
-              const inactiveForDay = shifts.filter(p => !activeForDay.includes(p));
+              const inactiveForDay = visibleShifts.filter(p => !activeForDay.includes(p));
               return (
                 <div className="sheet-overlay" onClick={() => { setDayPopup(null); setEditingShiftTime(null); }}>
                   <div className="sheet" onClick={e => e.stopPropagation()}>
