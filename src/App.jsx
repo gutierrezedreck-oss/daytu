@@ -1876,6 +1876,26 @@ export default function App({ userId, profile }) {
 
   React.useEffect(() => { syncFriendsFromSupabase(); }, [syncFriendsFromSupabase]);
 
+  // Refetch friends when the user opens the Groups tab. Catches new
+  // pending requests sent while the user was on another tab in the
+  // app — without this, friends[] is only loaded once at mount and
+  // a new request from another user is invisible until reload.
+  React.useEffect(() => {
+    if (tab === 'groups') syncFriendsFromSupabase();
+  }, [tab, syncFriendsFromSupabase]);
+
+  // Refetch friends when the browser tab regains visibility. Covers
+  // the "I came back to Daytu after a while" case — same gap as above
+  // but triggered by leaving and returning to the app entirely.
+  // visibilitychange is more reliable than focus/blur on mobile.
+  React.useEffect(() => {
+    const handler = () => {
+      if (document.visibilityState === 'visible') syncFriendsFromSupabase();
+    };
+    document.addEventListener('visibilitychange', handler);
+    return () => document.removeEventListener('visibilitychange', handler);
+  }, [syncFriendsFromSupabase]);
+
   // Add sub-tab handle search. 250ms debounce + 3-char minimum mirrors
   // NewGroupSheet's pattern. Effect emits only "did we resolve a profile";
   // the relationship branch (yourself / already-friends / already-pending-* /
