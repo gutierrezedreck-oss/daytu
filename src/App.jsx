@@ -925,10 +925,15 @@ export default function App({ userId, profile }) {
   // Load persisted data once — fallback to seed data
   const _ls = React.useMemo(() => lsLoad(), []);
   // Close fab menu on tab switch — handled inline in nav buttons
-  // Initial state comes from localStorage so unmigrated users see a populated
-  // calendar before the Supabase load resolves. seed.events is no longer used
-  // as a fallback — <AuthGate> is mandatory, so a freshly authed user with
-  // empty localStorage should start with an empty calendar.
+  // Initial state comes from localStorage so existing users see populated
+  // data before the Supabase load resolves. seed.X is no longer used as a
+  // fallback for events, groups, groupMembers, shifts, majorEvents, or
+  // friends — <AuthGate> is mandatory, so a freshly authed user with empty
+  // localStorage starts with empty arrays everywhere. Calendars are the
+  // only exception (3 default Personal/Work/Family entries seeded as
+  // intentional UX scaffolding). Empty defaults stop the migrate-on-mount
+  // race that previously pushed seed rows to the server before onboarding
+  // could clear them.
   const [events, setEvents] = useState(() => _ls?.events ? reviveEvents(_ls.events) : []);
   // Inline indicator state for the Supabase events sync.
   const [eventsSyncing, setEventsSyncing] = useState(false);
@@ -937,9 +942,9 @@ export default function App({ userId, profile }) {
   // banner can show "Setting up your events…" vs "Syncing your events…".
   const [eventsMigrationPhase, setEventsMigrationPhase] = useState(false);
   const [calendars, setCalendars] = useState(() => _ls?.calendars ?? seed.calendars);
-  const [groups, setGroups] = useState(() => _ls?.groups ?? seed.groups);
-  const [groupMembers, setGroupMembers] = useState(() => _ls?.groupMembers ?? seed.groupMembers);
-  const [shifts, setShifts] = useState(() => _ls?.shifts ?? seed.shifts);
+  const [groups, setGroups] = useState(() => _ls?.groups ?? []);
+  const [groupMembers, setGroupMembers] = useState(() => _ls?.groupMembers ?? []);
+  const [shifts, setShifts] = useState(() => _ls?.shifts ?? []);
   const [sheet, setSheet] = useState(null);
   const [activeEvent, setActiveEvent] = useState(null);
   const [activeShift, setActiveShift] = useState(null);
@@ -962,8 +967,8 @@ export default function App({ userId, profile }) {
   // Tracks which day's "different schedule today" home banner the user has dismissed.
   // Stored as a YMD string so the banner auto-returns when a new day begins.
   const [shiftNoticeDismissed, setShiftNoticeDismissed] = useState(() => _ls?.shiftNoticeDismissed ?? null);
-  const [majorEvents, setMajorEvents] = useState(() => _ls?.majorEvents ?? seed.majorEvents);
-  const [friends, setFriends] = useState(() => _ls?.friends ?? seed.friends);
+  const [majorEvents, setMajorEvents] = useState(() => _ls?.majorEvents ?? []);
+  const [friends, setFriends] = useState(() => _ls?.friends ?? []);
   const [handleQuery, setHandleQuery] = useState("");
   const [handleResult, setHandleResult] = useState({ state: 'idle' });
   const handleSearchDebounceRef = useRef(null);
