@@ -1353,26 +1353,27 @@ export default function App({ userId, profile }) {
   // null | 'loading' | 'error' | { ownedGroups, eventCount, friendshipCount }
   const [deletionPreflight, setDeletionPreflight] = useState(null);
 
-  // Soft reset: clears user-generated data, keeps name/color/theme and onboarding.
-  // Server-side event delete runs first; on error, abort without touching local state.
+  // Soft reset: clears events, shifts, and major events. Keeps name/color/
+  // theme, onboarding, AND social state (groups, friends, group memberships) —
+  // relationships persist across a soft reset per the guide copy.
+  // Server-side delete runs first; on error, abort without touching local state.
   const doSoftReset = async () => {
     if (!userId) return;
-    const [eventsRes, shiftsRes] = await Promise.all([
+    const [eventsRes, shiftsRes, majorRes] = await Promise.all([
       deleteAllEventsForOwner(userId),
       deleteAllShiftsForOwner(userId),
+      deleteAllMajorEventsForOwner(userId),
     ]);
-    if (eventsRes.error || shiftsRes.error) {
+    if (eventsRes.error || shiftsRes.error || majorRes.error) {
       if (eventsRes.error) console.warn("[events] soft reset failed", eventsRes.error);
       if (shiftsRes.error) console.warn("[shifts] soft reset failed", shiftsRes.error);
+      if (majorRes.error)  console.warn("[major_events] soft reset failed", majorRes.error);
       showToast("Couldn't reset — try again", "err");
       return;
     }
     setEvents([]);
     setMajorEvents([]);
     setShifts([]);
-    setGroups([]);
-    setGroupMembers([]);
-    setFriends([]);
     setActivityFeed([]);
     setPinnedEvents(new Set());
     setDismissedImportantEvents(new Set());
@@ -1388,16 +1389,23 @@ export default function App({ userId, profile }) {
   };
 
   // Full reset: nukes everything including onboarding — user starts completely fresh.
-  // Server-side event delete runs first; on error, abort without touching local state.
+  // Server-side delete (events, shifts, major events) runs first; on error,
+  // abort without touching local state. Groups and friendships are NOT torn
+  // down server-side here — ownership invariants make safe wipe more involved
+  // (transfer / sole-owner refusal). Local state is fully reset; on next sync
+  // the user reappears in any groups or friendships they had server-side.
+  // Full server-side teardown of social state is a post-launch follow-up.
   const doFullReset = async () => {
     if (!userId) return;
-    const [eventsRes, shiftsRes] = await Promise.all([
+    const [eventsRes, shiftsRes, majorRes] = await Promise.all([
       deleteAllEventsForOwner(userId),
       deleteAllShiftsForOwner(userId),
+      deleteAllMajorEventsForOwner(userId),
     ]);
-    if (eventsRes.error || shiftsRes.error) {
+    if (eventsRes.error || shiftsRes.error || majorRes.error) {
       if (eventsRes.error) console.warn("[events] full reset failed", eventsRes.error);
       if (shiftsRes.error) console.warn("[shifts] full reset failed", shiftsRes.error);
+      if (majorRes.error)  console.warn("[major_events] full reset failed", majorRes.error);
       showToast("Couldn't reset — try again", "err");
       return;
     }
