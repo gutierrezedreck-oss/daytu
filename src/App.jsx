@@ -1884,25 +1884,47 @@ export default function App({ userId, profile }) {
 
   React.useEffect(() => { syncFriendsFromSupabase(); }, [syncFriendsFromSupabase]);
 
-  // Refetch friends when the user opens the Groups tab. Catches new
-  // pending requests sent while the user was on another tab in the
-  // app — without this, friends[] is only loaded once at mount and
-  // a new request from another user is invisible until reload.
+  // Refetch shared content when the user navigates to a tab. Mount-effects
+  // load each entity once at sign-in; without this, anything shared TO the
+  // viewer (an event added to a group they're in, a new friend request, a
+  // group membership granted by an editor) is invisible until reload.
+  // Per-tab filtering avoids unnecessary work — switching to Settings
+  // doesn't refetch anything; only tabs that surface server-shared content
+  // trigger a sync of the relevant entities.
   React.useEffect(() => {
-    if (tab === 'groups') syncFriendsFromSupabase();
-  }, [tab, syncFriendsFromSupabase]);
+    if (tab === 'home' || tab === 'calendar') {
+      syncEventsFromSupabase();
+      syncMajorEventsFromSupabase();
+      syncShiftsFromSupabase();
+    } else if (tab === 'shifts') {
+      syncShiftsFromSupabase();
+    } else if (tab === 'groups') {
+      syncGroupsFromSupabase();
+      syncFriendsFromSupabase();
+    }
+  }, [tab, syncEventsFromSupabase, syncMajorEventsFromSupabase,
+      syncShiftsFromSupabase, syncGroupsFromSupabase, syncFriendsFromSupabase]);
 
-  // Refetch friends when the browser tab regains visibility. Covers
-  // the "I came back to Daytu after a while" case — same gap as above
-  // but triggered by leaving and returning to the app entirely.
-  // visibilitychange is more reliable than focus/blur on mobile.
+  // Refetch all user-facing entities when the browser tab regains visibility.
+  // Covers the "I came back to Daytu after a while" case across every entity
+  // type. visibilitychange is more reliable than focus/blur on mobile. All
+  // five syncs fire in parallel rather than tracking which one might have
+  // changed — at indie scale the bandwidth is trivial and the simpler code
+  // is worth more than the saved request count. Realtime postgres_changes
+  // subscriptions are the proper long-term fix; deferred post-launch.
   React.useEffect(() => {
     const handler = () => {
-      if (document.visibilityState === 'visible') syncFriendsFromSupabase();
+      if (document.visibilityState !== 'visible') return;
+      syncEventsFromSupabase();
+      syncMajorEventsFromSupabase();
+      syncShiftsFromSupabase();
+      syncGroupsFromSupabase();
+      syncFriendsFromSupabase();
     };
     document.addEventListener('visibilitychange', handler);
     return () => document.removeEventListener('visibilitychange', handler);
-  }, [syncFriendsFromSupabase]);
+  }, [syncEventsFromSupabase, syncMajorEventsFromSupabase,
+      syncShiftsFromSupabase, syncGroupsFromSupabase, syncFriendsFromSupabase]);
 
   // Add sub-tab handle search. 250ms debounce + 3-char minimum mirrors
   // NewGroupSheet's pattern. Effect emits only "did we resolve a profile";
