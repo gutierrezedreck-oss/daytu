@@ -630,6 +630,12 @@ function ImportantBadge({ size = 14, color = "#f59e0b", style }) {
   );
 }
 
+// Resolve the "!" badge color for an event: prefer event-level color
+// override, fall back to the calendar's color, then default amber.
+// Encapsulated so future resolution rules (e.g. shift-themed importance,
+// dark-mode adjustment) don't require touching every call site.
+const importantBadgeColor = (ev, cal) => ev?.color || cal?.color || "#f59e0b";
+
 // ── LOCALSTORAGE HELPERS ─────────────────────────────────
 // LS_KEY is imported from ./lib/localPrefs.js so AuthGate can share the
 // constant without circular imports.
@@ -3784,7 +3790,7 @@ export default function App({ userId, profile }) {
                         <div className="event-dot" style={{ background: calForCalendar(ev.calendarId).color || "#888" }} />
                         <div className="event-pill-info">
                           <div className="event-pill-title">
-                            {ev.important && <ImportantBadge size={15} color={calForCalendar(ev.calendarId).color} style={{ marginRight:4 }} />}
+                            {ev.important && <ImportantBadge size={15} color={importantBadgeColor(ev, calForCalendar(ev.calendarId))} style={{ marginRight:4 }} />}
                             {ev.pinned && !ev.important && <span style={{ display:"inline-flex", width:11, height:11, color:"#f59e0b", marginRight:4, verticalAlign:"middle" }}>{Icon.pin2}</span>}
                             {ev.title}
                           </div>
@@ -4226,7 +4232,7 @@ export default function App({ userId, profile }) {
                     </div>
                     {shown.map(ev => {
                       const cal = calForCalendar(ev.calendarId);
-                      const col = cal?.color || "#f59e0b";
+                      const col = importantBadgeColor(ev, cal);
                       const isMultiDay = ev.allDay && !sameDay(ev.start, ev.end);
                       return (
                         <div key={ev.id} onClick={() => openEvent(ev)}
@@ -4391,7 +4397,7 @@ export default function App({ userId, profile }) {
                               <div style={{ fontSize:"0.875rem", fontWeight:600, whiteSpace:"nowrap",
                                 overflow:"hidden", textOverflow:"ellipsis", flex:1, minWidth:0,
                                 textDecoration: isPast ? "line-through" : "none" }}>
-                                {ev.important && <ImportantBadge size={15} color={cal.color} style={{ marginRight:5 }} />}
+                                {ev.important && <ImportantBadge size={15} color={importantBadgeColor(ev, cal)} style={{ marginRight:5 }} />}
                                 {ev.title}
                               </div>
                               <div style={{ fontSize:"0.6875rem", fontWeight:700,
@@ -6498,7 +6504,7 @@ function DayView({ date, events, calendars, onEventClick, majorEvents=[], holida
                   style={{ background:col+"22", borderLeft:"3px solid "+col, borderRadius:6,
                     padding:"6px 10px", cursor:"pointer", minWidth:80 }}>
                   <div style={{ fontSize:"0.75rem", fontWeight:700, color:col, display:"flex", alignItems:"center", gap:5 }}>
-                    {ev.important && <ImportantBadge size={14} color={cal.color} />}
+                    {ev.important && <ImportantBadge size={14} color={importantBadgeColor(ev, cal)} />}
                     <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{ev.title}</span>
                   </div>
                 </div>
@@ -6732,7 +6738,7 @@ function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverride
                       overflow:"hidden", textOverflow:"ellipsis" }}>
                       {timeLabel}
                     </div>
-                    {ev.important && <ImportantBadge size={12} color={cal.color} style={{ marginRight:3 }} />}
+                    {ev.important && <ImportantBadge size={12} color={importantBadgeColor(ev, cal)} style={{ marginRight:3 }} />}
                     {ev.title}
                   </div>
                 );
@@ -6871,7 +6877,7 @@ function WeekView({ weekDays, events, calendars, selectedDate, onSelect, onQuick
                     style={{ background:col+"25", borderLeft:"2px solid "+col, borderRadius:3,
                       fontSize:"0.6875rem", fontWeight:700, color:col, padding:"2px 3px", marginBottom:2,
                       cursor:"pointer", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
-                    {ev.important && <ImportantBadge size={11} color={cal.color} style={{ marginRight:3 }} />}
+                    {ev.important && <ImportantBadge size={11} color={importantBadgeColor(ev, cal)} style={{ marginRight:3 }} />}
                     {ev.title}
                   </div>
                 );
@@ -6926,7 +6932,7 @@ function WeekView({ weekDays, events, calendars, selectedDate, onSelect, onQuick
                       borderRadius:6, background:col+"22", borderLeft:"3px solid "+col,
                       padding:"3px 5px", cursor:"pointer", pointerEvents:"all", overflow:"hidden" }}>
                     <div style={{ fontSize:"0.6875rem", fontWeight:700, color:col, lineHeight:1.3, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
-                      {ev.important && <ImportantBadge size={12} color={cal.color} style={{ marginRight:3 }} />}
+                      {ev.important && <ImportantBadge size={12} color={importantBadgeColor(ev, cal)} style={{ marginRight:3 }} />}
                       {ev.title}
                     </div>
                     {heightPx > 30 && <div style={{ fontSize:"0.6875rem", color:col+"bb", marginTop:1, fontFamily:"var(--mono)" }}>{fmtTime(ev.start)}</div>}
@@ -7040,7 +7046,7 @@ function EventPill({ ev, cal, onClick, showDate, onDelete }) {
       <div className="event-dot" style={{ background: ev.color || cal.color || "#888" }} />
       <div className="event-pill-info">
         <div className="event-pill-title">
-          {ev.important && <ImportantBadge size={15} color={cal.color} style={{ marginRight:5 }} />}
+          {ev.important && <ImportantBadge size={15} color={importantBadgeColor(ev, cal)} style={{ marginRight:5 }} />}
           {ev.title}
         </div>
         <div className="event-pill-time">
@@ -7159,7 +7165,7 @@ function MonthGrid({ year, month, events, calendars, shifts, shiftOverrides, onL
         const dayEvs = expandEvents(events, dayFrom, dayTo).filter(e => sameDay(e.start, date) || (e.allDay && e.start <= dayTo && e.end >= dayFrom));
         const firstImportant = dayEvs.find(e => e.important);
         const hasImportant = !!firstImportant;
-        const importantColor = firstImportant ? (calendars.find(cc => cc.id===firstImportant.calendarId)?.color || "#f59e0b") : "#f59e0b";
+        const importantColor = firstImportant ? importantBadgeColor(firstImportant, calendars.find(cc => cc.id===firstImportant.calendarId)) : "#f59e0b";
         const dots = dayEvs.slice(0,3).map(e => { const cal = calendars.find(cc => cc.id===e.calendarId); return e.color || cal?.color||"#888"; });
         const extraEventCount = Math.max(0, dayEvs.length - 3);
         const hasHideOverride = c.curr && shifts && shifts.some(p => { const oKey = p.id+":"+date.getFullYear()+"-"+date.getMonth()+"-"+date.getDate(); return shiftOverrides && shiftOverrides.has(oKey); });
@@ -8040,7 +8046,7 @@ function NewEventSheet({ existing, calendars, groups, friends=[], allEvents=[], 
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
           <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0, flex:1 }}>
             <div style={{ fontSize:"1rem", fontWeight:700, flexShrink:0, display:"flex", alignItems:"center", gap:6 }}>
-              {important && <ImportantBadge size={14} color={calColor} />}
+              {important && <ImportantBadge size={14} color={importantBadgeColor({color: eventColor}, {color: calColor})} />}
               {important ? (isEdit ? "Edit Important Event" : "New Important Event") : (isEdit ? "Edit Event" : "New Event")}
             </div>
             <div style={{ fontSize:"0.8125rem", color:"var(--muted)", flexShrink:0 }}>→</div>
@@ -9804,7 +9810,7 @@ function DayTimeline({ events, now, calendars, conflicts, onEventClick }) {
                 style={{ background:col+"22", border:"1px solid "+col+"55", borderRadius:8,
                   padding:"5px 10px", cursor:"pointer", fontSize:"0.75rem", fontWeight:600, color:col,
                   display:"inline-flex", alignItems:"center", gap:5 }}>
-                {ev.important && <ImportantBadge size={14} color={cal.color} />}
+                {ev.important && <ImportantBadge size={14} color={importantBadgeColor(ev, cal)} />}
                 {ev.title}
               </div>
             );
