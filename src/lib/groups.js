@@ -77,6 +77,31 @@ export async function findUserByHandle(handle) {
   return { user: data ?? null, error: null };
 }
 
+// Prefix-match version of findUserByHandle — returns up to 10 candidates
+// ordered alphabetically by handle. Used by the typeahead in friend-add
+// and group-member-add surfaces, where the user types a partial handle
+// and picks from a short list.
+//
+// Same column selection and RLS surface as findUserByHandle. Does NOT
+// filter the caller out of results; consumers handle that with the
+// rest of their per-row state derivation (already-friends, already-
+// member, etc.).
+//
+// Alphabetical ordering means an exact prefix surfaces first naturally
+// — typing "alice" returns alice before alicent.
+export async function searchUsersByHandle(query) {
+  const cleaned = (query || '').replace(/^@+/, '').toLowerCase();
+  if (!cleaned) return { users: [], error: null };
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, name, handle, avatar_url')
+    .ilike('handle', cleaned + '%')
+    .order('handle')
+    .limit(10);
+  if (error) return { users: [], error };
+  return { users: data || [], error: null };
+}
+
 // ── Writes ──────────────────────────────────────────────────────────────
 // All write helpers are thin wrappers — RLS and table constraints are
 // authoritative. Helpers don't validate authorization client-side; they

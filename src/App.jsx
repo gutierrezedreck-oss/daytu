@@ -9,7 +9,7 @@ import { loadShiftsFromSupabase, migrateLocalShiftsToSupabase, remapShiftOverrid
 import { uploadAvatar } from "./lib/avatars.js";
 import {
   loadGroupsForViewer,
-  findUserByHandle,
+  searchUsersByHandle,
   createGroup,
   updateGroup as updateGroupRow,
   deleteGroupRow,
@@ -1933,21 +1933,22 @@ export default function App({ userId, profile }) {
       syncShiftsFromSupabase, syncGroupsFromSupabase, syncFriendsFromSupabase]);
 
   // Add sub-tab handle search. 250ms debounce + 3-char minimum mirrors
-  // NewGroupSheet's pattern. Effect emits only "did we resolve a profile";
-  // the relationship branch (yourself / already-friends / already-pending-* /
-  // found) is derived in render from live friends[], so accept/decline/cancel
-  // from this surface refresh the card without re-querying. findUserByHandle
-  // is reused from groups.js per the Phase 2 decision not to refactor it out.
+  // NewGroupSheet's pattern. Effect emits only "what candidates the prefix
+  // matched"; the per-row relationship branch (yourself / already-friends /
+  // already-pending-* / found) is derived in render from live friends[],
+  // so accept/decline/cancel from this surface refresh the rows without
+  // re-querying. searchUsersByHandle returns up to 10 candidates ordered
+  // alphabetically (exact prefix surfaces first).
   React.useEffect(() => {
     if (handleSearchDebounceRef.current) clearTimeout(handleSearchDebounceRef.current);
     const cleaned = handleQuery.replace(/^@+/, '').toLowerCase().trim();
     if (cleaned.length < 3) { setHandleResult({ state: 'idle' }); return; }
     setHandleResult({ state: 'searching' });
     handleSearchDebounceRef.current = setTimeout(async () => {
-      const { user, error } = await findUserByHandle(cleaned);
-      if (error) { setHandleResult({ state: 'error' });     return; }
-      if (!user) { setHandleResult({ state: 'not-found' }); return; }
-      setHandleResult({ state: 'resolved', user });
+      const { users, error } = await searchUsersByHandle(cleaned);
+      if (error) { setHandleResult({ state: 'error' }); return; }
+      if (users.length === 0) { setHandleResult({ state: 'empty' }); return; }
+      setHandleResult({ state: 'results', users });
     }, 250);
     return () => { if (handleSearchDebounceRef.current) clearTimeout(handleSearchDebounceRef.current); };
   }, [handleQuery]);
@@ -5492,80 +5493,81 @@ export default function App({ userId, profile }) {
             )}
 
             {groupsSubTab === "add" && (() => {
-              // Derive the relationship branch from live friends[]. Keeping
-              // this in render (vs. inside the search effect) means accept/
-              // decline/cancel from this surface refresh the card without
-              // re-firing findUserByHandle.
-              let cardState = handleResult.state;
-              let user = null, existingFriend = null;
-              if (handleResult.state === 'resolved') {
-                user = handleResult.user;
-                if (user.id === userId) {
-                  cardState = 'yourself';
-                } else {
-                  existingFriend = friends.find(f => f.userId === user.id);
-                  if      (!existingFriend)                              cardState = 'found';
-                  else if (existingFriend.status === 'accepted')         cardState = 'already-friends';
-                  else if (existingFriend.status === 'pending_sent')     cardState = 'already-pending-sent';
-                  else if (existingFriend.status === 'pending_received') cardState = 'already-pending-received';
-                }
-              }
-              const profileCard = (right) => (
-                <div className="friend-card">
-                  <MemberAvatar url={user?.avatar_url} name={user?.name} size={40} />
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{user?.name || (user?.handle ? `@${user.handle}` : 'Unknown')}</div>
-                    {user?.handle && <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{user.handle}</div>}
-                  </div>
-                  {right}
-                </div>
-              );
+              // Derive each candidate row's relationship branch from live
+              // friends[]. Keeping derivation in render means accept/decline/
+              // cancel from this surface refresh rows without re-firing the
+              // search.
+              const rowState = (u) => {
+                if (u.id === userId) return { kind: 'yourself' };
+                const existing = friends.find(f => f.userId === u.id);
+                if (!existing) return { kind: 'found' };
+                if (existing.status === 'accepted') return { kind: 'already-friends' };
+                if (existing.status === 'pending_sent') return { kind: 'already-pending-sent', friend: existing };
+                if (existing.status === 'pending_received') return { kind: 'already-pending-received', friend: existing };
+                return { kind: 'found' };
+              };
               return (
                 <>
                   <div className="form-group">
                     <input className="form-input" placeholder="Find by @handle..."
                       value={handleQuery} onChange={e => setHandleQuery(e.target.value)} />
                   </div>
-                  {cardState === 'idle' && (
+                  {handleResult.state === 'idle' && (
                     <div style={{ fontSize:"0.75rem", color:"var(--muted)", textAlign:"center", padding:"20px 8px" }}>
                       Find friends by @handle. They'll need to accept your request.
                     </div>
                   )}
-                  {cardState === 'searching' && (
+                  {handleResult.state === 'searching' && (
                     <div style={{ fontSize:"0.75rem", color:"var(--muted)", padding:"12px 4px" }}>Searching…</div>
                   )}
-                  {cardState === 'not-found' && (
+                  {handleResult.state === 'empty' && (
                     <div style={{ fontSize:"0.75rem", color:"var(--muted)", padding:"12px 4px" }}>
-                      No one with @{handleQuery.replace(/^@+/, '').toLowerCase().trim()}
+                      No matches for @{handleQuery.replace(/^@+/, '').toLowerCase().trim()}
                     </div>
                   )}
-                  {cardState === 'error' && (
+                  {handleResult.state === 'error' && (
                     <div style={{ fontSize:"0.75rem", color:"#f87171", padding:"12px 4px" }}>Couldn't search — try again.</div>
                   )}
-                  {cardState === 'yourself' && profileCard(
-                    <span style={{ background:"var(--surface2)", color:"var(--muted)", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600 }}>That's you</span>
-                  )}
-                  {cardState === 'found' && profileCard(
-                    <button onClick={() => sendFriendRequest({
-                      id: user.id,
-                      name: user.name || `@${user.handle}`,
-                      handle: user.handle ? `@${user.handle}` : '',
-                      avatar: user.avatar_url,
-                    })} style={{ background:"var(--accent)", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", color:"white", fontSize:"0.75rem", fontWeight:600 }}>+ Add friend</button>
-                  )}
-                  {cardState === 'already-friends' && profileCard(
-                    <span style={{ background:"rgba(110,231,183,0.1)", border:"1px solid rgba(110,231,183,0.2)", color:"#10b981", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600 }}>Already friends</span>
-                  )}
-                  {cardState === 'already-pending-sent' && profileCard(
-                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                      <span style={{ background:"rgba(124,106,247,0.12)", border:"1px solid rgba(124,106,247,0.25)", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600, color:"var(--accent2)" }}>Sent</span>
-                      <button onClick={() => cancelFriendRequest(existingFriend.id)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", cursor:"pointer", color:"var(--muted)", fontSize:"0.75rem" }}>Cancel</button>
-                    </div>
-                  )}
-                  {cardState === 'already-pending-received' && profileCard(
-                    <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
-                      <button onClick={() => acceptFriendRequest(existingFriend.id)} style={{ background:"var(--accent)", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", color:"white", fontSize:"0.75rem", fontWeight:600 }}>Accept</button>
-                      <button onClick={() => declineFriendRequest(existingFriend.id)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"5px 12px", cursor:"pointer", color:"var(--muted)", fontSize:"0.75rem" }}>Decline</button>
+                  {handleResult.state === 'results' && (
+                    <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                      {handleResult.users.map(u => {
+                        const row = rowState(u);
+                        return (
+                          <div key={u.id} className="friend-card">
+                            <MemberAvatar url={u.avatar_url} name={u.name} size={40} />
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <div style={{ fontWeight:600, fontSize:"0.9375rem" }}>{u.name || (u.handle ? `@${u.handle}` : 'Unknown')}</div>
+                              {u.handle && <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{u.handle}</div>}
+                            </div>
+                            {row.kind === 'yourself' && (
+                              <span style={{ background:"var(--surface2)", color:"var(--muted)", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600 }}>That's you</span>
+                            )}
+                            {row.kind === 'found' && (
+                              <button onClick={() => sendFriendRequest({
+                                id: u.id,
+                                name: u.name || `@${u.handle}`,
+                                handle: u.handle ? `@${u.handle}` : '',
+                                avatar: u.avatar_url,
+                              })} style={{ background:"var(--accent)", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", color:"white", fontSize:"0.75rem", fontWeight:600 }}>+ Add friend</button>
+                            )}
+                            {row.kind === 'already-friends' && (
+                              <span style={{ background:"rgba(110,231,183,0.1)", border:"1px solid rgba(110,231,183,0.2)", color:"#10b981", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600 }}>Already friends</span>
+                            )}
+                            {row.kind === 'already-pending-sent' && (
+                              <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                                <span style={{ background:"rgba(124,106,247,0.12)", border:"1px solid rgba(124,106,247,0.25)", borderRadius:20, padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600, color:"var(--accent2)" }}>Sent</span>
+                                <button onClick={() => cancelFriendRequest(row.friend.id)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"5px 10px", cursor:"pointer", color:"var(--muted)", fontSize:"0.75rem" }}>Cancel</button>
+                              </div>
+                            )}
+                            {row.kind === 'already-pending-received' && (
+                              <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+                                <button onClick={() => acceptFriendRequest(row.friend.id)} style={{ background:"var(--accent)", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", color:"white", fontSize:"0.75rem", fontWeight:600 }}>Accept</button>
+                                <button onClick={() => declineFriendRequest(row.friend.id)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"5px 12px", cursor:"pointer", color:"var(--muted)", fontSize:"0.75rem" }}>Decline</button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </>
@@ -8837,34 +8839,21 @@ function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole, 
     return false;
   }, [name, color, memberListHidden, members, existing, currentMembers, isEdit]);
 
-  // Read latest staged members inside the debounced search timer
-  // without re-firing on every add/remove. Keeping `members` out of
-  // the search effect's deps means staged-list churn doesn't restart
-  // the 250ms timer; the "already-member" check below still sees the
-  // current list when it eventually fires.
-  const membersRef = useRef(members);
-  React.useEffect(() => { membersRef.current = members; }, [members]);
-
   React.useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     const cleaned = handleQuery.replace(/^@+/, '').toLowerCase().trim();
     if (cleaned.length < 3) { setHandleResult({ state: 'idle' }); return; }
     setHandleResult({ state: 'searching' });
     debounceRef.current = setTimeout(async () => {
-      const { user, error } = await findUserByHandle(cleaned);
+      const { users, error } = await searchUsersByHandle(cleaned);
       if (error) { setHandleResult({ state: 'error' }); return; }
-      if (!user) { setHandleResult({ state: 'not-found' }); return; }
-      if (user.id === userId) { setHandleResult({ state: 'yourself' }); return; }
-      if (existing?.owner === user.id) { setHandleResult({ state: 'already-member', user }); return; }
-      if (membersRef.current.some(m => m.userId === user.id)) { setHandleResult({ state: 'already-member', user }); return; }
-      setHandleResult({ state: 'found', user });
+      if (users.length === 0) { setHandleResult({ state: 'empty' }); return; }
+      setHandleResult({ state: 'results', users });
     }, 250);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [handleQuery, userId, existing?.owner]);
+  }, [handleQuery]);
 
-  const stageAdd = () => {
-    if (handleResult.state !== 'found') return;
-    const u = handleResult.user;
+  const stageAddUser = (u) => {
     setMembers(prev => [...prev, {
       groupId: existing?.id,
       userId: u.id,
@@ -8873,8 +8862,6 @@ function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole, 
       avatar: u.avatar_url,
       role: canAddAnyRole ? addRole : 'member',
     }]);
-    setHandleQuery("");
-    setHandleResult({ state: 'idle' });
     setAddRole('member');
   };
 
@@ -8975,41 +8962,65 @@ function NewGroupSheet({ existing, currentMembers, userId, userProfile, myRole, 
             {handleResult.state === 'searching' && (
               <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>Searching…</div>
             )}
-            {handleResult.state === 'not-found' && (
+            {handleResult.state === 'empty' && (
               <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>
-                No one with @{handleQuery.replace(/^@+/, '')}
+                No matches for @{handleQuery.replace(/^@+/, '')}
               </div>
-            )}
-            {handleResult.state === 'yourself' && (
-              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>That's you.</div>
-            )}
-            {handleResult.state === 'already-member' && (
-              <div style={{ fontSize:"0.75rem", color:"var(--muted)", marginTop:6 }}>Already in this group.</div>
             )}
             {handleResult.state === 'error' && (
               <div style={{ fontSize:"0.75rem", color:"#f87171", marginTop:6 }}>Couldn't search — try again.</div>
             )}
-            {handleResult.state === 'found' && (
-              <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:8, padding:"10px 12px", background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
-                <MemberAvatar url={handleResult.user.avatar_url} name={handleResult.user.name} />
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                    {handleResult.user.name || "Unknown"}
-                  </div>
-                  {handleResult.user.handle && (
-                    <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{handleResult.user.handle}</div>
-                  )}
-                </div>
+            {handleResult.state === 'results' && (
+              <>
                 {canAddAnyRole && (
-                  <select value={addRole} onChange={e => setAddRole(e.target.value)}
-                    style={{ background:"var(--surface3)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text)", padding:"4px 8px", fontSize:"0.75rem" }}>
-                    <option value="member">Member</option>
-                    <option value="editor">Editor</option>
-                  </select>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:8,
+                    fontSize:"0.6875rem", color:"var(--muted)" }}>
+                    <span>Add as:</span>
+                    <select value={addRole} onChange={e => setAddRole(e.target.value)}
+                      style={{ background:"var(--surface3)", border:"1px solid var(--border)", borderRadius:8,
+                        color:"var(--text)", padding:"4px 8px", fontSize:"0.75rem" }}>
+                      <option value="member">Member</option>
+                      <option value="editor">Editor</option>
+                    </select>
+                  </div>
                 )}
-                <button className="btn btn-secondary" onClick={stageAdd}
-                  style={{ padding:"6px 12px", fontSize:"0.75rem" }}>Add</button>
-              </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:6, marginTop:8 }}>
+                  {handleResult.users.map(u => {
+                    let kind;
+                    if (u.id === userId) kind = 'yourself';
+                    else if (existing?.owner === u.id) kind = 'already-member';
+                    else if (members.some(m => m.userId === u.id)) kind = 'already-member';
+                    else kind = 'found';
+                    return (
+                      <div key={u.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px",
+                        background:"var(--surface2)", borderRadius:10, border:"1px solid var(--border)" }}>
+                        <MemberAvatar url={u.avatar_url} name={u.name} />
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontSize:"0.875rem", color:"var(--text)", overflow:"hidden",
+                            textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                            {u.name || (u.handle ? `@${u.handle}` : 'Unknown')}
+                          </div>
+                          {u.handle && (
+                            <div style={{ fontSize:"0.75rem", color:"var(--muted)" }}>@{u.handle}</div>
+                          )}
+                        </div>
+                        {kind === 'yourself' && (
+                          <span style={{ background:"var(--surface3)", color:"var(--muted)", borderRadius:20,
+                            padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600 }}>That's you</span>
+                        )}
+                        {kind === 'already-member' && (
+                          <span style={{ background:"var(--surface3)", color:"var(--muted)", borderRadius:20,
+                            padding:"3px 10px", fontSize:"0.6875rem", fontWeight:600 }}>Already in group</span>
+                        )}
+                        {kind === 'found' && (
+                          <button className="btn btn-secondary" onClick={() => stageAddUser(u)}
+                            style={{ padding:"6px 12px", fontSize:"0.75rem" }}>Add</button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
             )}
           </div>
         )}
