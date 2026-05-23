@@ -6662,7 +6662,7 @@ function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverride
 
   return (
     <div>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:4 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7, minmax(0, 1fr))", gap:4 }}>
         {weekDays.map((d, di) => {
           const dayEvents = byDay[di];
           const dayMajors = majorsByDay[di];
