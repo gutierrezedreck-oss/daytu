@@ -6681,11 +6681,6 @@ function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverride
           const visibleEvents = dayEvents.slice(0, MAX_VISIBLE);
           const hiddenCount = Math.max(0, dayEvents.length - MAX_VISIBLE);
           const totalItems = dayEvents.length + dayMajors.length + dayHols.length;
-          // Concentric shift rings via stacked inset box-shadows. Outer
-          // (priority) ring is 3px so it reads at a glance; inner rings
-          // stay 2px so the stack fits inside the cell's 6px padding.
-          const ringShadow = dayColors.length === 0 ? undefined
-            : dayColors.slice(0,3).map((c, i) => `inset 0 0 0 ${3+i*2}px ${c}`).join(", ");
 
           const isSelected = selectedDate && sameDay(d, selectedDate);
           return (
@@ -6697,7 +6692,6 @@ function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverride
                   : isToday ? "rgba(124,106,247,0.35)" : "var(--border)"}`,
                 borderRadius: 10, padding: 6, minHeight: 150, cursor: "pointer",
                 display: "flex", flexDirection: "column", gap: 3,
-                boxShadow: ringShadow,
                 transition: "background .12s"
               }}>
               {/* Day header */}
@@ -6711,6 +6705,13 @@ function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverride
                   color: isToday ? "var(--accent)" : "var(--text)" }}>
                   {d.getDate()}
                 </div>
+                {dayColors.length > 0 && (
+                  <div style={{ display:"flex", justifyContent:"center", gap:3, marginTop:3 }}>
+                    {dayColors.slice(0,3).map((c, i) => (
+                      <div key={i} style={{ width:6, height:6, border:`1.25px solid ${c}`, borderRadius:1.5, background:"transparent" }} />
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Holidays (pill above events) */}
