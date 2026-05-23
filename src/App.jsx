@@ -2803,14 +2803,14 @@ export default function App({ userId, profile }) {
     const from = new Date(TODAY); from.setHours(0,0,0,0);
     const to = new Date(TODAY); to.setHours(23,59,59,999);
     return expandEvents(visibleEvents, from, to)
-      .filter(e => sameDay(e.start, TODAY))
+      .filter(e => e.start <= to && e.end > from)
       .sort((a, b) => a.start - b.start);
   }, [visibleEvents]);
   const selectedDayEvents = useMemo(() => {
     const from = new Date(selectedDate); from.setHours(0,0,0,0);
     const to = new Date(selectedDate); to.setHours(23,59,59,999);
     return expandEvents(visibleEvents, from, to)
-      .filter(e => sameDay(e.start, selectedDate))
+      .filter(e => e.start <= to && e.end > from)
       .sort((a, b) => a.start - b.start);
   }, [visibleEvents, selectedDate]);
   const calForCalendar = (id) => calendars.find(c => c.id === id) || {};
@@ -3138,7 +3138,7 @@ export default function App({ userId, profile }) {
       });
       // Regular events on this day
       expandEvents(events, dayStart, dayEnd)
-        .filter(ev => sameDay(ev.start, day) || (ev.allDay && ev.start <= dayEnd && ev.end >= dayStart))
+        .filter(ev => ev.start <= dayEnd && ev.end > dayStart)
         .forEach(ev => {
           const cal = calendars.find(c => c.id === ev.calendarId);
           const color = ev.color || cal?.color || "#888";
@@ -3986,7 +3986,9 @@ export default function App({ userId, profile }) {
 
             {/* Selected day preview — shows when user clicked a non-today date on the persistent calendar in split mode */}
             {isSplit && !sameDay(selectedDate, TODAY) && (() => {
-              const dayEvs = visibleEvents.filter(e => sameDay(e.start, selectedDate)).sort((a,b) => a.start - b.start);
+              const dayFrom = new Date(selectedDate); dayFrom.setHours(0,0,0,0);
+              const dayTo = new Date(selectedDate); dayTo.setHours(23,59,59,999);
+              const dayEvs = expandEvents(visibleEvents, dayFrom, dayTo).filter(e => e.start <= dayTo && e.end > dayFrom).sort((a,b) => a.start - b.start);
               const dayHolidays = holidaysForDate(selectedDate);
               const isPast = selectedDate < new Date(TODAY.getTime());
               return (
@@ -4329,7 +4331,7 @@ export default function App({ userId, profile }) {
                 const tomFrom = new Date(tomorrow); tomFrom.setHours(0,0,0,0);
                 const tomTo = new Date(tomorrow); tomTo.setHours(23,59,59,999);
                 const tomorrowEvs = expandEvents(visibleEvents, tomFrom, tomTo)
-                  .filter(e => sameDay(e.start, tomorrow))
+                  .filter(e => e.start <= tomTo && e.end > tomFrom)
                   .sort((a,b) => a.start - b.start)
                   .slice(0,4);
                 // In non-split views (mobile + compact) show past and upcoming
@@ -5213,8 +5215,10 @@ export default function App({ userId, profile }) {
 
             {/* Hidden events for this day */}
             {(() => {
+              const from = new Date(selectedDate); from.setHours(0,0,0,0);
+              const to = new Date(selectedDate); to.setHours(23,59,59,999);
               const hiddenDayEvs = events.filter(e => {
-                if (!sameDay(e.start, selectedDate)) return false;
+                if (!(e.start <= to && e.end > from)) return false;
                 const calHidden = hiddenCalendars.has(e.calendarId);
                 const groupHidden = e.groupIds && e.groupIds.length > 0 && e.groupIds.every(id => hiddenGroups.has(id));
                 return calHidden || groupHidden;
@@ -6416,10 +6420,14 @@ function DayView({ date, events, calendars, onEventClick, majorEvents=[], holida
   const timed = useMemo(() => {
     const from = new Date(date); from.setHours(0,0,0,0);
     const to = new Date(date); to.setHours(23,59,59,999);
-    return expandEvents(events, from, to).filter(e => !e.allDay && sameDay(e.start, date)).sort((a,b) => a.start - b.start);
+    return expandEvents(events, from, to).filter(e => !e.allDay && e.start <= to && e.end > from).sort((a,b) => a.start - b.start);
   }, [date, events]);
 
-  const allDay = useMemo(() => events.filter(e => e.allDay && sameDay(e.start, date)), [date, events]);
+  const allDay = useMemo(() => {
+    const from = new Date(date); from.setHours(0,0,0,0);
+    const to = new Date(date); to.setHours(23,59,59,999);
+    return events.filter(e => e.allDay && e.start <= to && e.end > from);
+  }, [date, events]);
 
   // Simple column layout for overlaps
   const laid = useMemo(() => {
@@ -6609,7 +6617,7 @@ function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverride
     const dayStart = new Date(d); dayStart.setHours(0,0,0,0);
     const dayEnd = new Date(d); dayEnd.setHours(23,59,59,999);
     return expandEvents(events, dayStart, dayEnd)
-      .filter(e => sameDay(e.start, d))
+      .filter(e => e.start <= dayEnd && e.end > dayStart)
       .sort((a,b) => (a.allDay === b.allDay ? a.start - b.start : (a.allDay ? -1 : 1)));
   });
   const majorsByDay = weekDays.map(d => majorEvents.filter(me => {
@@ -6776,12 +6784,14 @@ function WeekView({ weekDays, events, calendars, selectedDate, onSelect, onQuick
   const dayEvents = useMemo(() => weekDays.map(day => {
     const from = new Date(day); from.setHours(0,0,0,0);
     const to = new Date(day); to.setHours(23,59,59,999);
-    return expandEvents(events, from, to).filter(e => !e.allDay && sameDay(e.start, day)).sort((a,b) => a.start - b.start);
+    return expandEvents(events, from, to).filter(e => !e.allDay && e.start <= to && e.end > from).sort((a,b) => a.start - b.start);
   }), [weekDays, events]);
 
-  const allDayEvs = useMemo(() => weekDays.map(day =>
-    events.filter(e => e.allDay && sameDay(e.start, day))
-  ), [weekDays, events]);
+  const allDayEvs = useMemo(() => weekDays.map(day => {
+    const from = new Date(day); from.setHours(0,0,0,0);
+    const to = new Date(day); to.setHours(23,59,59,999);
+    return events.filter(e => e.allDay && e.start <= to && e.end > from);
+  }), [weekDays, events]);
 
   const nowPct = () => {
     const n = new Date();
@@ -7162,7 +7172,7 @@ function MonthGrid({ year, month, events, calendars, shifts, shiftOverrides, onL
         ) : null;
         const dayFrom = new Date(date); dayFrom.setHours(0,0,0,0);
         const dayTo = new Date(date); dayTo.setHours(23,59,59,999);
-        const dayEvs = expandEvents(events, dayFrom, dayTo).filter(e => sameDay(e.start, date) || (e.allDay && e.start <= dayTo && e.end >= dayFrom));
+        const dayEvs = expandEvents(events, dayFrom, dayTo).filter(e => e.start <= dayTo && e.end > dayFrom);
         const firstImportant = dayEvs.find(e => e.important);
         const hasImportant = !!firstImportant;
         const importantColor = firstImportant ? importantBadgeColor(firstImportant, calendars.find(cc => cc.id===firstImportant.calendarId)) : "#f59e0b";
