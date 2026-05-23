@@ -961,7 +961,7 @@ export default function App({ userId, profile }) {
   const [calView, setCalView] = useState("month"); // "month" | "week" | "day"
   // Week view layout — "columns" shows the whole week at once (default),
   // "grid" shows a 24-hour scrollable grid for precise time inspection.
-  const [weekLayout, setWeekLayout] = useState(() => _ls?.weekLayout ?? "columns");
+  const [weekLayout, setWeekLayout] = useState(() => _ls?.weekLayout ?? "rows");
   const [weekAnchor, setWeekAnchor] = useState(() => { const d = new Date(TODAY); d.setDate(d.getDate() - d.getDay()); return d; });
   const [calShiftFilter, setCalShiftFilter] = useState(null);
   const [shiftOverrides, setShiftOverrides] = useState(() => new Set(_ls?.shiftOverrides ?? []));
@@ -4939,7 +4939,7 @@ export default function App({ userId, profile }) {
                 {/* Layout sub-toggle: Columns (whole week) vs Grid (24-hour) */}
                 <div style={{ display:"flex", gap:4, background:"var(--surface2)", borderRadius:10,
                   padding:3, marginBottom:14, width:"fit-content" }}>
-                  {[["columns","Columns"],["grid","Grid"]].map(([v,l]) => (
+                  {[["rows","Rows"],["columns","Columns"],["grid","Grid"]].map(([v,l]) => (
                     <button key={v} onClick={() => setWeekLayout(v)}
                       style={{ padding:"5px 12px", borderRadius:7, border:"none",
                         fontFamily:"var(--font)", fontSize:"0.6875rem", fontWeight:600, cursor:"pointer",
@@ -4948,7 +4948,16 @@ export default function App({ userId, profile }) {
                         color: weekLayout===v ? "var(--text)" : "var(--muted)" }}>{l}</button>
                   ))}
                 </div>
-                {weekLayout === "columns" ? (
+                {weekLayout === "rows" ? (
+                  <WeekViewRows weekDays={weekDays} events={visibleEvents} calendars={calendars}
+                    shifts={visibleShifts} shiftOverrides={shiftOverrides}
+                    majorEvents={visibleMajorEvents} holidays={holidays} holidayCountries={holidayCountries}
+                    selectedDate={selectedDate}
+                    onSelect={d => setSelectedDate(d)}
+                    onOpenDay={d => { setSelectedDate(d); setCalView("day"); }}
+                    onEventClick={openEvent}
+                    onMajorEventClick={openMajorEventDetail} />
+                ) : weekLayout === "columns" ? (
                   <WeekViewColumns weekDays={weekDays} events={visibleEvents} calendars={calendars}
                     shifts={visibleShifts} shiftOverrides={shiftOverrides}
                     majorEvents={visibleMajorEvents} holidays={holidays} holidayCountries={holidayCountries}
@@ -6765,6 +6774,210 @@ function WeekViewColumns({ weekDays, events, calendars, shifts=[], shiftOverride
                 <div style={{ fontSize:"0.6875rem", color:"var(--muted)", textAlign:"center",
                   margin:"auto 0", opacity:0.5, fontStyle:"italic" }}>Free</div>
               )}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize:"0.6875rem", color:"var(--muted)", marginTop:10, textAlign:"center" }}>
+        Tap a day to preview · double-tap to open
+      </div>
+    </div>
+  );
+}
+
+// Stacked rows week layout — one row per day, left vertical strip holds the
+// day-of-week letter, date number, and a dot cluster of shift colors; the
+// right content area stacks holidays / major events / regular events. Wider
+// per-day surface than Columns, intended for portrait-mobile readability
+// where Columns aggressively truncates titles. Same data-bucket shape as
+// WeekViewColumns; only the spatial arrangement differs.
+function WeekViewRows({ weekDays, events, calendars, shifts=[], shiftOverrides, majorEvents=[], holidays=[], holidayCountries=new Set(), selectedDate, onSelect, onOpenDay, onEventClick, onMajorEventClick }) {
+  // Single tap selects a day; double tap opens the full day view.
+  const lastTapRef = React.useRef({ time: 0, key: null });
+  const DOUBLE_TAP_MS = 400;
+  const handleRowTap = (d) => {
+    const key = d.getFullYear()+"-"+d.getMonth()+"-"+d.getDate();
+    const now = Date.now();
+    if (onOpenDay && now - lastTapRef.current.time < DOUBLE_TAP_MS && lastTapRef.current.key === key) {
+      lastTapRef.current = { time: 0, key: null };
+      onOpenDay(d);
+      return;
+    }
+    lastTapRef.current = { time: now, key };
+    onSelect && onSelect(d);
+  };
+
+  // Per-day buckets — same as WeekViewColumns. Range-overlap filter so
+  // multi-day events render in every row they span.
+  const byDay = weekDays.map(d => {
+    const dayStart = new Date(d); dayStart.setHours(0,0,0,0);
+    const dayEnd = new Date(d); dayEnd.setHours(23,59,59,999);
+    return expandEvents(events, dayStart, dayEnd)
+      .filter(e => e.start <= dayEnd && e.end > dayStart)
+      .sort((a,b) => (a.allDay === b.allDay ? a.start - b.start : (a.allDay ? -1 : 1)));
+  });
+  const majorsByDay = weekDays.map(d => majorEvents.filter(me => {
+    const [sy,sm,sd] = me.startDate.slice(0,10).split("-").map(Number);
+    const [ey,em,ed] = me.endDate.slice(0,10).split("-").map(Number);
+    const s = new Date(sy, sm-1, sd);
+    const e = new Date(ey, em-1, ed); e.setHours(23,59,59,999);
+    const dn = new Date(d); dn.setHours(12,0,0,0);
+    return dn >= s && dn <= e;
+  }));
+  const holsByDay = weekDays.map(d => holidays.filter(h =>
+    holidayCountries.has(h.country) &&
+    h.year === d.getFullYear() && h.month === d.getMonth()+1 && h.day === d.getDate()
+  ));
+  // Shift colors per day — same rules as Columns. Rendered as a small dot
+  // cluster in the left strip rather than concentric rings (rings look bad
+  // on rectangular rows).
+  const ringShifts = [...(shifts||[])].sort((a,b) => (a.priority??99)-(b.priority??99));
+  const colorsByDay = weekDays.map(d => {
+    const colors = [];
+    for (const p of ringShifts) {
+      const k = p.id+":"+d.getFullYear()+"-"+d.getMonth()+"-"+d.getDate();
+      if (shiftOverrides && shiftOverrides.has(k)) continue;
+      const extra = shiftOverrides && shiftOverrides.has("extra:"+k);
+      const natural = p.type==="rotation" ? getRotationStatus(p,d)==="work"
+        : p.type==="monthly" ? isMonthlyWorkDay(p,d)
+        : (p.config.days||[]).includes(d.getDay());
+      if (natural || extra) colors.push(p.color || "#6366f1");
+    }
+    return colors;
+  });
+
+  // Higher than Columns' 4 — rows have more vertical room per item.
+  const MAX_VISIBLE = 6;
+
+  return (
+    <div>
+      <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+        {weekDays.map((d, di) => {
+          const dayEvents = byDay[di];
+          const dayMajors = majorsByDay[di];
+          const dayHols = holsByDay[di];
+          const dayColors = colorsByDay[di];
+          const isToday = sameDay(d, TODAY);
+          const isSelected = selectedDate && sameDay(d, selectedDate);
+          const visibleEvents = dayEvents.slice(0, MAX_VISIBLE);
+          const hiddenCount = Math.max(0, dayEvents.length - MAX_VISIBLE);
+          const totalItems = dayEvents.length + dayMajors.length + dayHols.length;
+
+          return (
+            <div key={di} onClick={() => handleRowTap(d)}
+              style={{
+                display: "flex",
+                background: isSelected ? "rgba(124,106,247,0.18)"
+                  : isToday ? "rgba(124,106,247,0.1)" : "var(--surface)",
+                border: `1px solid ${isSelected ? "var(--accent2)"
+                  : isToday ? "rgba(124,106,247,0.35)" : "var(--border)"}`,
+                borderRadius: 10,
+                padding: 8,
+                minHeight: 56,
+                cursor: "pointer",
+                transition: "background .12s",
+              }}>
+              {/* Left strip — day-of-week letter, date number, shift-color dots */}
+              <div style={{
+                width: 44,
+                flexShrink: 0,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 2,
+                paddingRight: 8,
+                marginRight: 8,
+                borderRight: "1px solid var(--border)",
+              }}>
+                <div style={{ fontSize:"0.6875rem",
+                  color: isToday ? "var(--accent)" : "var(--muted)",
+                  fontWeight:700, textTransform:"uppercase", letterSpacing:"0.5px" }}>
+                  {DAYS[d.getDay()].slice(0,1)}
+                </div>
+                <div style={{ fontSize:"1.125rem", fontWeight:800,
+                  color: isToday ? "var(--accent)" : "var(--text)", lineHeight:1 }}>
+                  {d.getDate()}
+                </div>
+                {dayColors.length > 0 && (
+                  <div style={{ display:"flex", gap:3, marginTop:2 }}>
+                    {dayColors.slice(0,3).map((c, i) => (
+                      <div key={i} style={{ width:6, height:6, border:`1.25px solid ${c}`, borderRadius:1.5, background:"transparent" }} />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Right content area — stacks holidays, majors, events */}
+              <div style={{ flex:1, minWidth:0, display:"flex", flexDirection:"column", gap:3 }}>
+                {/* Holidays */}
+                {dayHols.map(h => (
+                  <div key={h.id} style={{
+                    background: h.color + "22", borderLeft: `2px solid ${h.color}`,
+                    padding:"3px 8px", borderRadius:4, fontSize:"0.75rem", color:h.color,
+                    fontWeight:600, overflow:"hidden", whiteSpace:"nowrap",
+                    textOverflow:"ellipsis" }} title={h.name}>
+                    {h.name}
+                  </div>
+                ))}
+
+                {/* Major events */}
+                {dayMajors.map(me => (
+                  <div key={me.id}
+                    onClick={(ev) => { ev.stopPropagation(); onMajorEventClick && onMajorEventClick(me); }}
+                    style={{
+                      background:`repeating-linear-gradient(45deg,${me.color}33 0,${me.color}33 3px,transparent 3px,transparent 7px)`,
+                      borderLeft:`2px solid ${me.color}`,
+                      padding:"3px 8px", borderRadius:4, fontSize:"0.75rem", color:"var(--text)",
+                      fontWeight:600, overflow:"hidden", whiteSpace:"nowrap",
+                      textOverflow:"ellipsis" }} title={me.title}>
+                    {me.title}
+                  </div>
+                ))}
+
+                {/* Regular events — horizontal layout: time, badge, title */}
+                {visibleEvents.map(ev => {
+                  const cal = calendars.find(c => c.id === ev.calendarId) || {};
+                  const color = ev.color || cal.color || "#888";
+                  const timeLabel = ev.allDay ? "All day" : fmtTime(ev.start) + " – " + fmtTime(ev.end);
+                  return (
+                    <div key={ev.id}
+                      onClick={(e) => { e.stopPropagation(); onEventClick && onEventClick(ev); }}
+                      style={{
+                        display:"flex", alignItems:"center", gap:8,
+                        background: color + "22", borderLeft: `2px solid ${color}`,
+                        padding:"4px 8px", borderRadius:4, cursor:"pointer",
+                      }}>
+                      <span style={{ fontSize:"0.6875rem", color, fontFamily:"var(--mono)",
+                        fontWeight:700, flexShrink:0, whiteSpace:"nowrap" }}>
+                        {timeLabel}
+                      </span>
+                      {ev.important && <ImportantBadge size={12} color={importantBadgeColor(ev, cal)} />}
+                      <span style={{ fontSize:"0.8125rem", fontWeight:500, color:"var(--text)",
+                        overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis",
+                        flex:1, minWidth:0 }} title={ev.title}>
+                        {ev.title}
+                      </span>
+                    </div>
+                  );
+                })}
+
+                {/* Overflow indicator — only when capped */}
+                {hiddenCount > 0 && (
+                  <div style={{ fontSize:"0.6875rem", color:"var(--muted)", fontWeight:600,
+                    paddingTop:2 }}>
+                    +{hiddenCount} more
+                  </div>
+                )}
+
+                {/* Empty state */}
+                {totalItems === 0 && (
+                  <div style={{ fontSize:"0.75rem", color:"var(--muted)", fontStyle:"italic",
+                    opacity:0.5, alignSelf:"center", margin:"auto 0" }}>
+                    Free
+                  </div>
+                )}
+              </div>
             </div>
           );
         })}
