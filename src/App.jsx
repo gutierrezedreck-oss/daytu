@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef } from "react";
-import { signOut } from "./lib/auth.js";
+import { signOut, updatePassword, friendlyPasswordError, PASSWORD_MIN } from "./lib/auth.js";
 import { LS_KEY, clearLocalPrefs } from "./lib/localPrefs.js";
 import { formatShareLabel } from "./lib/shareLabel.js";
 import { supabase } from "./lib/supabase.js";
@@ -12862,6 +12862,41 @@ function EditProfileSheet({ userId, profile, onSave, onClose }) {
   const fileRef = React.useRef(null);
   const SIZE = 260; // canvas size
 
+  // Password change — collapsible inline section. Default collapsed; the
+  // "Change" button expands the form. On successful update, fields clear
+  // and the section auto-collapses after a brief "✓ Updated" indicator.
+  const [passwordExpanded, setPasswordExpanded] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordError, setPasswordError] = useState(null);
+  const [passwordSuccess, setPasswordSuccess] = useState(false);
+  const passwordTooShort = newPassword.length > 0 && newPassword.length < PASSWORD_MIN;
+  const passwordLongEnough = newPassword.length >= PASSWORD_MIN;
+  const passwordMismatched = confirmPassword.length > 0 && confirmPassword !== newPassword;
+  const canSubmitPassword = !passwordSaving && passwordLongEnough && newPassword === confirmPassword;
+
+  async function handlePasswordSubmit() {
+    if (!canSubmitPassword) return;
+    setPasswordSaving(true);
+    setPasswordError(null);
+    const { error } = await updatePassword(newPassword);
+    setPasswordSaving(false);
+    if (error) {
+      setPasswordError(friendlyPasswordError(error.message));
+      return;
+    }
+    setNewPassword("");
+    setConfirmPassword("");
+    setPasswordSuccess(true);
+    // Collapse after a brief success indicator. 1.5s gives time to read
+    // "✓ Updated" without lingering on a completed action.
+    setTimeout(() => {
+      setPasswordSuccess(false);
+      setPasswordExpanded(false);
+    }, 1500);
+  }
+
   // Compute minimum zoom so image always fills the circle
   const minZoom = React.useMemo(() => {
     if (!imgSize.w || !imgSize.h) return 1;
@@ -13103,6 +13138,80 @@ function EditProfileSheet({ userId, profile, onSave, onClose }) {
                 {claimError}
               </div>
             )}
+            {/* Password — collapsible inline section */}
+            <div style={{ background:"var(--surface2)", borderRadius:10, overflow:"hidden",
+              border:"1px solid var(--border)", marginBottom:16 }}>
+              {!passwordExpanded ? (
+                <div style={{ display:"flex", alignItems:"center", padding:"12px 14px" }}>
+                  <span style={{ fontSize:"0.8125rem", color:"var(--muted)", fontWeight:500, width:90, flexShrink:0 }}>Password</span>
+                  <span style={{ flex:1, color:"var(--muted)", fontSize:"0.875rem", letterSpacing:"0.15em" }}>••••••••</span>
+                  {passwordSuccess ? (
+                    <span style={{ fontSize:"0.75rem", color:"#10b981", fontWeight:600 }}>✓ Updated</span>
+                  ) : (
+                    <button onClick={() => { setPasswordExpanded(true); setPasswordError(null); }}
+                      style={{ background:"none", border:"none", color:"var(--accent2)", cursor:"pointer",
+                        fontSize:"0.8125rem", fontWeight:600, fontFamily:"var(--font)", padding:0 }}>
+                      Change
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div style={{ padding:"14px" }}>
+                  <div style={{ fontSize:"0.8125rem", color:"var(--muted)", fontWeight:500, marginBottom:10 }}>
+                    Change password
+                  </div>
+                  <input type="password" value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    placeholder={`At least ${PASSWORD_MIN} characters`}
+                    autoComplete="new-password"
+                    style={{ width:"100%", padding:"10px 12px", borderRadius:8, background:"var(--surface3)",
+                      border:`1.5px solid ${passwordTooShort ? "#f87171" : "var(--border)"}`,
+                      color:"var(--text)", fontFamily:"var(--font)", fontSize:"0.875rem", outline:"none",
+                      marginBottom:6 }} />
+                  {newPassword.length > 0 && (
+                    <div style={{ fontSize:"0.6875rem", color: passwordTooShort ? "#f87171" : "#10b981",
+                      marginBottom:10, padding:"0 4px" }}>
+                      {passwordTooShort ? `Must be at least ${PASSWORD_MIN} characters` : "Looks good"}
+                    </div>
+                  )}
+                  <input type="password" value={confirmPassword}
+                    onChange={e => setConfirmPassword(e.target.value)}
+                    placeholder="Confirm new password"
+                    autoComplete="new-password"
+                    style={{ width:"100%", padding:"10px 12px", borderRadius:8, background:"var(--surface3)",
+                      border:`1.5px solid ${passwordMismatched ? "#f87171" : "var(--border)"}`,
+                      color:"var(--text)", fontFamily:"var(--font)", fontSize:"0.875rem", outline:"none",
+                      marginBottom:6 }} />
+                  {passwordMismatched && (
+                    <div style={{ fontSize:"0.6875rem", color:"#f87171", marginBottom:10, padding:"0 4px" }}>
+                      Doesn't match
+                    </div>
+                  )}
+                  {passwordError && (
+                    <div style={{ fontSize:"0.75rem", color:"#f87171", marginBottom:10, padding:"0 4px" }}>
+                      {passwordError}
+                    </div>
+                  )}
+                  <div style={{ display:"flex", gap:8, marginTop:6 }}>
+                    <button onClick={() => {
+                      setPasswordExpanded(false);
+                      setNewPassword("");
+                      setConfirmPassword("");
+                      setPasswordError(null);
+                    }} className="btn btn-secondary" style={{ flex:1 }}>
+                      Cancel
+                    </button>
+                    <button onClick={handlePasswordSubmit}
+                      disabled={!canSubmitPassword}
+                      className="btn btn-primary"
+                      style={{ flex:1, opacity: canSubmitPassword ? 1 : 0.5,
+                        cursor: canSubmitPassword ? "pointer" : "not-allowed" }}>
+                      {passwordSaving ? "Updating…" : "Update"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
             <button className="btn btn-primary"
               disabled={!!handleError || saving}
               onClick={handleSave}

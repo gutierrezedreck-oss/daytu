@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { updatePassword } from '../lib/auth.js';
+import { updatePassword, friendlyPasswordError, PASSWORD_MIN } from '../lib/auth.js';
 
-const PASSWORD_MIN = 8;
 const FONT = "'DM Sans', sans-serif";
 
 // Design tokens mirroring App.jsx's :root and .light-mode CSS. ResetPassword
@@ -430,13 +429,34 @@ function buildStyles(t) {
   };
 }
 
-function friendlyError(msg) {
-  if (!msg) return 'Could not update password. Try again.';
-  if (/password should be at least/i.test(msg)) return `Password must be at least ${PASSWORD_MIN} characters.`;
-  if (/new password should be different|same password/i.test(msg)) return 'New password must be different from your previous one.';
-  if (/auth session missing|invalid|expired/i.test(msg)) return 'This reset link has expired. Request a new one from the sign-in screen.';
-  if (/rate limit|too many requests|\b429\b/i.test(msg)) return 'Too many requests — please wait a minute and try again.';
-  return msg;
+// Small show/hide toggle button positioned absolutely at the right edge of
+// a password input. Parent must wrap the input in a position:relative
+// container, and the input needs paddingRight room for the button (~40px).
+// Inline SVG keeps this file self-contained from App.jsx's Icon registry.
+function PasswordEye({ shown, onToggle, color }) {
+  return (
+    <button type="button" onClick={onToggle}
+      aria-label={shown ? 'Hide password' : 'Show password'}
+      style={{
+        position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+        background: 'none', border: 'none', padding: 6, cursor: 'pointer',
+        color, display: 'flex', alignItems: 'center',
+      }}>
+      <span style={{ display: 'flex', width: 16, height: 16 }}>
+        {shown ? (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+            <line x1="1" y1="1" x2="23" y2="23"/>
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+        )}
+      </span>
+    </button>
+  );
 }
 
 export default function ResetPassword({ onDone }) {
@@ -447,6 +467,8 @@ export default function ResetPassword({ onDone }) {
   const [confirm, setConfirm] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   const tooShort = password.length > 0 && password.length < PASSWORD_MIN;
   const longEnough = password.length >= PASSWORD_MIN;
@@ -462,7 +484,7 @@ export default function ResetPassword({ onDone }) {
     try {
       const { error: err } = await updatePassword(password);
       if (err) {
-        setError(friendlyError(err.message));
+        setError(friendlyPasswordError(err.message, { context: 'reset' }));
         setSubmitting(false);
         return;
       }
@@ -472,7 +494,7 @@ export default function ResetPassword({ onDone }) {
       setSubmitting(false);
       onDone?.();
     } catch (err) {
-      setError(friendlyError(err?.message));
+      setError(friendlyPasswordError(err?.message, { context: 'reset' }));
       setSubmitting(false);
     }
   }
@@ -512,36 +534,42 @@ export default function ResetPassword({ onDone }) {
         </p>
         <form onSubmit={handleSubmit}>
           <label htmlFor="reset-password" style={styles.label}>New password</label>
-          <input
-            id="reset-password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            autoFocus
-            autoComplete="new-password"
-            placeholder={`At least ${PASSWORD_MIN} characters`}
-            disabled={submitting}
-            className="signin-input"
-            style={styles.input}
-          />
+          <div style={{ position: 'relative' }}>
+            <input
+              id="reset-password"
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              autoFocus
+              autoComplete="new-password"
+              placeholder={`At least ${PASSWORD_MIN} characters`}
+              disabled={submitting}
+              className="signin-input"
+              style={{ ...styles.input, paddingRight: 40 }}
+            />
+            <PasswordEye shown={showPassword} onToggle={() => setShowPassword(v => !v)} color={t.muted} />
+          </div>
           <div style={{ ...styles.hint, color: passwordHintColor }}>
             {passwordHintText}
           </div>
 
           <div style={styles.fieldGroup}>
             <label htmlFor="reset-confirm" style={styles.label}>Confirm new password</label>
-            <input
-              id="reset-confirm"
-              type="password"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              required
-              autoComplete="new-password"
-              disabled={submitting}
-              className="signin-input"
-              style={styles.input}
-            />
+            <div style={{ position: 'relative' }}>
+              <input
+                id="reset-confirm"
+                type={showConfirm ? 'text' : 'password'}
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                required
+                autoComplete="new-password"
+                disabled={submitting}
+                className="signin-input"
+                style={{ ...styles.input, paddingRight: 40 }}
+              />
+              <PasswordEye shown={showConfirm} onToggle={() => setShowConfirm(v => !v)} color={t.muted} />
+            </div>
             {confirm.length > 0 && (
               <div style={{ ...styles.hint, color: matchHintColor }}>
                 {matchHintText}
