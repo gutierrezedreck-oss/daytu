@@ -13131,7 +13131,7 @@ function EditProfileSheet({ userId, profile, onSave, onClose }) {
             {/* Username help text */}
             <div style={{ fontSize:"0.6875rem", color: handleError ? "#f87171" : "var(--muted)",
               lineHeight:1.5, padding:"0 4px", marginBottom:16 }}>
-              {handleError || "Pick one you like — if it's taken when sharing launches, we'll ask you to choose another. 3-20 chars, letters/numbers/underscores."}
+              {handleError || "3–20 characters, letters, numbers, and underscores."}
             </div>
             {claimError && (
               <div style={{ fontSize:"0.75rem", color:"#f87171", lineHeight:1.4, marginBottom:10, padding:"0 4px" }}>
